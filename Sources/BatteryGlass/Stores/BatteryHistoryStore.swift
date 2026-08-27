@@ -14,6 +14,7 @@ final class BatteryHistoryStore {
     private var lastCycleCount = -1
     private var lastHealth: Double?
     private var lastRecordedSample: HistorySample?
+    private var lastSamplesPrunedDay: Date?
     private let persistenceQueue = DispatchQueue(
         label: "com.batteryglass.history-persistence",
         qos: .utility
@@ -75,8 +76,7 @@ final class BatteryHistoryStore {
     }
 
     func samplesForDay(_ date: Date) -> [HistorySample] {
-        let key = BatteryFormatters.dayKey(for: date)
-        return samples.filter { BatteryFormatters.dayKey(for: $0.timestamp) == key }
+        HistoryRetention.samples(forDay: date, from: samples)
     }
 
     func summaries(lastDays: Int) -> [DailySummary] {
@@ -93,6 +93,7 @@ final class BatteryHistoryStore {
         samples = []
         dailySummaries = []
         lastRecordedSample = nil
+        lastSamplesPrunedDay = nil
         lastPersistenceScheduledAt = .distantPast
         persistenceQueue.sync {
             try? FileManager.default.removeItem(at: fileURL)
@@ -119,6 +120,7 @@ final class BatteryHistoryStore {
             dailySummaries = summaries(from: samples)
         }
         lastRecordedSample = samples.last
+        lastSamplesPrunedDay = nil
         pruneHistory()
     }
 
@@ -157,7 +159,11 @@ final class BatteryHistoryStore {
     private func pruneHistory() {
         guard let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: Date()) else { return }
         dailySummaries = dailySummaries.filter { $0.date >= cutoff }
+
+        let today = Calendar.current.startOfDay(for: Date())
+        guard lastSamplesPrunedDay != today else { return }
         samples = HistoryRetention.samplesForCurrentDay(samples, now: Date())
+        lastSamplesPrunedDay = today
     }
 
     private func summaries(from samples: [HistorySample]) -> [DailySummary] {
@@ -225,34 +231,39 @@ final class BatteryHistoryStore {
 }
 
 enum HistoryRetention {
+    static func samples(
+        forDay date: Date,
+        from samples: [HistorySample],
+        calendar: Calendar = .current
+    ) -> [HistorySample] {
+        let dayStart = calendar.startOfDay(for: date)
+        guard let nextDayStart = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
+            return []
+        }
+
+        return samples.filter { sample in
+            sample.timestamp >= dayStart && sample.timestamp < nextDayStart
+        }
+    }
+
     static func samplesForCurrentDay(
         _ samples: [HistorySample],
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [HistorySample] {
-        let todayKey = dayKey(for: now, calendar: calendar)
-        let previousDayKey = dayKey(
-            for: calendar.date(byAdding: .day, value: -1, to: now) ?? now,
-            calendar: calendar
-        )
+        let todayStart = calendar.startOfDay(for: now)
+        guard let tomorrowStart = calendar.date(byAdding: .day, value: 1, to: todayStart),
+              let previousDayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) else {
+            return samples
+        }
         let previousDaySample = samples
-            .filter { dayKey(for: $0.timestamp, calendar: calendar) == previousDayKey }
+            .filter { $0.timestamp >= previousDayStart && $0.timestamp < todayStart }
             .max { $0.timestamp < $1.timestamp }
 
         return samples
-            .filter { dayKey(for: $0.timestamp, calendar: calendar) == todayKey }
+            .filter { $0.timestamp >= todayStart && $0.timestamp < tomorrowStart }
             .appendingIfNeeded(previousDaySample)
             .sorted { $0.timestamp < $1.timestamp }
-    }
-
-    private static func dayKey(for date: Date, calendar: Calendar) -> String {
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(
-            format: "%04d-%02d-%02d",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0
-        )
     }
 }
 

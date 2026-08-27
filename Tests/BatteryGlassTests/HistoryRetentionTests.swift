@@ -23,6 +23,26 @@ final class HistoryRetentionTests: XCTestCase {
         XCTAssertEqual(kept.map(\.timestamp), [previousDay, currentDay, currentDay.addingTimeInterval(5), currentDay.addingTimeInterval(10)])
     }
 
+    func testSamplesForDayReturnsOnlySamplesInsideCalendarDay() {
+        let calendar = utcCalendar()
+        let previousDay = date("2026-08-26 23:59:55")
+        let currentDay = date("2026-08-27 00:00:05")
+        let nextDay = date("2026-08-28 00:00:05")
+        let samples = [
+            historySample(at: previousDay),
+            historySample(at: currentDay),
+            historySample(at: nextDay)
+        ]
+
+        let kept = HistoryRetention.samples(
+            forDay: currentDay,
+            from: samples,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(kept.map(\.timestamp), [currentDay])
+    }
+
     private func historySample(at timestamp: Date) -> HistorySample {
         HistorySample(
             timestamp: timestamp,
