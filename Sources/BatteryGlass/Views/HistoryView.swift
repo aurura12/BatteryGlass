@@ -155,12 +155,21 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let energySamples: [HistorySample]
     let chartSamples: [HistorySample]
+    let scrollStartDate: Date
+    let scrollEndDate: Date
+    @State private var scrollPosition: Date
     @State private var hoveredSample: HistorySample?
 
     init(samples: [HistorySample]) {
         let chartData = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
         self.energySamples = chartData.energySamples
         self.chartSamples = chartData.chartSamples
+        let bounds = PowerChartWindow.scrollBounds(for: chartData.energySamples)
+        let start = bounds?.start ?? Date()
+        let end = bounds?.end ?? start
+        self.scrollStartDate = start
+        self.scrollEndDate = end
+        self._scrollPosition = State(initialValue: end)
     }
 
     var body: some View {
@@ -181,83 +190,117 @@ struct TodayPowerChart: View {
                 ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
-                Chart {
-                    ForEach(chartSamples) { sample in
-                        AreaMark(
-                            x: .value("时间", sample.timestamp),
-                            y: .value("功率", sample.consumptionPowerW ?? 0)
-                        )
-                        .interpolationMethod(.linear)
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
-                                startPoint: .top,
-                                endPoint: .bottom
+                VStack(spacing: 4) {
+                    Chart {
+                        ForEach(chartSamples) { sample in
+                            AreaMark(
+                                x: .value("时间", sample.timestamp),
+                                y: .value("功率", sample.consumptionPowerW ?? 0)
                             )
-                        )
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
 
-                        LineMark(
-                            x: .value("时间", sample.timestamp),
-                            y: .value("功率", sample.consumptionPowerW ?? 0)
-                        )
-                        .interpolationMethod(.linear)
-                        .foregroundStyle(DesignTokens.dataBlue)
-                        .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            LineMark(
+                                x: .value("时间", sample.timestamp),
+                                y: .value("功率", sample.consumptionPowerW ?? 0)
+                            )
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(DesignTokens.dataBlue)
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        }
+
+                        RuleMark(y: .value("零线", 0))
+                            .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
+                            .foregroundStyle(.secondary.opacity(0.5))
+
+                        if let hoveredSample,
+                           let power = hoveredSample.consumptionPowerW {
+                            RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
+                                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                                .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
+
+                            PointMark(
+                                x: .value("时间", hoveredSample.timestamp),
+                                y: .value("功率", power)
+                            )
+                            .foregroundStyle(DesignTokens.dataBlue)
+                            .symbolSize(36)
+                        }
                     }
-
-                    RuleMark(y: .value("零线", 0))
-                        .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
-                        .foregroundStyle(.secondary.opacity(0.5))
-
-                    if let hoveredSample,
-                       let power = hoveredSample.consumptionPowerW {
-                        RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
-
-                        PointMark(
-                            x: .value("时间", hoveredSample.timestamp),
-                            y: .value("功率", power)
-                        )
-                        .foregroundStyle(DesignTokens.dataBlue)
-                        .symbolSize(36)
+                    .chartYAxis {
+                        AxisMarks(position: .leading)
                     }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading)
-                }
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .hour)) { _ in
-                        AxisGridLine().foregroundStyle(.clear)
-                        AxisTick()
-                        AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                    .chartXAxis {
+                        AxisMarks(values: .stride(by: .hour)) { _ in
+                            AxisGridLine().foregroundStyle(.clear)
+                            AxisTick()
+                            AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                        }
                     }
-                }
-                .chartScrollableAxes(.horizontal)
-                .chartXVisibleDomain(length: 3_600)
-                .chartOverlay { proxy in
-                    GeometryReader { geometry in
-                        ZStack(alignment: .topTrailing) {
-                            Rectangle()
-                                .fill(.clear)
-                                .contentShape(Rectangle())
-                                .onContinuousHover { phase in
-                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                    .chartScrollableAxes(.horizontal)
+                    .chartXVisibleDomain(length: PowerChartWindow.defaultVisibleDuration)
+                    .chartScrollPosition(x: $scrollPosition)
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            ZStack(alignment: .topTrailing) {
+                                Rectangle()
+                                    .fill(.clear)
+                                    .onContinuousHover { phase in
+                                        updateHover(phase, proxy: proxy, geometry: geometry)
+                                    }
+
+                                if let hoveredSample {
+                                    hoverTooltip(for: hoveredSample)
+                                        .padding(8)
+                                        .allowsHitTesting(false)
                                 }
-
-                            if let hoveredSample {
-                                hoverTooltip(for: hoveredSample)
-                                    .padding(8)
-                                    .allowsHitTesting(false)
                             }
                         }
                     }
+                    .frame(height: 138)
+
+                    if scrollEndDate > scrollStartDate {
+                        Slider(
+                            value: scrollPositionBinding,
+                            in: scrollRange
+                        )
+                        .controlSize(.small)
+                        .tint(DesignTokens.dataBlue)
+                        .accessibilityLabel("功率曲线时间范围")
+                        .accessibilityHint("拖动查看更早或更新的功率数据")
+                    }
                 }
-                .frame(height: 138)
             }
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+        .onChange(of: scrollEndDate) { previousEnd, newEnd in
+            guard previousEnd != newEnd,
+                  PowerChartWindow.shouldFollowLatest(
+                      currentPosition: scrollPosition,
+                      previousEnd: previousEnd
+                  ) else {
+                return
+            }
+            scrollPosition = newEnd
+        }
+    }
+
+    private var scrollRange: ClosedRange<Double> {
+        scrollStartDate.timeIntervalSinceReferenceDate...scrollEndDate.timeIntervalSinceReferenceDate
+    }
+
+    private var scrollPositionBinding: Binding<Double> {
+        Binding(
+            get: { scrollPosition.timeIntervalSinceReferenceDate },
+            set: { scrollPosition = Date(timeIntervalSinceReferenceDate: $0) }
+        )
     }
 
     private func updateHover(
@@ -333,6 +376,40 @@ struct PowerChartData {
         self.chartSamples = (0..<maximumDisplayedSamples).map { index in
             energySamples[Int((Double(index) * step).rounded())]
         }
+    }
+}
+
+enum PowerChartWindow {
+    static let defaultVisibleDuration: TimeInterval = 7_200
+
+    static func scrollBounds(
+        for samples: [HistorySample],
+        visibleDuration: TimeInterval = defaultVisibleDuration
+    ) -> (start: Date, end: Date)? {
+        guard let first = samples.first?.timestamp,
+              let latest = samples.last?.timestamp else {
+            return nil
+        }
+
+        return (
+            start: first,
+            end: max(first, latest.addingTimeInterval(-visibleDuration))
+        )
+    }
+
+    static func initialScrollDate(
+        for samples: [HistorySample],
+        visibleDuration: TimeInterval = defaultVisibleDuration
+    ) -> Date? {
+        scrollBounds(for: samples, visibleDuration: visibleDuration)?.end
+    }
+
+    static func shouldFollowLatest(
+        currentPosition: Date,
+        previousEnd: Date,
+        tolerance: TimeInterval = 10
+    ) -> Bool {
+        currentPosition >= previousEnd.addingTimeInterval(-tolerance)
     }
 }
 
