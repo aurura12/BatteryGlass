@@ -27,6 +27,9 @@
 - 历史记录：
   - 全天功率曲线（每 5 秒采样，可横向滚动查看）、每日耗电量（kWh）与近 14 天对比、循环次数记录（健康度以实时卡片展示）
   - 每 5 秒持久化到 `~/Library/Application Support/BatteryGlass/history.json`
+- 电源诊断：
+  - 可在设置中开启诊断日志，每秒记录原始 `SystemPowerIn` / `SystemLoad`、适配器和电池电气数据，以及应用计算结果
+  - 日志保存到 `~/Library/Application Support/BatteryGlass/power-diagnostics.jsonl`，单文件约 5 MB 自动轮换
 - 低电量通知：可自定义阈值（10–50%），本地通知，无网络
 - 深色/浅色模式自适应，无需任何网络权限
 

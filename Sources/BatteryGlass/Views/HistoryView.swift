@@ -156,6 +156,7 @@ struct TodayPowerChart: View {
     let samples: [HistorySample]
 
     private let maximumDisplayedSamples = 2_000
+    @State private var hoveredSample: HistorySample?
 
     private var energySamples: [HistorySample] {
         samples.filter { $0.consumptionPowerW != nil }
@@ -213,6 +214,20 @@ struct TodayPowerChart: View {
                     RuleMark(y: .value("零线", 0))
                         .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
                         .foregroundStyle(.secondary.opacity(0.5))
+
+                    if let hoveredSample,
+                       let power = hoveredSample.consumptionPowerW {
+                        RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
+
+                        PointMark(
+                            x: .value("时间", hoveredSample.timestamp),
+                            y: .value("功率", power)
+                        )
+                        .foregroundStyle(DesignTokens.dataBlue)
+                        .symbolSize(36)
+                    }
                 }
                 .chartYAxis {
                     AxisMarks(position: .leading)
@@ -226,11 +241,95 @@ struct TodayPowerChart: View {
                 }
                 .chartScrollableAxes(.horizontal)
                 .chartXVisibleDomain(length: 3_600)
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        ZStack(alignment: .topTrailing) {
+                            Rectangle()
+                                .fill(.clear)
+                                .contentShape(Rectangle())
+                                .onContinuousHover { phase in
+                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                                }
+
+                            if let hoveredSample {
+                                hoverTooltip(for: hoveredSample)
+                                    .padding(8)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    }
+                }
                 .frame(height: 138)
             }
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    private func updateHover(
+        _ phase: HoverPhase,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        switch phase {
+        case .ended:
+            hoveredSample = nil
+        case .active(let location):
+            guard let plotFrame = proxy.plotFrame else {
+                hoveredSample = nil
+                return
+            }
+
+            let frame = geometry[plotFrame]
+            guard frame.contains(location) else {
+                hoveredSample = nil
+                return
+            }
+
+            let xPosition = location.x - frame.minX
+            guard let timestamp: Date = proxy.value(atX: xPosition) else {
+                hoveredSample = nil
+                return
+            }
+
+            hoveredSample = PowerChartInteraction.nearestSample(
+                to: timestamp,
+                from: energySamples
+            )
+        }
+    }
+
+    private func hoverTooltip(for sample: HistorySample) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(sample.timestamp, format: .dateTime
+                .hour(.defaultDigits(amPM: .omitted))
+                .minute(.twoDigits)
+                .second(.twoDigits))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Text(String(format: "%.1f W", sample.consumptionPowerW ?? 0))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(DesignTokens.dataBlue)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+}
+
+enum PowerChartInteraction {
+    static func nearestSample(
+        to timestamp: Date,
+        from samples: [HistorySample]
+    ) -> HistorySample? {
+        samples.min {
+            abs($0.timestamp.timeIntervalSince(timestamp))
+                < abs($1.timestamp.timeIntervalSince(timestamp))
+        }
     }
 }
 

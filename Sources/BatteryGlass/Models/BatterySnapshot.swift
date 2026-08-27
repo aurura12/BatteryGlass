@@ -1,6 +1,6 @@
 import Foundation
 
-enum PowerState: String, Sendable, Equatable {
+enum PowerState: String, Codable, Sendable, Equatable {
     case charging = "充电中"
     case discharging = "电池供电"
     case pluggedIn = "已接通电源"
