@@ -155,7 +155,7 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let samples: [HistorySample]
 
-    private let maximumDisplayedSamples = 2_000
+    private let maximumDisplayedSamples = 1_200
     @State private var hoveredSample: HistorySample?
 
     private var energySamples: [HistorySample] {
@@ -189,27 +189,29 @@ struct TodayPowerChart: View {
                 ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
-                Chart(chartSamples) { sample in
-                    AreaMark(
-                        x: .value("时间", sample.timestamp),
-                        y: .value("功率", sample.consumptionPowerW ?? 0)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                Chart {
+                    ForEach(chartSamples) { sample in
+                        AreaMark(
+                            x: .value("时间", sample.timestamp),
+                            y: .value("功率", sample.consumptionPowerW ?? 0)
                         )
-                    )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
 
-                    LineMark(
-                        x: .value("时间", sample.timestamp),
-                        y: .value("功率", sample.consumptionPowerW ?? 0)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(DesignTokens.dataBlue)
-                    .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        LineMark(
+                            x: .value("时间", sample.timestamp),
+                            y: .value("功率", sample.consumptionPowerW ?? 0)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(DesignTokens.dataBlue)
+                        .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    }
 
                     RuleMark(y: .value("零线", 0))
                         .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
@@ -326,10 +328,26 @@ enum PowerChartInteraction {
         to timestamp: Date,
         from samples: [HistorySample]
     ) -> HistorySample? {
-        samples.min {
-            abs($0.timestamp.timeIntervalSince(timestamp))
-                < abs($1.timestamp.timeIntervalSince(timestamp))
+        guard !samples.isEmpty else { return nil }
+
+        var lowerBound = 0
+        var upperBound = samples.count - 1
+        while lowerBound < upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            if samples[middle].timestamp < timestamp {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
         }
+
+        let upper = samples[lowerBound]
+        guard lowerBound > 0 else { return upper }
+
+        let lower = samples[lowerBound - 1]
+        let lowerDistance = abs(lower.timestamp.timeIntervalSince(timestamp))
+        let upperDistance = abs(upper.timestamp.timeIntervalSince(timestamp))
+        return lowerDistance <= upperDistance ? lower : upper
     }
 }
 

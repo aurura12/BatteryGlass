@@ -19,6 +19,29 @@ final class PowerChartInteractionTests: XCTestCase {
         XCTAssertEqual(nearest?.consumptionPowerW, 20)
     }
 
+    func testNearestSampleHandlesHoverOutsideSampleRange() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let samples = [
+            sample(at: first, power: 10),
+            sample(at: first.addingTimeInterval(5), power: 20)
+        ]
+
+        XCTAssertEqual(
+            PowerChartInteraction.nearestSample(
+                to: first.addingTimeInterval(-10),
+                from: samples
+            )?.consumptionPowerW,
+            10
+        )
+        XCTAssertEqual(
+            PowerChartInteraction.nearestSample(
+                to: first.addingTimeInterval(20),
+                from: samples
+            )?.consumptionPowerW,
+            20
+        )
+    }
+
     private func sample(at timestamp: Date, power: Double) -> HistorySample {
         HistorySample(
             timestamp: timestamp,
