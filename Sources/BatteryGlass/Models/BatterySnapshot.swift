@@ -49,15 +49,27 @@ struct BatterySnapshot: Equatable, Sendable {
         state == .charging ? max(0, power) : nil
     }
 
-    /// 适配器直供系统功率（W）：仅外接电源时存在（PowerTelemetryData.SystemLoad）。
+    /// 系统直供估算（W）= 适配器总输入 - 电池充电功率。
+    /// SystemLoad 的电源层级和 BatteryPower 存在耦合，不能直接作为直供功率。
     var directSupplyPowerW: Double? {
-        adapterConnected && state != .discharging ? systemPowerW : nil
+        guard adapterConnected,
+              state != .discharging,
+              let input = adapterInputPowerW,
+              input > 0 else {
+            return nil
+        }
+        return max(0, input - (chargingPowerW ?? 0))
     }
 
-    /// 适配器总输出功率（W）= 给电池充电 + 系统直供。
+    /// 适配器总输出功率（W）：使用系统输入遥测值，避免重复累加。
     var adapterOutputPowerW: Double? {
-        guard let direct = directSupplyPowerW else { return nil }
-        return direct + (chargingPowerW ?? 0)
+        guard adapterConnected,
+              state != .discharging,
+              let input = adapterInputPowerW,
+              input > 0 else {
+            return nil
+        }
+        return input
     }
 
     /// 用于每日能耗统计的统一功率：适配器输入或电池放电功率。

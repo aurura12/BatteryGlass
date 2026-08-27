@@ -53,7 +53,7 @@ struct AdapterSplitCard: View {
                 Divider()
                     .frame(height: 26)
                 splitItem(
-                    title: "系统直供",
+                    title: "系统估算",
                     icon: "laptopcomputer",
                     value: snapshot.directSupplyPowerW.map { String(format: "%.1f W", $0) } ?? "--",
                     tint: DesignTokens.dataBlue
