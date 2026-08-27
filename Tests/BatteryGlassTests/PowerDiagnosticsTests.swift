@@ -20,10 +20,10 @@ final class PowerDiagnosticsTests: XCTestCase {
             adapterWatts: 100,
             adapterVoltageV: 20,
             adapterCurrentA: 4.089,
-            snapshotSystemPowerW: 91.6,
+            snapshotSystemPowerW: 36.39,
             chargingPowerW: 45.4,
-            directSupplyPowerW: 91.6,
-            adapterOutputPowerW: 137,
+            directSupplyPowerW: 36.39,
+            adapterOutputPowerW: 81.79,
             consumptionPowerW: 81.79
         )
 
@@ -36,6 +36,6 @@ final class PowerDiagnosticsTests: XCTestCase {
         XCTAssertEqual(decoded.systemPowerInW, 81.79)
         XCTAssertEqual(decoded.systemLoadW, 91.6)
         XCTAssertEqual(decoded.chargingPowerW, 45.4)
-        XCTAssertEqual(decoded.adapterOutputPowerW, 137)
+        XCTAssertEqual(decoded.adapterOutputPowerW, 81.79)
     }
 }

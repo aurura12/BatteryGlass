@@ -91,7 +91,11 @@ final class BatteryMonitor {
         }
 
         if s.adapterConnected, io.telemetrySystemPowerMW > 0 {
-            s.adapterInputPowerW = io.telemetrySystemPowerMW / 1000
+            let adapterInputPower = io.telemetrySystemPowerMW / 1000
+            s.adapterInputPowerW = adapterInputPower
+            // SystemLoad 与 BatteryPower 属于耦合的系统遥测字段，不能直接当作直供功率。
+            // 有可靠的总输入时，用总输入减电池充电功率得到一致的系统直供估算。
+            s.systemPowerW = max(0, adapterInputPower - (s.chargingPowerW ?? 0))
         }
 
         if settings.powerDiagnosticsLoggingEnabled {

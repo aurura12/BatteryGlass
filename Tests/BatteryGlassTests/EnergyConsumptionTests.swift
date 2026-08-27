@@ -13,6 +13,32 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertEqual(snapshot.consumptionPowerW, 96)
     }
 
+    func testAdapterSplitUsesMeasuredInputWithoutDoubleCountingCharge() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.adapterConnected = true
+        snapshot.adapterInputPowerW = 82
+        snapshot.systemPowerW = 92
+        snapshot.voltage = 12.6
+        snapshot.current = 4.5
+
+        XCTAssertEqual(snapshot.chargingPowerW ?? 0, 56.7, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.directSupplyPowerW ?? 0, 25.3, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.adapterOutputPowerW ?? 0, 82, accuracy: 0.000001)
+    }
+
+    func testAdapterSplitIsUnavailableWithoutMeasuredInput() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.adapterConnected = true
+        snapshot.systemPowerW = 92
+        snapshot.voltage = 12.6
+        snapshot.current = 4.5
+
+        XCTAssertNil(snapshot.directSupplyPowerW)
+        XCTAssertNil(snapshot.adapterOutputPowerW)
+    }
+
     func testAdapterPowerIsUnavailableWithoutInputTelemetry() {
         var snapshot = BatterySnapshot()
         snapshot.state = .pluggedIn
