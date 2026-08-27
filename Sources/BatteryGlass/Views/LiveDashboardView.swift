@@ -327,9 +327,10 @@ struct PowerTrendCard: View {
 
     private var directionCaption: String {
         switch snapshot.state {
-        case .charging: return "充电中 · 能量流向电池"
-        case .discharging: return "放电中 · 能量流出电池"
-        default: return "已接通电源 · 无充放电流"
+        case .charging: return "适配器供电 · 系统总功率"
+        case .discharging: return "电池供电 · 系统总功率"
+        case .pluggedIn: return "适配器供电 · 系统总功率"
+        case .unknown: return "暂无有效功率数据"
         }
     }
 }

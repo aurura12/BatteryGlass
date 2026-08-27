@@ -155,20 +155,24 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let samples: [HistorySample]
 
+    private var energySamples: [HistorySample] {
+        samples.filter { $0.consumptionPowerW != nil }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("今日功率曲线")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if samples.isEmpty {
+            if energySamples.isEmpty {
                 ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
-                Chart(samples.suffix(720)) { sample in
+                Chart(energySamples.suffix(720)) { sample in
                     AreaMark(
                         x: .value("时间", sample.timestamp),
-                        y: .value("功率", sample.power)
+                        y: .value("功率", sample.consumptionPowerW ?? 0)
                     )
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(
@@ -181,7 +185,7 @@ struct TodayPowerChart: View {
 
                     LineMark(
                         x: .value("时间", sample.timestamp),
-                        y: .value("功率", sample.power)
+                        y: .value("功率", sample.consumptionPowerW ?? 0)
                     )
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(DesignTokens.dataBlue)
