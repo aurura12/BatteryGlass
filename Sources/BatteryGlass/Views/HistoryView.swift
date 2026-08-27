@@ -170,15 +170,6 @@ struct TodayPowerChart: View {
         }
     }
 
-    private var chartWidth: CGFloat {
-        guard let first = chartSamples.first?.timestamp,
-              let last = chartSamples.last?.timestamp else {
-            return 420
-        }
-        let hours = max(1, last.timeIntervalSince(first) / 3_600)
-        return max(420, CGFloat(hours) * 220)
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -197,45 +188,44 @@ struct TodayPowerChart: View {
                 ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
-                ScrollView(.horizontal, showsIndicators: true) {
-                    Chart(chartSamples) { sample in
-                        AreaMark(
-                            x: .value("时间", sample.timestamp),
-                            y: .value("功率", sample.consumptionPowerW ?? 0)
+                Chart(chartSamples) { sample in
+                    AreaMark(
+                        x: .value("时间", sample.timestamp),
+                        y: .value("功率", sample.consumptionPowerW ?? 0)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
-                        .interpolationMethod(.catmullRom)
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
+                    )
 
-                        LineMark(
-                            x: .value("时间", sample.timestamp),
-                            y: .value("功率", sample.consumptionPowerW ?? 0)
-                        )
-                        .interpolationMethod(.catmullRom)
-                        .foregroundStyle(DesignTokens.dataBlue)
-                        .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    LineMark(
+                        x: .value("时间", sample.timestamp),
+                        y: .value("功率", sample.consumptionPowerW ?? 0)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(DesignTokens.dataBlue)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
 
-                        RuleMark(y: .value("零线", 0))
-                            .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
-                            .foregroundStyle(.secondary.opacity(0.5))
-                    }
-                    .chartYAxis {
-                        AxisMarks(position: .leading)
-                    }
-                    .chartXAxis {
-                        AxisMarks(values: .stride(by: .hour)) { _ in
-                            AxisGridLine().foregroundStyle(.clear)
-                            AxisTick()
-                            AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
-                        }
-                    }
-                    .frame(width: chartWidth, height: 138)
+                    RuleMark(y: .value("零线", 0))
+                        .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
+                        .foregroundStyle(.secondary.opacity(0.5))
                 }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .hour)) { _ in
+                        AxisGridLine().foregroundStyle(.clear)
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                    }
+                }
+                .chartScrollableAxes(.horizontal)
+                .chartXVisibleDomain(length: 3_600)
                 .frame(height: 138)
             }
         }
