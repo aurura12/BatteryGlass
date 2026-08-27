@@ -8,6 +8,10 @@ struct HistoryView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: DesignTokens.spacingM) {
+                DailyEnergyComparisonChart(
+                    summaries: history.summaries(lastDays: 14)
+                )
+
                 TodayPowerChart(samples: history.samplesForDay(Date()))
 
                 HistoryMetricCard(
@@ -25,6 +29,126 @@ struct HistoryView: View {
 
     private var cycleCount: Int {
         history.samples.last?.cycleCount ?? monitor.snapshot.cycleCount
+    }
+}
+
+struct DailyEnergyComparisonChart: View {
+    let summaries: [DailySummary]
+
+    private var energySummaries: [DailySummary] {
+        summaries.filter { $0.energyKWh != nil }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
+            Text("每日耗电量（近 14 天）")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if energySummaries.isEmpty {
+                ChartEmptyPlaceholder("升级后开始累计每日耗电量")
+                    .frame(height: 138)
+            } else {
+                Chart(energySummaries) { summary in
+                    BarMark(
+                        x: .value("日期", summary.date, unit: .day),
+                        y: .value("耗电量", summary.energyKWh ?? 0)
+                    )
+                    .foregroundStyle(DesignTokens.dataBlue.gradient)
+                    .cornerRadius(4)
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel {
+                            if let energy = value.as(Double.self) {
+                                Text(String(format: "%.1f", energy))
+                            }
+                        }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .day)) { value in
+                        AxisGridLine().foregroundStyle(.clear)
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.month(.defaultDigits).day(.defaultDigits))
+                    }
+                }
+                .frame(height: 138)
+
+                comparisonMetrics
+                dailyDetails
+            }
+        }
+        .padding(DesignTokens.spacingM)
+        .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    private var comparisonMetrics: some View {
+        HStack(spacing: DesignTokens.spacingM) {
+            energyMetric(title: "今日", value: todayEnergy)
+            Divider()
+                .frame(height: 24)
+            energyMetric(title: "最高", value: maximumEnergy)
+            Divider()
+                .frame(height: 24)
+            energyMetric(title: "日均", value: averageEnergy)
+        }
+        .padding(.top, DesignTokens.spacingXS)
+    }
+
+    private func energyMetric(title: String, value: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(value.map { String(format: "%.2f kWh", $0) } ?? "--")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(DesignTokens.dataBlue)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var todayKey: String {
+        BatteryFormatters.dayKey(for: Date())
+    }
+
+    private var todayEnergy: Double? {
+        energySummaries.first { $0.dayKey == todayKey }?.energyKWh
+    }
+
+    private var maximumEnergy: Double? {
+        energySummaries.compactMap(\.energyKWh).max()
+    }
+
+    private var averageEnergy: Double? {
+        let values = energySummaries.compactMap(\.energyKWh)
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private var dailyDetails: some View {
+        VStack(spacing: DesignTokens.spacingXS) {
+            Divider()
+
+            ForEach(energySummaries.reversed()) { summary in
+                HStack {
+                    Text(summary.dayKey)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(String(format: "%.2f kWh", summary.energyKWh ?? 0))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(DesignTokens.dataBlue)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(.top, DesignTokens.spacingXS)
     }
 }
 
@@ -98,6 +222,7 @@ struct HistoryMetricCard: View {
                 .minimumScaleFactor(0.8)
         }
     }
+
 }
 
 struct ChartEmptyPlaceholder: View {

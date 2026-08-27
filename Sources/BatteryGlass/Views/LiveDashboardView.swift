@@ -18,7 +18,7 @@ struct LiveDashboardView: View {
                 HealthKpiCard(snapshot: monitor.snapshot)
             }
 
-            if monitor.snapshot.adapterConnected {
+            if monitor.snapshot.adapterConnected, monitor.snapshot.state != .discharging {
                 AdapterSplitCard(snapshot: monitor.snapshot)
             }
 
@@ -172,7 +172,9 @@ struct PowerKpiCard: View {
     }
 
     private var displayPower: Double {
-        isOnAdapter ? (snapshot.systemPowerW ?? snapshot.power) : snapshot.power
+        isOnAdapter
+            ? (snapshot.adapterInputPowerW ?? snapshot.systemPowerW ?? snapshot.power)
+            : snapshot.power
     }
 
     private var accent: Color {
