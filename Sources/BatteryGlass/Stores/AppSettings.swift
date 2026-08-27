@@ -24,6 +24,10 @@ final class AppSettings {
         didSet { defaults.set(recordHistory, forKey: Self.recordHistoryKey) }
     }
 
+    var powerDiagnosticsLoggingEnabled: Bool {
+        didSet { defaults.set(powerDiagnosticsLoggingEnabled, forKey: Self.powerDiagnosticsLoggingKey) }
+    }
+
     var desktopWidgetEnabled: Bool {
         didSet { defaults.set(desktopWidgetEnabled, forKey: Self.desktopWidgetKey) }
     }
@@ -46,6 +50,7 @@ final class AppSettings {
         animationIntensity = defaults.object(forKey: Self.intensityKey) as? Double ?? 0.75
         animationSpeed = defaults.object(forKey: Self.speedKey) as? Double ?? 1.0
         recordHistory = defaults.object(forKey: Self.recordHistoryKey) as? Bool ?? true
+        powerDiagnosticsLoggingEnabled = defaults.object(forKey: Self.powerDiagnosticsLoggingKey) as? Bool ?? false
         desktopWidgetEnabled = defaults.object(forKey: Self.desktopWidgetKey) as? Bool ?? true
         desktopWidgetFrameString = defaults.string(forKey: Self.desktopWidgetFrameKey) ?? ""
     }
@@ -55,6 +60,7 @@ final class AppSettings {
     private static let intensityKey = "animationIntensity"
     private static let speedKey = "animationSpeed"
     private static let recordHistoryKey = "recordHistory"
+    private static let powerDiagnosticsLoggingKey = "powerDiagnosticsLoggingEnabled"
     private static let desktopWidgetKey = "desktopWidgetEnabled"
     private static let desktopWidgetFrameKey = "desktopWidgetFrameString"
 }

@@ -62,6 +62,14 @@ struct SettingsView: View {
                 Button("清空历史数据", role: .destructive) {
                     history.clearHistory()
                 }
+
+                Toggle("记录电源诊断日志", isOn: $settings.powerDiagnosticsLoggingEnabled)
+                Text("启用后每秒记录一次原始功率遥测和应用计算结果，日志最多保留约 5 MB。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("打开诊断日志文件夹") {
+                    PowerDiagnosticsLogger.shared.openLogDirectory()
+                }
             }
 
             Section("关于") {

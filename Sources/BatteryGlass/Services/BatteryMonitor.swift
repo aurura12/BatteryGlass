@@ -94,6 +94,33 @@ final class BatteryMonitor {
             s.adapterInputPowerW = io.telemetrySystemPowerMW / 1000
         }
 
+        if settings.powerDiagnosticsLoggingEnabled {
+            PowerDiagnosticsLogger.shared.record(
+                PowerDiagnosticsSample(
+                    timestamp: s.timestamp,
+                    state: s.state,
+                    adapterConnected: s.adapterConnected,
+                    isCharging: io.isCharging,
+                    batteryVoltageV: s.voltage,
+                    batteryCurrentA: s.current,
+                    batteryPowerW: s.power,
+                    telemetryBatteryPowerW: io.telemetryBatteryPowerMW.nilIfZero.map { $0 / 1000 },
+                    systemPowerInW: io.telemetrySystemPowerMW.nilIfZero.map { $0 / 1000 },
+                    systemLoadW: io.telemetrySystemLoadMW.nilIfZero.map { $0 / 1000 },
+                    systemVoltageInV: io.telemetrySystemVoltageInMV.nilIfZero.map { $0 / 1000 },
+                    systemCurrentInA: io.telemetrySystemCurrentInMA.nilIfZero.map { $0 / 1000 },
+                    adapterWatts: s.adapterWatts,
+                    adapterVoltageV: s.adapterVoltage,
+                    adapterCurrentA: s.adapterCurrent,
+                    snapshotSystemPowerW: s.systemPowerW,
+                    chargingPowerW: s.chargingPowerW,
+                    directSupplyPowerW: s.directSupplyPowerW,
+                    adapterOutputPowerW: s.adapterOutputPowerW,
+                    consumptionPowerW: s.consumptionPowerW
+                )
+            )
+        }
+
         s.timeRemaining = estimateTimeRemaining(for: s, io: io, ps: ps)
 
         snapshot = s
@@ -260,6 +287,8 @@ final class BatteryMonitor {
         var telemetryBatteryPowerMW = 0.0
         var telemetrySystemPowerMW = 0.0
         var telemetrySystemLoadMW = 0.0
+        var telemetrySystemVoltageInMV = 0.0
+        var telemetrySystemCurrentInMA = 0.0
         var adapterWatts: Double?
         var adapterVoltage: Double?
         var adapterCurrent: Double?
@@ -308,6 +337,8 @@ final class BatteryMonitor {
             data.telemetryBatteryPowerMW = Self.signedMW(telemetry["BatteryPower"])
             data.telemetrySystemPowerMW = Self.numberValue(telemetry["SystemPowerIn"])
             data.telemetrySystemLoadMW = Self.numberValue(telemetry["SystemLoad"])
+            data.telemetrySystemVoltageInMV = Self.numberValue(telemetry["SystemVoltageIn"])
+            data.telemetrySystemCurrentInMA = Self.numberValue(telemetry["SystemCurrentIn"])
         }
 
         if let adapter = dict["AdapterDetails"] as? [String: Any] {
