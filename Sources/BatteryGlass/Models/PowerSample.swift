@@ -12,4 +12,9 @@ struct PowerSample: Identifiable, Equatable, Sendable {
         self.power = power
         self.percent = percent
     }
+
+    init?(snapshot: BatterySnapshot) {
+        guard let power = snapshot.consumptionPowerW else { return nil }
+        self.init(timestamp: snapshot.timestamp, power: power, percent: snapshot.percent)
+    }
 }

@@ -169,7 +169,7 @@ final class BatteryMonitor {
     }
 
     private func recordPowerSample(_ s: BatterySnapshot) {
-        let sample = PowerSample(timestamp: s.timestamp, power: s.power, percent: s.percent)
+        guard let sample = PowerSample(snapshot: s) else { return }
         recentPower.append(sample)
         if recentPower.count > recentSampleLimit {
             recentPower.removeFirst(recentPower.count - recentSampleLimit)

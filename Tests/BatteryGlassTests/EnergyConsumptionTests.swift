@@ -42,6 +42,24 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 11.82 * 2.781, accuracy: 0.000001)
     }
 
+    func testPowerSampleUsesUnifiedConsumptionPower() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .pluggedIn
+        snapshot.adapterConnected = true
+        snapshot.adapterInputPowerW = 96
+        snapshot.systemPowerW = 70
+
+        XCTAssertEqual(PowerSample(snapshot: snapshot)?.power, 96)
+    }
+
+    func testPowerSampleIsUnavailableWithoutConsumptionSource() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .pluggedIn
+        snapshot.adapterConnected = true
+
+        XCTAssertNil(PowerSample(snapshot: snapshot))
+    }
+
     func testDailyEnergyIntegratesPowerOverTime() {
         let calendar = utcCalendar()
         let start = date("2026-08-27 10:00:00")
