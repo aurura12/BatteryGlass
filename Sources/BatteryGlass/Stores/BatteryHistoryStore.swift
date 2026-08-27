@@ -14,6 +14,12 @@ final class BatteryHistoryStore {
     private var lastCycleCount = -1
     private var lastHealth: Double?
     private var lastRecordedSample: HistorySample?
+    private let persistenceQueue = DispatchQueue(
+        label: "com.batteryglass.history-persistence",
+        qos: .utility
+    )
+    private var lastPersistenceScheduledAt = Date.distantPast
+    private let persistenceInterval: TimeInterval = 15
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -87,12 +93,15 @@ final class BatteryHistoryStore {
         samples = []
         dailySummaries = []
         lastRecordedSample = nil
-        try? FileManager.default.removeItem(at: fileURL)
+        lastPersistenceScheduledAt = .distantPast
+        persistenceQueue.sync {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
     }
 
     // MARK: - 持久化
 
-    private struct HistoryPayload: Codable {
+    private struct HistoryPayload: Codable, Sendable {
         var version: Int
         var samples: [HistorySample]
         var dailySummaries: [DailySummary]
@@ -114,15 +123,26 @@ final class BatteryHistoryStore {
     }
 
     private func persist() {
+        let now = Date()
+        guard now.timeIntervalSince(lastPersistenceScheduledAt) >= persistenceInterval else { return }
+        lastPersistenceScheduledAt = now
+
+        let payload = HistoryPayload(
+            version: 2,
+            samples: samples,
+            dailySummaries: dailySummaries
+        )
+        let fileURL = self.fileURL
+        persistenceQueue.async {
+            Self.write(payload, to: fileURL)
+        }
+    }
+
+    nonisolated private static func write(_ payload: HistoryPayload, to fileURL: URL) {
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
-            )
-            let payload = HistoryPayload(
-                version: 2,
-                samples: samples,
-                dailySummaries: dailySummaries
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
