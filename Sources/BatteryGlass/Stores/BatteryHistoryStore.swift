@@ -13,6 +13,7 @@ final class BatteryHistoryStore {
     private var lastRecord = Date.distantPast
     private var lastCycleCount = -1
     private var lastHealth: Double?
+    private var lastRecordedSample: HistorySample?
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -52,11 +53,18 @@ final class BatteryHistoryStore {
             cycleCount: snapshot.cycleCount,
             healthPercent: snapshot.healthPercent
         )
+
         samples.append(sample)
-        if samples.count > 6000 {
-            samples.removeFirst(samples.count - 6000)
+        updateSummary(with: sample)
+
+        if let previous = lastRecordedSample {
+            let intervalEnergy = EnergyCalculator.dailyEnergyKWh(samples: [previous, sample])
+            for (dayKey, energy) in intervalEnergy {
+                addEnergy(energy, to: dayKey)
+            }
         }
-        rebuildSummaries()
+        lastRecordedSample = sample
+        pruneHistory()
         persist()
     }
 
@@ -78,6 +86,7 @@ final class BatteryHistoryStore {
     func clearHistory() {
         samples = []
         dailySummaries = []
+        lastRecordedSample = nil
         try? FileManager.default.removeItem(at: fileURL)
     }
 
@@ -95,8 +104,13 @@ final class BatteryHistoryStore {
         decoder.dateDecodingStrategy = .iso8601
         guard let payload = try? decoder.decode(HistoryPayload.self, from: data) else { return }
         samples = payload.samples
-        rebuildSummaries()
-        prune()
+        if payload.version >= 2 {
+            dailySummaries = payload.dailySummaries
+        } else {
+            dailySummaries = summaries(from: samples)
+        }
+        lastRecordedSample = samples.last
+        pruneHistory()
     }
 
     private func persist() {
@@ -106,7 +120,7 @@ final class BatteryHistoryStore {
                 withIntermediateDirectories: true
             )
             let payload = HistoryPayload(
-                version: 1,
+                version: 2,
                 samples: samples,
                 dailySummaries: dailySummaries
             )
@@ -120,17 +134,13 @@ final class BatteryHistoryStore {
         }
     }
 
-    private func prune() {
+    private func pruneHistory() {
         guard let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: Date()) else { return }
-        let kept = samples.filter { $0.timestamp >= cutoff }
-        if kept.count != samples.count {
-            samples = kept
-            rebuildSummaries()
-            persist()
-        }
+        dailySummaries = dailySummaries.filter { $0.date >= cutoff }
+        samples = HistoryRetention.samplesForCurrentDay(samples, now: Date())
     }
 
-    private func rebuildSummaries() {
+    private func summaries(from samples: [HistorySample]) -> [DailySummary] {
         let energyByDay = EnergyCalculator.dailyEnergyKWh(samples: samples)
         var grouped: [String: [HistorySample]] = [:]
         for sample in samples {
@@ -152,5 +162,83 @@ final class BatteryHistoryStore {
                 minPower: powers.min() ?? 0
             )
         }
+        return dailySummaries
+    }
+
+    private func updateSummary(with sample: HistorySample) {
+        let key = BatteryFormatters.dayKey(for: sample.timestamp)
+        if let index = dailySummaries.firstIndex(where: { $0.dayKey == key }) {
+            var summary = dailySummaries[index]
+            let count = Double(summary.sampleCount)
+            summary.averagePower = (summary.averagePower * count + sample.power) / (count + 1)
+            summary.sampleCount += 1
+            summary.maxCycleCount = max(summary.maxCycleCount, sample.cycleCount)
+            if let health = sample.healthPercent {
+                summary.minHealthPercent = min(summary.minHealthPercent ?? health, health)
+            }
+            summary.maxPower = max(summary.maxPower, sample.power)
+            summary.minPower = min(summary.minPower, sample.power)
+            dailySummaries[index] = summary
+        } else {
+            dailySummaries.append(
+                DailySummary(
+                    dayKey: key,
+                    date: BatteryFormatters.dayKeyDate(key) ?? sample.timestamp,
+                    sampleCount: 1,
+                    maxCycleCount: sample.cycleCount,
+                    minHealthPercent: sample.healthPercent,
+                    energyKWh: nil,
+                    averagePower: sample.power,
+                    maxPower: sample.power,
+                    minPower: sample.power
+                )
+            )
+            dailySummaries.sort { $0.date < $1.date }
+        }
+    }
+
+    private func addEnergy(_ energy: Double, to dayKey: String) {
+        guard energy.isFinite, energy >= 0 else { return }
+        guard let index = dailySummaries.firstIndex(where: { $0.dayKey == dayKey }) else { return }
+        dailySummaries[index].energyKWh = (dailySummaries[index].energyKWh ?? 0) + energy
+    }
+}
+
+enum HistoryRetention {
+    static func samplesForCurrentDay(
+        _ samples: [HistorySample],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [HistorySample] {
+        let todayKey = dayKey(for: now, calendar: calendar)
+        let previousDayKey = dayKey(
+            for: calendar.date(byAdding: .day, value: -1, to: now) ?? now,
+            calendar: calendar
+        )
+        let previousDaySample = samples
+            .filter { dayKey(for: $0.timestamp, calendar: calendar) == previousDayKey }
+            .max { $0.timestamp < $1.timestamp }
+
+        return samples
+            .filter { dayKey(for: $0.timestamp, calendar: calendar) == todayKey }
+            .appendingIfNeeded(previousDaySample)
+            .sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private static func dayKey(for date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+}
+
+private extension Array where Element == HistorySample {
+    func appendingIfNeeded(_ sample: HistorySample?) -> [HistorySample] {
+        guard let sample, !contains(where: { $0.id == sample.id }) else { return self }
+        return self + [sample]
     }
 }
