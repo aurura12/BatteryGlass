@@ -244,6 +244,7 @@ struct TodayPowerChart: View {
                         }
                     }
                     .chartScrollableAxes(.horizontal)
+                    .scrollIndicators(.hidden, axes: .horizontal)
                     .chartXVisibleDomain(length: PowerChartWindow.defaultVisibleDuration)
                     .chartScrollPosition(x: $scrollPosition)
                     .chartOverlay { proxy in
