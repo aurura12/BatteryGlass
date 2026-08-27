@@ -155,50 +155,88 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let samples: [HistorySample]
 
+    private let maximumDisplayedSamples = 2_000
+
     private var energySamples: [HistorySample] {
         samples.filter { $0.consumptionPowerW != nil }
     }
 
+    private var chartSamples: [HistorySample] {
+        guard energySamples.count > maximumDisplayedSamples else { return energySamples }
+
+        let step = Double(energySamples.count - 1) / Double(maximumDisplayedSamples - 1)
+        return (0..<maximumDisplayedSamples).map { index in
+            energySamples[Int((Double(index) * step).rounded())]
+        }
+    }
+
+    private var chartWidth: CGFloat {
+        guard let first = chartSamples.first?.timestamp,
+              let last = chartSamples.last?.timestamp else {
+            return 420
+        }
+        let hours = max(1, last.timeIntervalSince(first) / 3_600)
+        return max(420, CGFloat(hours) * 220)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("今日功率曲线")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("今日功率曲线")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if chartSamples.count > 1 {
+                    Text("横向滚动查看")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
 
             if energySamples.isEmpty {
                 ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
-                Chart(energySamples.suffix(720)) { sample in
-                    AreaMark(
-                        x: .value("时间", sample.timestamp),
-                        y: .value("功率", sample.consumptionPowerW ?? 0)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                ScrollView(.horizontal, showsIndicators: true) {
+                    Chart(chartSamples) { sample in
+                        AreaMark(
+                            x: .value("时间", sample.timestamp),
+                            y: .value("功率", sample.consumptionPowerW ?? 0)
                         )
-                    )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
 
-                    LineMark(
-                        x: .value("时间", sample.timestamp),
-                        y: .value("功率", sample.consumptionPowerW ?? 0)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(DesignTokens.dataBlue)
-                    .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        LineMark(
+                            x: .value("时间", sample.timestamp),
+                            y: .value("功率", sample.consumptionPowerW ?? 0)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(DesignTokens.dataBlue)
+                        .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
 
-                    RuleMark(y: .value("零线", 0))
-                        .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
-                        .foregroundStyle(.secondary.opacity(0.5))
+                        RuleMark(y: .value("零线", 0))
+                            .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
+                            .foregroundStyle(.secondary.opacity(0.5))
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading)
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: .stride(by: .hour)) { _ in
+                            AxisGridLine().foregroundStyle(.clear)
+                            AxisTick()
+                            AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                        }
+                    }
+                    .frame(width: chartWidth, height: 138)
                 }
-                .chartYAxis {
-                    AxisMarks(position: .leading)
-                }
-                .frame(height: 120)
+                .frame(height: 138)
             }
         }
         .padding(DesignTokens.spacingM)
