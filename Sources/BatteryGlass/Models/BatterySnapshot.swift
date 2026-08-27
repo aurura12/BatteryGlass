@@ -32,6 +32,8 @@ struct BatterySnapshot: Equatable, Sendable {
     var current = 0.0
     var telemetryPowerW: Double?
     var systemPowerW: Double?
+    /// 适配器输入功率（W），包含系统运行、给电池充电和转换损耗。
+    var adapterInputPowerW: Double?
 
     /// 展示功率：优先电池电气参数（电压×电流），否则使用系统遥测电池功率。
     var power: Double {
@@ -49,13 +51,26 @@ struct BatterySnapshot: Equatable, Sendable {
 
     /// 适配器直供系统功率（W）：仅外接电源时存在（PowerTelemetryData.SystemLoad）。
     var directSupplyPowerW: Double? {
-        adapterConnected ? systemPowerW : nil
+        adapterConnected && state != .discharging ? systemPowerW : nil
     }
 
     /// 适配器总输出功率（W）= 给电池充电 + 系统直供。
     var adapterOutputPowerW: Double? {
         guard let direct = directSupplyPowerW else { return nil }
         return direct + (chargingPowerW ?? 0)
+    }
+
+    /// 用于每日能耗统计的统一功率：适配器输入或电池放电功率。
+    var consumptionPowerW: Double? {
+        if state == .discharging, power < 0 {
+            return abs(power)
+        }
+
+        if adapterConnected {
+            guard let adapterInputPowerW, adapterInputPowerW > 0 else { return nil }
+            return adapterInputPowerW
+        }
+        return nil
     }
 
     var temperatureCelsius: Double?

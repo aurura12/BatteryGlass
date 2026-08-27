@@ -90,6 +90,10 @@ final class BatteryMonitor {
             s.systemPowerW = snapshot.systemPowerW
         }
 
+        if s.adapterConnected, io.telemetrySystemPowerMW > 0 {
+            s.adapterInputPowerW = io.telemetrySystemPowerMW / 1000
+        }
+
         s.timeRemaining = estimateTimeRemaining(for: s, io: io, ps: ps)
 
         snapshot = s
@@ -109,10 +113,14 @@ final class BatteryMonitor {
         let external = io.externalConnected || ps.externalConnected
         let charging = io.isCharging || ps.isCharging
         let finishing = io.isFinishingCharge || ps.isFinishingCharge
+        let batteryCurrent = io.current != 0 ? io.current : ps.current
 
         if external {
             if charging || finishing {
                 return .charging
+            }
+            if batteryCurrent < -0.01 {
+                return .discharging
             }
             return .pluggedIn
         }

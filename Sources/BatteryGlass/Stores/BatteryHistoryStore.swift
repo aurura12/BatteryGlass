@@ -47,6 +47,7 @@ final class BatteryHistoryStore {
         let sample = HistorySample(
             timestamp: snapshot.timestamp,
             power: snapshot.power,
+            consumptionPowerW: snapshot.consumptionPowerW,
             percent: snapshot.percent,
             cycleCount: snapshot.cycleCount,
             healthPercent: snapshot.healthPercent
@@ -71,6 +72,7 @@ final class BatteryHistoryStore {
         return dailySummaries
             .filter { $0.date >= cutoff }
             .suffix(lastDays)
+            .map { $0 }
     }
 
     func clearHistory() {
@@ -129,6 +131,7 @@ final class BatteryHistoryStore {
     }
 
     private func rebuildSummaries() {
+        let energyByDay = EnergyCalculator.dailyEnergyKWh(samples: samples)
         var grouped: [String: [HistorySample]] = [:]
         for sample in samples {
             grouped[BatteryFormatters.dayKey(for: sample.timestamp), default: []].append(sample)
@@ -143,6 +146,7 @@ final class BatteryHistoryStore {
                 sampleCount: samples.count,
                 maxCycleCount: samples.map(\.cycleCount).max() ?? 0,
                 minHealthPercent: samples.compactMap(\.healthPercent).min(),
+                energyKWh: energyByDay[key],
                 averagePower: powers.reduce(0, +) / Double(powers.count),
                 maxPower: powers.max() ?? 0,
                 minPower: powers.min() ?? 0

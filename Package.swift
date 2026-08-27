@@ -15,6 +15,11 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("IOKit")
             ]
+        ),
+        .testTarget(
+            name: "BatteryGlassTests",
+            dependencies: ["BatteryGlass"],
+            path: "Tests/BatteryGlassTests"
         )
     ]
 )
