@@ -153,22 +153,14 @@ struct DailyEnergyComparisonChart: View {
 }
 
 struct TodayPowerChart: View {
-    let samples: [HistorySample]
-
-    private let maximumDisplayedSamples = 1_200
+    let energySamples: [HistorySample]
+    let chartSamples: [HistorySample]
     @State private var hoveredSample: HistorySample?
 
-    private var energySamples: [HistorySample] {
-        samples.filter { $0.consumptionPowerW != nil }
-    }
-
-    private var chartSamples: [HistorySample] {
-        guard energySamples.count > maximumDisplayedSamples else { return energySamples }
-
-        let step = Double(energySamples.count - 1) / Double(maximumDisplayedSamples - 1)
-        return (0..<maximumDisplayedSamples).map { index in
-            energySamples[Int((Double(index) * step).rounded())]
-        }
+    init(samples: [HistorySample]) {
+        let chartData = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
+        self.energySamples = chartData.energySamples
+        self.chartSamples = chartData.chartSamples
     }
 
     var body: some View {
@@ -195,7 +187,7 @@ struct TodayPowerChart: View {
                             x: .value("时间", sample.timestamp),
                             y: .value("功率", sample.consumptionPowerW ?? 0)
                         )
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.linear)
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
@@ -208,7 +200,7 @@ struct TodayPowerChart: View {
                             x: .value("时间", sample.timestamp),
                             y: .value("功率", sample.consumptionPowerW ?? 0)
                         )
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.linear)
                         .foregroundStyle(DesignTokens.dataBlue)
                         .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
                     }
@@ -320,6 +312,27 @@ struct TodayPowerChart: View {
         .padding(.vertical, 6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
         .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+}
+
+struct PowerChartData {
+    let energySamples: [HistorySample]
+    let chartSamples: [HistorySample]
+
+    init(samples: [HistorySample], maximumDisplayedSamples: Int) {
+        let energySamples = samples.filter { $0.consumptionPowerW != nil }
+        self.energySamples = energySamples
+
+        guard maximumDisplayedSamples > 1,
+              energySamples.count > maximumDisplayedSamples else {
+            self.chartSamples = energySamples
+            return
+        }
+
+        let step = Double(energySamples.count - 1) / Double(maximumDisplayedSamples - 1)
+        self.chartSamples = (0..<maximumDisplayedSamples).map { index in
+            energySamples[Int((Double(index) * step).rounded())]
+        }
     }
 }
 
