@@ -9,6 +9,10 @@ enum BatteryFormatters {
         String(format: "%+.1f W", value)
     }
 
+    static func energyKWh(_ value: Double) -> String {
+        String(format: "%.3f kWh", value)
+    }
+
     static func temperature(_ value: Double?) -> String {
         guard let value else { return "--" }
         return String(format: "%.1f °C", value)

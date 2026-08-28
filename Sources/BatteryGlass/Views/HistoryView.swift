@@ -103,7 +103,7 @@ struct DailyEnergyComparisonChart: View {
             Text(title)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text(value.map { String(format: "%.2f kWh", $0) } ?? "--")
+            Text(value.map(BatteryFormatters.energyKWh) ?? "--")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(DesignTokens.dataBlue)
@@ -140,7 +140,7 @@ struct DailyEnergyComparisonChart: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text(String(format: "%.2f kWh", summary.energyKWh ?? 0))
+                    Text(BatteryFormatters.energyKWh(summary.energyKWh ?? 0))
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(DesignTokens.dataBlue)
@@ -244,7 +244,7 @@ struct TodayPowerChart: View {
                         }
                     }
                     .chartScrollableAxes(.horizontal)
-                    .scrollIndicators(.hidden, axes: .horizontal)
+                    .scrollIndicators(.never, axes: .horizontal)
                     .chartXVisibleDomain(length: PowerChartWindow.defaultVisibleDuration)
                     .chartScrollPosition(x: $scrollPosition)
                     .chartOverlay { proxy in
