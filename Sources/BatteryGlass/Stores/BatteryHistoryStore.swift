@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Observation
 
 @MainActor
@@ -10,6 +11,7 @@ final class BatteryHistoryStore {
     private let settings: AppSettings
     private let fileURL: URL
     private var observer: NSObjectProtocol?
+    private var terminationObserver: NSObjectProtocol?
     private var lastRecord = Date.distantPast
     private var lastCycleCount = -1
     private var lastHealth: Double?
@@ -22,11 +24,15 @@ final class BatteryHistoryStore {
     private var lastPersistenceScheduledAt = Date.distantPast
     private let persistenceInterval: TimeInterval = 15
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, fileURL: URL? = nil) {
         self.settings = settings
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        self.fileURL = base.appendingPathComponent("BatteryGlass/history.json", isDirectory: false)
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            self.fileURL = base.appendingPathComponent("BatteryGlass/history.json", isDirectory: false)
+        }
         load()
 
         observer = NotificationCenter.default.addObserver(
@@ -37,6 +43,16 @@ final class BatteryHistoryStore {
             guard let snapshot = notification.userInfo?["snapshot"] as? BatterySnapshot else { return }
             Task { @MainActor in
                 self?.record(snapshot)
+            }
+        }
+
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.flush()
             }
         }
     }
@@ -100,6 +116,15 @@ final class BatteryHistoryStore {
         }
     }
 
+    /// 退出前同步写入最新快照，避免异步保存尚未执行就结束进程。
+    func flush() {
+        let payload = makePayload()
+        let fileURL = self.fileURL
+        persistenceQueue.sync {
+            Self.write(payload, to: fileURL)
+        }
+    }
+
     // MARK: - 持久化
 
     private struct HistoryPayload: Codable, Sendable {
@@ -129,15 +154,19 @@ final class BatteryHistoryStore {
         guard now.timeIntervalSince(lastPersistenceScheduledAt) >= persistenceInterval else { return }
         lastPersistenceScheduledAt = now
 
-        let payload = HistoryPayload(
-            version: 2,
-            samples: samples,
-            dailySummaries: dailySummaries
-        )
+        let payload = makePayload()
         let fileURL = self.fileURL
         persistenceQueue.async {
             Self.write(payload, to: fileURL)
         }
+    }
+
+    private func makePayload() -> HistoryPayload {
+        HistoryPayload(
+            version: 2,
+            samples: samples,
+            dailySummaries: dailySummaries
+        )
     }
 
     nonisolated private static func write(_ payload: HistoryPayload, to fileURL: URL) {

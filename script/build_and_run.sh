@@ -15,7 +15,24 @@ APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+stop_running_app() {
+  if ! pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+    return
+  fi
+
+  /usr/bin/osascript -e 'tell application "BatteryGlass" to quit' >/dev/null 2>&1 || true
+
+  for _ in $(seq 1 20); do
+    if ! pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.1
+  done
+
+  pkill -TERM -x "$APP_NAME" >/dev/null 2>&1 || true
+}
+
+stop_running_app
 
 swift build
 
