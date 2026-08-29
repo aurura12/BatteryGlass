@@ -138,6 +138,42 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertTrue(energy.isEmpty)
     }
 
+    func testDisplayPowerPrefersAdapterInputWhenPluggedIn() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .pluggedIn
+        snapshot.adapterInputPowerW = 82
+        snapshot.systemPowerW = 36
+        snapshot.voltage = 12.6
+        snapshot.current = 3.6
+
+        XCTAssertEqual(snapshot.displayPower, 82, accuracy: 0.0001)
+        XCTAssertTrue(snapshot.displayPowerText.hasPrefix("82"))
+        XCTAssertFalse(snapshot.displayPowerText.contains("+"))
+        XCTAssertTrue(snapshot.displayPowerText.hasSuffix("W"))
+    }
+
+    func testDisplayPowerFallsBackToSystemPowerWithoutAdapterInput() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.adapterInputPowerW = nil
+        snapshot.systemPowerW = 36
+        snapshot.voltage = 12.6
+        snapshot.current = 3.6
+
+        XCTAssertEqual(snapshot.displayPower, 36, accuracy: 0.0001)
+    }
+
+    func testDisplayPowerUsesBatteryPowerWhenDischarging() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.adapterInputPowerW = 82
+        snapshot.voltage = 12
+        snapshot.current = -2
+
+        XCTAssertEqual(snapshot.displayPower, -24, accuracy: 0.0001)
+        XCTAssertTrue(snapshot.displayPowerText.hasPrefix("-24"))
+    }
+
     func testHistorySampleDecodesWithoutEnergyField() throws {
         let data = #"{"id":"00000000-0000-0000-0000-000000000001","timestamp":0,"power":-20,"percent":50,"cycleCount":1,"healthPercent":100}"#.data(using: .utf8)!
 

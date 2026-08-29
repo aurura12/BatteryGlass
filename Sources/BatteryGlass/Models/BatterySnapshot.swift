@@ -100,8 +100,25 @@ struct BatterySnapshot: Equatable, Sendable {
         "\(Int(percent.rounded()))%"
     }
 
-    var powerText: String {
-        String(format: "%+.1f W", power)
+    /// 展示功率取值：与主面板"实时功率"卡保持一致——适配器供电（充电/已接通电源）时
+    /// 优先显示系统功率（适配器输入 → 系统功率 → 电池功率），否则显示电池充放电功率。
+    var displayPower: Double {
+        switch state {
+        case .charging, .pluggedIn:
+            return adapterInputPowerW ?? systemPowerW ?? power
+        case .discharging, .unknown:
+            return power
+        }
+    }
+
+    /// 展示功率文本：适配器供电时显示无符号系统功率，电池供电时保留正负号。
+    var displayPowerText: String {
+        switch state {
+        case .charging, .pluggedIn:
+            return String(format: "%.1f W", displayPower)
+        case .discharging, .unknown:
+            return String(format: "%+.1f W", displayPower)
+        }
     }
 
     var healthText: String {

@@ -58,6 +58,20 @@ final class PowerChartDataTests: XCTestCase {
         )
     }
 
+    func testVisibleDomainUsesCustomScrollPosition() {
+        let start = date("2026-08-27 08:00:00")
+        let position = start.addingTimeInterval(3_600)
+        let latest = start.addingTimeInterval(14_400)
+
+        let domain = PowerChartWindow.visibleDomain(
+            startingAt: position,
+            latest: latest
+        )
+
+        XCTAssertEqual(domain.lowerBound, position)
+        XCTAssertEqual(domain.upperBound, position.addingTimeInterval(7_200))
+    }
+
     func testChartDataFiltersMissingPowerAndDownsamplesToLimit() {
         let first = Date(timeIntervalSince1970: 1_000)
         let samples = (0..<6).map { index in
@@ -112,5 +126,13 @@ final class PowerChartDataTests: XCTestCase {
             cycleCount: 1,
             healthPercent: 100
         )
+    }
+
+    private func date(_ string: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: string)!
     }
 }

@@ -172,9 +172,7 @@ struct PowerKpiCard: View {
     }
 
     private var displayPower: Double {
-        isOnAdapter
-            ? (snapshot.adapterInputPowerW ?? snapshot.systemPowerW ?? snapshot.power)
-            : snapshot.power
+        snapshot.displayPower
     }
 
     private var accent: Color {
