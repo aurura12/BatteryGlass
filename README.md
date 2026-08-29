@@ -12,10 +12,12 @@
   - 循环次数（cycle count）
   - 健康度（FullChargeCapacity / DesignCapacity）
 - 实时功率，精确到 0.1 W：电池供电时显示电池充放电功率（带正负号），
-  适配器供电时显示当前系统功率（无符号），接入 PowerTelemetryData 遥测
-- 系统功耗（PowerTelemetryData.SystemLoad，即系统自身消耗，不含电池充电）
+  适配器供电时显示系统功率（无符号，优先适配器总输入），接入 PowerTelemetryData 遥测
+- 系统功耗/系统直供：优先 PowerTelemetryData.SystemLoad（系统自身消耗，不含电池充电）；
+  有可靠的适配器总输入（SystemPowerIn）时，按“适配器输入 − 电池充电功率”估算系统直供；
+  电池供电时取电池放电功率
 - 电源分配（外接电源时）：给电池充电功率 / 系统直供功率 / 适配器输出合计
-  （直供 = SystemLoad；适配器输出 = 直供 + 充电功率）
+  （系统直供 = 适配器输入 − 充电功率；适配器输出 = 适配器输入）
   - 电池温度（°C）、电压（V）
   - 电源适配器状态、功率、电压、电流、名称
 - 可视化：
@@ -26,7 +28,7 @@
   - “实时 / 历史”分段控件与页面切换动画（液态玻璃高亮胶囊 + 滑动/缩放/模糊过渡）
 - 历史记录：
   - 全天功率曲线（每 5 秒采样，可横向滚动查看）、每日耗电量（kWh）与近 14 天对比、循环次数记录（健康度以实时卡片展示）
-  - 每 5 秒持久化到 `~/Library/Application Support/BatteryGlass/history.json`
+  - 每 15 秒持久化到 `~/Library/Application Support/BatteryGlass/history.json`（退出前自动 flush）
 - 电源诊断：
   - 可在设置中开启诊断日志，每秒记录原始 `SystemPowerIn` / `SystemLoad`、适配器和电池电气数据，以及应用计算结果
   - 日志保存到 `~/Library/Application Support/BatteryGlass/power-diagnostics.jsonl`，单文件约 5 MB 自动轮换

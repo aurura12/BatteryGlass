@@ -40,7 +40,7 @@ struct DesktopWidgetView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    Text(snapshot.powerText)
+                    Text(snapshot.displayPowerText)
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(tint)

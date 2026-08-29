@@ -24,6 +24,9 @@ final class BatteryHistoryStore {
     private var lastPersistenceScheduledAt = Date.distantPast
     private let persistenceInterval: TimeInterval = 15
 
+    /// 历史文件大小上限。超过则拒绝加载，避免本机被篡改的文件导致启动卡顿或内存暴涨。
+    private static let maxHistoryFileSize = 20 * 1024 * 1024
+
     init(settings: AppSettings, fileURL: URL? = nil) {
         self.settings = settings
         if let fileURL {
@@ -105,6 +108,10 @@ final class BatteryHistoryStore {
             .map { $0 }
     }
 
+    func allSummaries() -> [DailySummary] {
+        dailySummaries
+    }
+
     func clearHistory() {
         samples = []
         dailySummaries = []
@@ -134,6 +141,9 @@ final class BatteryHistoryStore {
     }
 
     private func load() {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let size = attributes[.size] as? Int,
+              size <= Self.maxHistoryFileSize else { return }
         guard let data = try? Data(contentsOf: fileURL) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -144,9 +154,32 @@ final class BatteryHistoryStore {
         } else {
             dailySummaries = summaries(from: samples)
         }
+        let sanitizedSummaries = DailyEnergySummaryPolicy.markSparseLegacySummariesIncomplete(
+            dailySummaries,
+            todayKey: BatteryFormatters.dayKey(for: Date())
+        )
+        let summariesChanged = sanitizedSummaries != dailySummaries
+        dailySummaries = sanitizedSummaries
+
+        let recovery = HistorySampleRecovery.backfillConsumptionPower(
+            in: samples,
+            from: PowerDiagnosticsHistoryLoader.load()
+        )
+        if recovery.didChange {
+            samples = recovery.samples
+            updateEnergySummaries(
+                from: samples,
+                allowedDayKeys: [BatteryFormatters.dayKey(for: Date())]
+            )
+        }
+
         lastRecordedSample = samples.last
         lastSamplesPrunedDay = nil
         pruneHistory()
+
+        if recovery.didChange || summariesChanged {
+            flush()
+        }
     }
 
     private func persist() {
@@ -186,8 +219,7 @@ final class BatteryHistoryStore {
     }
 
     private func pruneHistory() {
-        guard let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: Date()) else { return }
-        dailySummaries = dailySummaries.filter { $0.date >= cutoff }
+        dailySummaries = DailyEnergySummaryPolicy.retainedSummaries(dailySummaries)
 
         let today = Calendar.current.startOfDay(for: Date())
         guard lastSamplesPrunedDay != today else { return }
@@ -218,6 +250,15 @@ final class BatteryHistoryStore {
             )
         }
         return dailySummaries
+    }
+
+    private func updateEnergySummaries(from samples: [HistorySample], allowedDayKeys: Set<String>) {
+        let energyByDay = EnergyCalculator.dailyEnergyKWh(samples: samples)
+        dailySummaries = DailyEnergySummaryPolicy.reconcile(
+            summaries: dailySummaries,
+            recalculatedEnergy: energyByDay,
+            allowedDayKeys: allowedDayKeys
+        )
     }
 
     private func updateSummary(with sample: HistorySample) {

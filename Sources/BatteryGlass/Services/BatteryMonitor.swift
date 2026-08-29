@@ -77,8 +77,13 @@ final class BatteryMonitor {
         } else {
             s.current = ps.current
         }
-        // 系统直供：SystemLoad = 系统自身消耗（不含电池充电），充电时也不会虚高；
-        // 旧设备无 SystemLoad 时回退：适配器输入 - 充电功率；电池供电时取放电功率。
+        // 系统功耗取值：
+        // 1. 优先 SystemLoad（系统自身消耗，不含电池充电），充电时不会虚高；
+        // 2. 无 SystemLoad 且适配器供电时，回退为（适配器输入 − 充电功率）；
+        // 3. 电池供电时取放电功率；
+        // 4. 均不可用时保持上次值。
+        // 注意：下方如有可靠适配器总输入（SystemPowerIn）会覆盖第 1、2 步的结果，
+        // 用"总输入 − 充电功率"得到一致的系统直供估算。
         if io.telemetrySystemLoadMW > 0 {
             s.systemPowerW = io.telemetrySystemLoadMW / 1000
         } else if s.adapterConnected, io.telemetrySystemPowerMW > 0 {
@@ -209,7 +214,7 @@ final class BatteryMonitor {
 
     // MARK: - IOKit 读取
 
-    private struct PowerSourcesData {
+    struct PowerSourcesData {
         var isPresent = false
         var percent = 0.0
         var currentCapacityMAh = 0.0
@@ -233,13 +238,41 @@ final class BatteryMonitor {
         var adapterManufacturer: String?
     }
 
+    /// IOPS 当前供电状态（`IOPSGetProvidingPowerSourceType` 的取值）。
+    ///
+    /// 从 MacBook 物理层面看只有两种电源：充电器（适配器供电）与内置电池（电池供电）。
+    /// `ups` 是 macOS 系统层的第三种状态：当智能 UPS 直连电脑并被系统识别为供电来源时，
+    /// 系统会报告 UPS 供电（典型场景是市电断电后由 UPS 电池顶班）。此时消耗的是 UPS
+    /// 电池，笔记本电池并不放电，因此仍视为外部供电。
+    enum IOPSPowerSourceState: String {
+        case ac
+        case battery
+        case ups
+
+        init?(rawIOPSValue: String) {
+            switch rawIOPSValue {
+            case kIOPMACPowerKey: self = .ac
+            case kIOPMBatteryPowerKey: self = .battery
+            case kIOPMUPSPowerKey: self = .ups
+            default: return nil
+            }
+        }
+
+        /// 是否视为外部供电（不消耗笔记本电池）。
+        /// AC 与 UPS 供电时笔记本电池都不放电，仅 Battery 供电时才消耗笔记本电池。
+        var isExternalPower: Bool {
+            self != .battery
+        }
+    }
+
     private func readPowerSources() -> PowerSourcesData {
         var data = PowerSourcesData()
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue(),
-              let sources = list as? [AnyObject] else {
+              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() else {
             return data
         }
+        // CFArray 到 [AnyObject] 的桥接恒成功，无需条件转换。
+        let sources = list as [AnyObject]
 
         for source in sources {
             guard let description = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any] else {
@@ -247,29 +280,65 @@ final class BatteryMonitor {
             }
             guard Self.boolValue(description[kIOPSIsPresentKey as String]) else { continue }
 
-            data.isPresent = true
-            let current = Self.numberValue(description[kIOPSCurrentCapacityKey as String])
-            let maximum = Self.numberValue(description[kIOPSMaxCapacityKey as String])
-            data.currentCapacityMAh = current
-            data.maxCapacityMAh = maximum
-            if maximum > 0 {
-                data.percent = current / maximum * 100
-            }
-            data.designCapacityMAh = Self.numberValue(description[kIOPSDesignCapacityKey as String])
-            data.voltage = Self.numberValue(description[kIOPSVoltageKey as String]) / 1000
-            data.current = Self.numberValue(description[kIOPSCurrentKey as String]) / 1000
-            data.timeToEmpty = Self.positiveTime(description[kIOPSTimeToEmptyKey as String])
-            data.timeToFull = Self.positiveTime(description[kIOPSTimeToFullChargeKey as String])
-            data.isCharging = Self.boolValue(description[kIOPSIsChargingKey as String])
-            data.isCharged = Self.boolValue(description[kIOPSIsChargedKey as String])
-            data.isFinishingCharge = Self.boolValue(description[kIOPSIsFinishingChargeKey as String])
+            data = Self.parsePowerSourceDescription(description, initial: data)
             break
         }
 
-        if let adapter = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any] {
-            data.adapterWatts = Self.numberValue(adapter[kIOPSPowerAdapterWattsKey as String]).nilIfZero
-            data.adapterCurrent = Self.numberValue(adapter[kIOPSPowerAdapterCurrentKey as String]).nilIfZero
+        // externalConnected 判定分两步：
+        // 1. 单个电源描述：kIOPSPowerSourceStateKey 取值只有 AC/Battery/Off Line，
+        //    仅 AC Power 记为外部供电（见 parsePowerSourceDescription）。
+        // 2. 当前供电来源：UPS 不在上述取值里，需用 IOPSGetProvidingPowerSourceType
+        //    检测（返回 AC/Battery/UPS）。该结果比单描述更权威——UPS 供电时笔记本电池
+        //    不放电，视为外部供电；Battery Power 时即使描述里状态缺失也判为非外部供电。
+        if let providing = IOPSGetProvidingPowerSourceType(blob)?.takeRetainedValue() as String?,
+           let state = IOPSPowerSourceState(rawIOPSValue: providing) {
+            data.externalConnected = state.isExternalPower
         }
+
+        if let adapter = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any] {
+            data = Self.applyAdapterDetails(adapter, to: data)
+        }
+        return data
+    }
+
+    /// 解析 IOPS 电源描述字典。提取为 static 以便单元测试。
+    static func parsePowerSourceDescription(
+        _ description: [String: Any],
+        initial: PowerSourcesData = PowerSourcesData()
+    ) -> PowerSourcesData {
+        var data = initial
+        data.isPresent = true
+        let current = Self.numberValue(description[kIOPSCurrentCapacityKey as String])
+        let maximum = Self.numberValue(description[kIOPSMaxCapacityKey as String])
+        data.currentCapacityMAh = current
+        data.maxCapacityMAh = maximum
+        if maximum > 0 {
+            data.percent = current / maximum * 100
+        }
+        data.designCapacityMAh = Self.numberValue(description[kIOPSDesignCapacityKey as String])
+        data.voltage = Self.numberValue(description[kIOPSVoltageKey as String]) / 1000
+        data.current = Self.numberValue(description[kIOPSCurrentKey as String]) / 1000
+        data.timeToEmpty = Self.positiveTime(description[kIOPSTimeToEmptyKey as String])
+        data.timeToFull = Self.positiveTime(description[kIOPSTimeToFullChargeKey as String])
+        // IOPS 没有 ExternalConnected 键，用 Power Source State 判断是否接入交流电源。
+        data.externalConnected = (description[kIOPSPowerSourceStateKey as String] as? String) == kIOPSACPowerValue
+        data.isCharging = Self.boolValue(description[kIOPSIsChargingKey as String])
+        data.isCharged = Self.boolValue(description[kIOPSIsChargedKey as String])
+        data.isFinishingCharge = Self.boolValue(description[kIOPSIsFinishingChargeKey as String])
+        return data
+    }
+
+    /// 解析 IOPS 外部电源适配器信息。提取为 static 以便单元测试。
+    static func applyAdapterDetails(
+        _ adapter: [String: Any],
+        to data: PowerSourcesData = PowerSourcesData()
+    ) -> PowerSourcesData {
+        var data = data
+        data.adapterWatts = Self.numberValue(adapter[kIOPSPowerAdapterWattsKey as String]).nilIfZero
+        // kIOPSPowerAdapterCurrentKey 单位为 mA，与 SmartBattery 路径一致转换为 A。
+        data.adapterCurrent = Self.numberValue(adapter[kIOPSPowerAdapterCurrentKey as String])
+            .nilIfZero
+            .map { $0 / 1000 }
         return data
     }
 

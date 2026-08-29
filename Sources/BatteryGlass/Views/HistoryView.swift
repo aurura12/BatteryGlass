@@ -4,12 +4,14 @@ import SwiftUI
 struct HistoryView: View {
     @Environment(BatteryHistoryStore.self) private var history
     @Environment(BatteryMonitor.self) private var monitor
+    @State private var energyRange: EnergyHistoryRange = .fourteen
 
     var body: some View {
         ScrollView {
             VStack(spacing: DesignTokens.spacingM) {
                 DailyEnergyComparisonChart(
-                    summaries: history.summaries(lastDays: 14)
+                    summaries: energyRange.summaries(from: history),
+                    range: $energyRange
                 )
 
                 TodayPowerChart(samples: history.samplesForDay(Date()))
@@ -32,8 +34,28 @@ struct HistoryView: View {
     }
 }
 
+enum EnergyHistoryRange: Int, CaseIterable, Identifiable {
+    case seven = 7
+    case fourteen = 14
+    case thirty = 30
+    case ninety = 90
+    case all = 0
+
+    var id: Int { rawValue }
+
+    var title: String {
+        rawValue == 0 ? "全部" : "近\(rawValue)天"
+    }
+
+    @MainActor
+    func summaries(from history: BatteryHistoryStore) -> [DailySummary] {
+        rawValue == 0 ? history.allSummaries() : history.summaries(lastDays: rawValue)
+    }
+}
+
 struct DailyEnergyComparisonChart: View {
     let summaries: [DailySummary]
+    @Binding var range: EnergyHistoryRange
 
     private var energySummaries: [DailySummary] {
         summaries.filter { $0.energyKWh != nil }
@@ -41,12 +63,20 @@ struct DailyEnergyComparisonChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
-            Text("每日耗电量（近 14 天）")
+            Text("每日耗电量（\(range.title)）")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            Picker("统计范围", selection: $range) {
+                ForEach(EnergyHistoryRange.allCases) { range in
+                    Text(range.title).tag(range)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.mini)
+
             if energySummaries.isEmpty {
-                ChartEmptyPlaceholder("升级后开始累计每日耗电量")
+                ChartEmptyPlaceholder("暂无完整每日耗电量数据")
                     .frame(height: 138)
             } else {
                 Chart(energySummaries) { summary in
@@ -78,6 +108,9 @@ struct DailyEnergyComparisonChart: View {
                 .frame(height: 138)
 
                 comparisonMetrics
+            }
+
+            if !summaries.isEmpty {
                 dailyDetails
             }
         }
@@ -133,14 +166,14 @@ struct DailyEnergyComparisonChart: View {
         VStack(spacing: DesignTokens.spacingXS) {
             Divider()
 
-            ForEach(energySummaries.reversed()) { summary in
+            ForEach(summaries.reversed()) { summary in
                 HStack {
                     Text(summary.dayKey)
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text(BatteryFormatters.energyKWh(summary.energyKWh ?? 0))
+                    Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(DesignTokens.dataBlue)
@@ -243,10 +276,7 @@ struct TodayPowerChart: View {
                             AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
                         }
                     }
-                    .chartScrollableAxes(.horizontal)
-                    .scrollIndicators(.never, axes: .horizontal)
-                    .chartXVisibleDomain(length: PowerChartWindow.defaultVisibleDuration)
-                    .chartScrollPosition(x: $scrollPosition)
+                    .chartXScale(domain: visibleChartDomain)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
                             ZStack(alignment: .topTrailing) {
@@ -295,6 +325,18 @@ struct TodayPowerChart: View {
 
     private var scrollRange: ClosedRange<Double> {
         scrollStartDate.timeIntervalSinceReferenceDate...scrollEndDate.timeIntervalSinceReferenceDate
+    }
+
+    private var visibleChartDomain: ClosedRange<Date> {
+        guard let latest = energySamples.last?.timestamp else {
+            let fallback = Date()
+            return fallback...fallback.addingTimeInterval(1)
+        }
+
+        return PowerChartWindow.visibleDomain(
+            startingAt: scrollPosition,
+            latest: latest
+        )
     }
 
     private var scrollPositionBinding: Binding<Double> {
@@ -382,6 +424,15 @@ struct PowerChartData {
 
 enum PowerChartWindow {
     static let defaultVisibleDuration: TimeInterval = 7_200
+
+    static func visibleDomain(
+        startingAt start: Date,
+        latest: Date,
+        visibleDuration: TimeInterval = defaultVisibleDuration
+    ) -> ClosedRange<Date> {
+        let upper = min(latest, start.addingTimeInterval(visibleDuration))
+        return start...max(start.addingTimeInterval(1), upper)
+    }
 
     static func scrollBounds(
         for samples: [HistorySample],
