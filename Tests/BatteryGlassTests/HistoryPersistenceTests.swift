@@ -73,6 +73,42 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(payload.samples.last?.consumptionPowerW, 36)
     }
 
+    func testSnapshotNotificationIsFlushedBeforeImmediateTermination() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let store = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        _ = store
+
+        var snapshot = BatterySnapshot()
+        snapshot.isPresent = true
+        snapshot.state = .discharging
+        snapshot.percent = 50
+        snapshot.voltage = 12
+        snapshot.current = -2
+
+        NotificationCenter.default.post(
+            name: .batterySnapshotUpdated,
+            object: nil,
+            userInfo: ["snapshot": snapshot]
+        )
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
+
+        let data = try Data(contentsOf: fileURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(PersistedHistory.self, from: data)
+        XCTAssertEqual(payload.samples.count, 1)
+        XCTAssertEqual(payload.samples[0].consumptionPowerW, 24)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

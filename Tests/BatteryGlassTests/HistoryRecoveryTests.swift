@@ -3,6 +3,27 @@ import XCTest
 @testable import BatteryGlass
 
 final class HistoryRecoveryTests: XCTestCase {
+    func testBoundedFileReaderRejectsDataAboveLimit() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).data")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        try Data([1, 2, 3, 4, 5]).write(to: fileURL)
+
+        XCTAssertNil(BoundedFileReader.read(at: fileURL, maximumBytes: 4))
+        XCTAssertEqual(
+            BoundedFileReader.read(at: fileURL, maximumBytes: 5),
+            Data([1, 2, 3, 4, 5])
+        )
+    }
+
+    func testLoadLimitsRejectExcessiveObjectCounts() {
+        XCTAssertTrue(HistoryLoadLimits.acceptsHistory(sampleCount: 100_000, summaryCount: 10_000))
+        XCTAssertFalse(HistoryLoadLimits.acceptsHistory(sampleCount: 100_001, summaryCount: 10_000))
+        XCTAssertFalse(HistoryLoadLimits.acceptsHistory(sampleCount: 100_000, summaryCount: 10_001))
+        XCTAssertFalse(HistoryLoadLimits.acceptsDiagnostics(sampleCount: 100_001))
+    }
+
     func testBackfillsMissingConsumptionFromNearestDiagnostic() {
         let timestamp = Date(timeIntervalSince1970: 10_000)
         let historySample = HistorySample(

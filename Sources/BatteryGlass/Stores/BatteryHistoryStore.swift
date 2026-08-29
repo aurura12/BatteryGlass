@@ -24,9 +24,6 @@ final class BatteryHistoryStore {
     private var lastPersistenceScheduledAt = Date.distantPast
     private let persistenceInterval: TimeInterval = 15
 
-    /// 历史文件大小上限。超过则拒绝加载，避免本机被篡改的文件导致启动卡顿或内存暴涨。
-    private static let maxHistoryFileSize = 20 * 1024 * 1024
-
     init(settings: AppSettings, fileURL: URL? = nil) {
         self.settings = settings
         if let fileURL {
@@ -44,7 +41,7 @@ final class BatteryHistoryStore {
             queue: .main
         ) { [weak self] notification in
             guard let snapshot = notification.userInfo?["snapshot"] as? BatterySnapshot else { return }
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.record(snapshot)
             }
         }
@@ -141,13 +138,17 @@ final class BatteryHistoryStore {
     }
 
     private func load() {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-              let size = attributes[.size] as? Int,
-              size <= Self.maxHistoryFileSize else { return }
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+        guard let data = BoundedFileReader.read(
+            at: fileURL,
+            maximumBytes: HistoryLoadLimits.maxHistoryFileBytes
+        ) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let payload = try? decoder.decode(HistoryPayload.self, from: data) else { return }
+        guard HistoryLoadLimits.acceptsHistory(
+            sampleCount: payload.samples.count,
+            summaryCount: payload.dailySummaries.count
+        ) else { return }
         samples = payload.samples
         if payload.version >= 2 {
             dailySummaries = payload.dailySummaries
