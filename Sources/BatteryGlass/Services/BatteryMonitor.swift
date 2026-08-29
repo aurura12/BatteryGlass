@@ -35,7 +35,10 @@ final class BatteryMonitor {
         s.isPresent = io.batteryInstalled || ps.isPresent
 
         s.currentCapacityMAh = ps.currentCapacityMAh > 0 ? ps.currentCapacityMAh : io.currentCapacityMAh
-        s.maxCapacityMAh = ps.maxCapacityMAh
+        s.maxCapacityMAh = Self.resolvedMaxCapacity(
+            powerSourcesMaximum: ps.maxCapacityMAh,
+            smartBatteryFullCharge: io.fullChargeCapacityMAh
+        )
         s.designCapacityMAh = ps.designCapacityMAh > 0 ? ps.designCapacityMAh : io.designCapacityMAh
         s.cycleCount = io.cycleCount > 0 ? io.cycleCount : ps.cycleCount
         s.healthPercent = io.healthPercent ?? ps.healthPercent
@@ -89,8 +92,11 @@ final class BatteryMonitor {
         } else if s.adapterConnected, io.telemetrySystemPowerMW > 0 {
             let chargeW = s.chargingPowerW ?? 0
             s.systemPowerW = max(0, io.telemetrySystemPowerMW / 1000 - chargeW)
-        } else if s.state == .discharging, io.telemetryBatteryPowerMW < 0 {
-            s.systemPowerW = abs(io.telemetryBatteryPowerMW) / 1000
+        } else if let dischargingPower = Self.dischargingSystemPowerW(
+            telemetryBatteryPowerMW: io.telemetryBatteryPowerMW,
+            electricalPowerW: s.power
+        ) {
+            s.systemPowerW = dischargingPower
         } else {
             s.systemPowerW = snapshot.systemPowerW
         }
@@ -340,6 +346,32 @@ final class BatteryMonitor {
             .nilIfZero
             .map { $0 / 1000 }
         return data
+    }
+
+    nonisolated static func resolvedMaxCapacity(
+        powerSourcesMaximum: Double,
+        smartBatteryFullCharge: Double
+    ) -> Double {
+        if powerSourcesMaximum.isFinite, powerSourcesMaximum > 0 {
+            return powerSourcesMaximum
+        }
+        if smartBatteryFullCharge.isFinite, smartBatteryFullCharge > 0 {
+            return smartBatteryFullCharge
+        }
+        return 0
+    }
+
+    nonisolated static func dischargingSystemPowerW(
+        telemetryBatteryPowerMW: Double,
+        electricalPowerW: Double
+    ) -> Double? {
+        if telemetryBatteryPowerMW.isFinite, telemetryBatteryPowerMW < 0 {
+            return abs(telemetryBatteryPowerMW) / 1000
+        }
+        if electricalPowerW.isFinite, electricalPowerW < -0.01 {
+            return abs(electricalPowerW)
+        }
+        return nil
     }
 
     private struct SmartBatteryData {

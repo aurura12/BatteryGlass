@@ -68,6 +68,17 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 11.82 * 2.781, accuracy: 0.000001)
     }
 
+    func testSystemPowerFallsBackToElectricalDischargeWhenTelemetryIsMissing() {
+        XCTAssertEqual(
+            BatteryMonitor.dischargingSystemPowerW(
+                telemetryBatteryPowerMW: 0,
+                electricalPowerW: -24
+            ) ?? 0,
+            24,
+            accuracy: 0.000001
+        )
+    }
+
     func testPowerSampleUsesUnifiedConsumptionPower() {
         var snapshot = BatterySnapshot()
         snapshot.state = .pluggedIn

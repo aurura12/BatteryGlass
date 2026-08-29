@@ -74,9 +74,6 @@ struct HistorySampleRecovery {
 }
 
 enum PowerDiagnosticsHistoryLoader {
-    /// 诊断文件大小上限。正常轮换的单文件约 5 MB，超过上限视为被篡改，跳过加载。
-    private static let maxDiagnosticsFileSize = 50 * 1024 * 1024
-
     static func load() -> [PowerDiagnosticsSample] {
         let current = PowerDiagnosticsLogger.logFileURL
         let rotated = current
@@ -87,15 +84,17 @@ enum PowerDiagnosticsHistoryLoader {
     }
 
     private static func load(from url: URL) -> [PowerDiagnosticsSample] {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? Int,
-              size <= maxDiagnosticsFileSize,
-              let data = try? Data(contentsOf: url) else { return [] }
+        guard let data = BoundedFileReader.read(
+            at: url,
+            maximumBytes: HistoryLoadLimits.maxDiagnosticsFileBytes
+        ) else { return [] }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return data
+        let samples = data
             .split(separator: 0x0A)
             .compactMap { try? decoder.decode(PowerDiagnosticsSample.self, from: Data($0)) }
+        guard HistoryLoadLimits.acceptsDiagnostics(sampleCount: samples.count) else { return [] }
+        return samples
     }
 }

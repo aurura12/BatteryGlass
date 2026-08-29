@@ -129,4 +129,24 @@ final class BatteryMonitorIOPSParsingTests: XCTestCase {
         XCTAssertTrue(data.externalConnected)
         XCTAssertEqual(data.adapterCurrent ?? 0, 4.5, accuracy: 0.0001)
     }
+
+    func testSmartBatteryFullChargeCapacityIsUsedWhenIOPSMaximumIsMissing() {
+        XCTAssertEqual(
+            BatteryMonitor.resolvedMaxCapacity(
+                powerSourcesMaximum: 0,
+                smartBatteryFullCharge: 4_321
+            ),
+            4_321
+        )
+    }
+
+    func testIOPSMaximumCapacityTakesPriorityOverSmartBatteryFallback() {
+        XCTAssertEqual(
+            BatteryMonitor.resolvedMaxCapacity(
+                powerSourcesMaximum: 5_000,
+                smartBatteryFullCharge: 4_321
+            ),
+            5_000
+        )
+    }
 }

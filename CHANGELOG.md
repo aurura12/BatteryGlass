@@ -5,6 +5,8 @@
 ## [2026-08-29]
 
 ### 修复
+- 修复断开适配器且缺少 BatteryPower 遥测时系统功耗沿用旧值的问题；增加电气功率和 SmartBattery 满充容量兜底，并确保快照通知在退出 flush 前同步记录。
+- 历史与电源诊断文件改为限量读取，并增加样本/汇总对象数量上限，降低被异常本地文件拖慢启动或占用过多内存的风险。
 - 修复今日功率曲线在横向滚动时将可视时间窗外的历史点绘制到左侧 Y 轴区域的问题：现在仅绘制当前可视时间窗内的曲线样本，避免曲线与坐标轴重叠（HistoryView.swift）。
 - 桌面小组件与主面板"实时功率"取值统一：新增 `BatterySnapshot.displayPower`/`displayPowerText`，适配器供电时显示系统功率（适配器输入 → 系统功率 → 电池功率，无符号），电池供电时显示充放电功率（带正负号）；小组件不再显示与主面板含义不同的电池侧功率（充满电时不再出现 "+0.0 W"）（BatterySnapshot.swift、DesktopWidgetView.swift、LiveDashboardView.swift）。
 - 历史/诊断文件加载增加大小上限：历史文件 20 MB、诊断文件 50 MB，超限跳过加载，防止本机被篡改的文件导致启动卡顿或内存暴涨（BatteryHistoryStore.swift、HistorySampleRecovery.swift）。
