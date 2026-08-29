@@ -225,7 +225,7 @@ struct TodayPowerChart: View {
             } else {
                 VStack(spacing: 4) {
                     Chart {
-                        ForEach(chartSamples) { sample in
+                        ForEach(visibleChartSamples) { sample in
                             AreaMark(
                                 x: .value("时间", sample.timestamp),
                                 y: .value("功率", sample.consumptionPowerW ?? 0)
@@ -339,6 +339,10 @@ struct TodayPowerChart: View {
         )
     }
 
+    private var visibleChartSamples: [HistorySample] {
+        PowerChartWindow.samples(in: visibleChartDomain, from: chartSamples)
+    }
+
     private var scrollPositionBinding: Binding<Double> {
         Binding(
             get: { scrollPosition.timeIntervalSinceReferenceDate },
@@ -424,6 +428,13 @@ struct PowerChartData {
 
 enum PowerChartWindow {
     static let defaultVisibleDuration: TimeInterval = 7_200
+
+    static func samples(
+        in domain: ClosedRange<Date>,
+        from samples: [HistorySample]
+    ) -> [HistorySample] {
+        samples.filter { domain.contains($0.timestamp) }
+    }
 
     static func visibleDomain(
         startingAt start: Date,
