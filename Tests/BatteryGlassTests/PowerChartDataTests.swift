@@ -117,6 +117,22 @@ final class PowerChartDataTests: XCTestCase {
         XCTAssertEqual(data.chartSamples, data.energySamples)
     }
 
+    func testChartSamplesExcludePointsOutsideVisibleDomain() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let domain = start...start.addingTimeInterval(10)
+        let samples = [
+            historySample(at: start.addingTimeInterval(-5)),
+            historySample(at: start),
+            historySample(at: start.addingTimeInterval(5)),
+            historySample(at: start.addingTimeInterval(15))
+        ]
+
+        XCTAssertEqual(
+            PowerChartWindow.samples(in: domain, from: samples).map(\.timestamp),
+            [start, start.addingTimeInterval(5)]
+        )
+    }
+
     private func historySample(at timestamp: Date) -> HistorySample {
         HistorySample(
             timestamp: timestamp,
