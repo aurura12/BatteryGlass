@@ -111,13 +111,16 @@ struct BatterySnapshot: Equatable, Sendable {
         }
     }
 
-    /// 展示功率文本：适配器供电时显示无符号系统功率，电池供电时保留正负号。
+    /// 展示功率文本：适配器供电时显示无符号系统功率，电池供电时保留正负号；
+    /// 未检测到电池（unknown）时无数据，显示 "--"。
     var displayPowerText: String {
         switch state {
         case .charging, .pluggedIn:
             return String(format: "%.1f W", displayPower)
-        case .discharging, .unknown:
+        case .discharging:
             return String(format: "%+.1f W", displayPower)
+        case .unknown:
+            return "--"
         }
     }
 

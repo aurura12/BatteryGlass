@@ -193,6 +193,104 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertNil(sample.consumptionPowerW)
     }
 
+    // MARK: - resolvedSystemPowerW（系统功耗取值）
+
+    func testSystemPowerIsNotAdapterInputWhileDischarging() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 0,
+            adapterConnected: true,
+            state: .discharging,
+            systemPowerInMW: 80_000,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: -24_000,
+            electricalPowerW: -24,
+            previous: 80,
+            previousAdapterConnected: true
+        )
+
+        // 放电时 SystemPowerIn 含电池补充的电量，不能用它覆盖系统功耗。
+        XCTAssertEqual(result.systemPowerW ?? 0, 24, accuracy: 0.0001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
+    }
+
+    func testSystemLoadIsPreferredWhenDischargingWhilePlugged() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 36_000,
+            adapterConnected: true,
+            state: .discharging,
+            systemPowerInMW: 80_000,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: -24_000,
+            electricalPowerW: -24,
+            previous: 50,
+            previousAdapterConnected: true
+        )
+
+        XCTAssertEqual(result.systemPowerW ?? 0, 36, accuracy: 0.0001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
+    }
+
+    func testSystemPowerUsesAdapterInputMinusChargeWhenPlugged() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 0,
+            adapterConnected: true,
+            state: .charging,
+            systemPowerInMW: 80_000,
+            chargingPowerW: 30,
+            telemetryBatteryPowerMW: 30_000,
+            electricalPowerW: 30,
+            previous: 50,
+            previousAdapterConnected: true
+        )
+
+        XCTAssertEqual(result.systemPowerW ?? 0, 50, accuracy: 0.0001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
+    }
+
+    func testSystemPowerDoesNotRetainAdapterValueAfterUnplugging() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 0,
+            adapterConnected: false,
+            state: .discharging,
+            systemPowerInMW: 0,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: 0,
+            electricalPowerW: 0,
+            previous: 40,
+            previousAdapterConnected: true
+        )
+
+        // 供电方式变化后不沿用旧的适配器功耗。
+        XCTAssertNil(result.systemPowerW)
+        XCTAssertNil(result.adapterInputPowerW)
+    }
+
+    func testSystemPowerRetainsLastValueWhenStillOnBatteryWithoutData() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 0,
+            adapterConnected: false,
+            state: .discharging,
+            systemPowerInMW: 0,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: 0,
+            electricalPowerW: 0,
+            previous: 12,
+            previousAdapterConnected: false
+        )
+
+        // 供电方式未变化时允许平滑沿用上次值。
+        XCTAssertEqual(result.systemPowerW ?? 0, 12, accuracy: 0.0001)
+        XCTAssertNil(result.adapterInputPowerW)
+    }
+
+    func testDisplayPowerTextShowsDashWhenNoBatteryDetected() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .unknown
+        snapshot.isPresent = false
+
+        XCTAssertEqual(snapshot.displayPowerText, "--")
+    }
+
     private func sample(at timestamp: Date, power: Double) -> HistorySample {
         HistorySample(
             timestamp: timestamp,

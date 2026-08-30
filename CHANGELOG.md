@@ -2,6 +2,16 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-08-31]
+
+### 修复
+- 修复"接通电源 + 电池放电"（重负载边缘态）时系统功耗被错误显示为适配器输入的问题：系统功耗的适配器总输入覆盖仅在非放电状态生效，放电时改用 SystemLoad 或电池放电功率，避免数值偏低（BatteryMonitor.swift，新增 `resolvedSystemPowerW` 纯函数）。
+- 修复拔电后电池 0 电流（满电待机）时系统功耗沿用陈旧的适配器值的问题：供电方式变化后不再沿用上次值，改为 nil（BatteryMonitor.swift）。
+- 修复未检测到电池（unknown 状态）时实时功率卡/桌面小组件显示 "+0.0 W"、电量显示 "0%"、菜单栏图标变红的问题：无数据时显示 "--"、隐藏单位，图标降级为灰色（BatterySnapshot.swift、LiveDashboardView.swift、DesktopWidgetView.swift、BatteryStyling.swift）。
+
+### 新增
+- `EnergyConsumptionTests` 增加 6 个用例覆盖 `resolvedSystemPowerW`：放电状态不被适配器输入覆盖、放电时 SystemLoad 优先、插电时取"适配器输入 − 充电功率"、拔电后不沿用旧值、电池供电无数据时沿用上次值、unknown 状态功率文本显示 "--"。
+
 ## [2026-08-29]
 
 ### 修复
