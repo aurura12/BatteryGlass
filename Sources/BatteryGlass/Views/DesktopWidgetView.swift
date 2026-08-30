@@ -32,13 +32,15 @@ struct DesktopWidgetView: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text("\(Int(snapshot.percent.rounded()))")
+                    Text(percentText)
                         .font(.system(size: 34, weight: .light, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(tint)
-                    Text("%")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
+                    if snapshot.state != .unknown {
+                        Text("%")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 0)
                     Text(snapshot.displayPowerText)
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -107,6 +109,11 @@ struct DesktopWidgetView: View {
                 .foregroundStyle(.white)
         }
         .frame(width: 22, height: 22)
+    }
+
+    /// 未检测到电池时显示 "--"，避免出现误导性的 "0%"。
+    private var percentText: String {
+        snapshot.state == .unknown ? "--" : "\(Int(snapshot.percent.rounded()))"
     }
 
     private var statusText: String {

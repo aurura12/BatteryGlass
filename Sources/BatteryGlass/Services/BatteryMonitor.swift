@@ -80,34 +80,27 @@ final class BatteryMonitor {
         } else {
             s.current = ps.current
         }
-        // 系统功耗取值：
-        // 1. 优先 SystemLoad（系统自身消耗，不含电池充电），充电时不会虚高；
-        // 2. 无 SystemLoad 且适配器供电时，回退为（适配器输入 − 充电功率）；
+        // 系统功耗与适配器输入取值：
+        // 1. 有可靠适配器总输入（SystemPowerIn）且电池非放电时，
+        //    用"总输入 − 充电功率"得到一致的系统直供估算（放电时 SystemPowerIn 含电池
+        //    补充的电量，直接使用会让"系统功耗"偏低）；
+        // 2. 否则优先 SystemLoad（系统自身消耗，不含电池充电）；
         // 3. 电池供电时取放电功率；
-        // 4. 均不可用时保持上次值。
-        // 注意：下方如有可靠适配器总输入（SystemPowerIn）会覆盖第 1、2 步的结果，
-        // 用"总输入 − 充电功率"得到一致的系统直供估算。
-        if io.telemetrySystemLoadMW > 0 {
-            s.systemPowerW = io.telemetrySystemLoadMW / 1000
-        } else if s.adapterConnected, io.telemetrySystemPowerMW > 0 {
-            let chargeW = s.chargingPowerW ?? 0
-            s.systemPowerW = max(0, io.telemetrySystemPowerMW / 1000 - chargeW)
-        } else if let dischargingPower = Self.dischargingSystemPowerW(
+        // 4. 均不可用时，仅在供电方式未变化时沿用上次值，
+        //    避免拔电后显示陈旧的适配器功耗。
+        let resolved = Self.resolvedSystemPowerW(
+            systemLoadMW: io.telemetrySystemLoadMW,
+            adapterConnected: s.adapterConnected,
+            state: s.state,
+            systemPowerInMW: io.telemetrySystemPowerMW,
+            chargingPowerW: s.chargingPowerW,
             telemetryBatteryPowerMW: io.telemetryBatteryPowerMW,
-            electricalPowerW: s.power
-        ) {
-            s.systemPowerW = dischargingPower
-        } else {
-            s.systemPowerW = snapshot.systemPowerW
-        }
-
-        if s.adapterConnected, io.telemetrySystemPowerMW > 0 {
-            let adapterInputPower = io.telemetrySystemPowerMW / 1000
-            s.adapterInputPowerW = adapterInputPower
-            // SystemLoad 与 BatteryPower 属于耦合的系统遥测字段，不能直接当作直供功率。
-            // 有可靠的总输入时，用总输入减电池充电功率得到一致的系统直供估算。
-            s.systemPowerW = max(0, adapterInputPower - (s.chargingPowerW ?? 0))
-        }
+            electricalPowerW: s.power,
+            previous: snapshot.systemPowerW,
+            previousAdapterConnected: snapshot.adapterConnected
+        )
+        s.systemPowerW = resolved.systemPowerW
+        s.adapterInputPowerW = resolved.adapterInputPowerW
 
         if settings.powerDiagnosticsLoggingEnabled {
             PowerDiagnosticsLogger.shared.record(
@@ -372,6 +365,47 @@ final class BatteryMonitor {
             return abs(electricalPowerW)
         }
         return nil
+    }
+
+    /// 计算系统功耗与适配器总输入（提取为纯函数便于单元测试）。
+    ///
+    /// 返回值：
+    /// - `adapterInputPowerW`：仅在接入适配器且存在 SystemPowerIn 遥测时非 nil；
+    /// - `systemPowerW`：优先取"适配器输入 − 充电功率"（电池非放电时），
+    ///   其次 SystemLoad，再次电池放电功率，最后仅在供电方式未变化时沿用上次值。
+    ///
+    /// 放电状态下不使用适配器总输入覆盖：此时 SystemPowerIn 包含了电池补充的电量，
+    /// 直接用会让"系统功耗"偏低，应改用 SystemLoad 或电池放电功率。
+    nonisolated static func resolvedSystemPowerW(
+        systemLoadMW: Double,
+        adapterConnected: Bool,
+        state: PowerState,
+        systemPowerInMW: Double,
+        chargingPowerW: Double?,
+        telemetryBatteryPowerMW: Double,
+        electricalPowerW: Double,
+        previous: Double?,
+        previousAdapterConnected: Bool
+    ) -> (systemPowerW: Double?, adapterInputPowerW: Double?) {
+        let adapterInput = adapterConnected && systemPowerInMW > 0
+            ? systemPowerInMW / 1000
+            : nil
+
+        if let adapterInput, state != .discharging {
+            return (max(0, adapterInput - (chargingPowerW ?? 0)), adapterInput)
+        }
+        if systemLoadMW > 0 {
+            return (systemLoadMW / 1000, adapterInput)
+        }
+        if let dischargingPower = dischargingSystemPowerW(
+            telemetryBatteryPowerMW: telemetryBatteryPowerMW,
+            electricalPowerW: electricalPowerW
+        ) {
+            return (dischargingPower, adapterInput)
+        }
+        // 供电方式变化时不沿用旧值，避免拔电/接电后显示陈旧的功耗值。
+        let retained = previousAdapterConnected == adapterConnected ? previous : nil
+        return (retained, adapterInput)
     }
 
     private struct SmartBatteryData {

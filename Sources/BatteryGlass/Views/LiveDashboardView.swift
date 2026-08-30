@@ -140,13 +140,15 @@ struct BatteryPercentCard: View {
     var body: some View {
         KpiCard(title: "电量", icon: "battery.75percent") {
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text("\(Int(snapshot.percent.rounded()))")
+                Text(percentText)
                     .font(.system(size: 40, weight: .light, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(accent)
-                Text("%")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.secondary)
+                if snapshot.state != .unknown {
+                    Text("%")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
             }
             SlimBar(progress: snapshot.percent / 100, tint: accent)
             Text(remainingText)
@@ -154,6 +156,11 @@ struct BatteryPercentCard: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+    }
+
+    /// 未检测到电池时显示 "--"，避免出现误导性的 "0%"。
+    private var percentText: String {
+        snapshot.state == .unknown ? "--" : "\(Int(snapshot.percent.rounded()))"
     }
 
     private var remainingText: String {
@@ -186,9 +193,11 @@ struct PowerKpiCard: View {
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(accent)
-                Text("W")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                if snapshot.state != .unknown {
+                    Text("W")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
             }
             Text(directionText)
                 .font(.system(size: 10, weight: .medium))
@@ -214,7 +223,9 @@ struct PowerKpiCard: View {
 
     private var valueText: String {
         // 适配器供电时显示无符号系统功率；电池供电时保留正负号（充电+/放电-）。
-        isOnAdapter
+        // 未检测到电池时无数据，显示 "--"。
+        guard snapshot.state != .unknown else { return "--" }
+        return isOnAdapter
             ? String(format: "%.1f", displayPower)
             : String(format: "%+.1f", displayPower)
     }
