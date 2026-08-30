@@ -59,6 +59,19 @@ final class PowerChartInteractionTests: XCTestCase {
         XCTAssertEqual(nearest?.energyKWh, 0.174)
     }
 
+    func testDailyTooltipAnchorUsesTheHoveredBarsPlotCoordinates() {
+        let plotFrame = CGRect(x: 24, y: 12, width: 300, height: 138)
+
+        let anchor = PowerChartInteraction.dailyTooltipAnchor(
+            plotFrame: plotFrame,
+            xPosition: 180,
+            yPosition: 42
+        )
+
+        XCTAssertEqual(anchor.x, 204)
+        XCTAssertEqual(anchor.y, 54)
+    }
+
     func testTotalDailyEnergySumsOnlyCompleteSummaries() {
         let first = Date(timeIntervalSince1970: 1_000)
         let summaries = [
