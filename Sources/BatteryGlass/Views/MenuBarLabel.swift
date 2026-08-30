@@ -6,7 +6,16 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        StatusBarIconView(snapshot: monitor.snapshot)
+        HStack(spacing: 4) {
+            StatusBarIconView(snapshot: monitor.snapshot)
+            if settings.menuBarDisplayMode != .none {
+                Text(labelText)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(BatteryStyling.tint(for: monitor.snapshot))
+                    .fixedSize()
+            }
+        }
         .help("BatteryGlass · \(monitor.snapshot.percentText)")
         .accessibilityLabel("BatteryGlass，电池电量 \(monitor.snapshot.percentText)")
         .onReceive(NotificationCenter.default.publisher(for: .requestDashboardWindow)) { _ in
@@ -25,6 +34,18 @@ struct MenuBarLabel: View {
                 object: nil,
                 userInfo: ["enabled": enabled]
             )
+        }
+    }
+
+    /// 菜单栏图标旁的文字：百分比或剩余时间；未检测到电池时显示 "--"。
+    private var labelText: String {
+        switch settings.menuBarDisplayMode {
+        case .none:
+            return ""
+        case .percent:
+            return monitor.snapshot.state == .unknown ? "--" : monitor.snapshot.percentText
+        case .timeRemaining:
+            return BatteryFormatters.menuBarTimeRemaining(monitor.snapshot.timeRemaining)
         }
     }
 }

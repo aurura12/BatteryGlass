@@ -5,8 +5,15 @@
 ## [2026-08-31]
 
 ### 新增
+- 菜单栏图标可显示百分比或剩余时间（设置 → 通用 → 菜单栏图标），未检测到电池时显示 "--"（MenuBarLabel.swift、Formatters.swift、AppSettings.swift）。
+- 新增"启动时显示主窗口"开关：关闭后启动仅保留菜单栏图标与桌面小组件，不弹主窗口（BatteryGlassApp.swift）。
+- 历史数据导出：设置页"数据与历史"新增导出菜单（CSV/JSON）。CSV 含表头（时间/功率/消耗功率/电量/循环次数/健康度），JSON 与 history.json 结构一致（HistoryExporter.swift、SettingsView.swift）。
+- 外接电源变化通知：适配器接入/断开时发送本地通知（含当前电量），需在设置 → 提醒 中开启（BatteryMonitor.swift、NotificationService.swift）。
+- 电池健康趋势图：历史页新增健康度折线图（近 90 天，取每日最小健康度），线条颜色随健康度状态变化（HistoryView.swift）。
+- 每日耗电量图表支持"按日/按周/按月"分组查看，指标区随分组显示"周期均/总计"（EnergyAggregator.swift、HistoryView.swift）。
+- 桌面小组件新增尺寸选项（紧凑/大尺寸），大尺寸额外显示温度/电压/健康度/循环次数（DesktopWidgetView.swift、DesktopWidgetController.swift、AppSettings.swift）。
 - 开机自启动：设置页新增"开机自启动"开关，通过 `SMAppService.mainApp` 注册/注销系统登录项（macOS 13+），启动时用系统实际状态同步开关；注册需系统批准时弹窗引导到「系统设置 → 通用 → 登录项」，未通过 .app 包运行时禁用开关并提示（LoginItemService.swift、AppSettings.swift、SettingsView.swift、BatteryGlassApp.swift）。
-- `LoginItemServiceTests` 新增 7 个用例，覆盖 enabled/notRegistered/requiresApproval/unavailable 状态 × 期望开关组合下的注册/注销决策。
+- `LoginItemServiceTests` 新增 7 个用例覆盖 enabled/notRegistered/requiresApproval/unavailable 状态 × 期望开关组合；新增 `EnergyAggregatorTests`（5 用例）、`HistoryExporterTests`（3 用例）；`BatteryFormattersTests` 增加菜单栏时间与坐标轴标签用例。
 
 ### 修复
 - 修复"接通电源 + 电池放电"（重负载边缘态）时系统功耗被错误显示为适配器输入的问题：系统功耗的适配器总输入覆盖仅在非放电状态生效，放电时改用 SystemLoad 或电池放电功率，避免数值偏低（BatteryMonitor.swift，新增 `resolvedSystemPowerW` 纯函数）。

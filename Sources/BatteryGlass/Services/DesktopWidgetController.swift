@@ -38,6 +38,17 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
                 }
             }
         )
+        observers.append(
+            NotificationCenter.default.addObserver(
+                forName: .desktopWidgetStyleChanged,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.applyStyle()
+                }
+            }
+        )
     }
 
     func setVisible(_ visible: Bool) {
@@ -64,6 +75,7 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
             self.setVisible(false)
         }
         .environment(monitor)
+        .environment(settings)
 
         let hostingView = NSHostingView(rootView: view)
         let window = NSWindow(
@@ -90,9 +102,20 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = hostingView
-        window.setContentSize(DesktopWidgetView.preferredSize)
+        window.setContentSize(DesktopWidgetView.preferredSize(for: settings.desktopWidgetStyle))
         window.setFrame(restoredFrame() ?? defaultFrame(), display: true)
         self.window = window
+    }
+
+    /// 跟随设置中的尺寸样式调整窗口大小（保持右上角锚点不变）。
+    private func applyStyle() {
+        guard let window else { return }
+        let size = DesktopWidgetView.preferredSize(for: settings.desktopWidgetStyle)
+        var frame = window.frame
+        let topRight = CGPoint(x: frame.maxX, y: frame.maxY)
+        frame.size = size
+        frame.origin = CGPoint(x: topRight.x - size.width, y: topRight.y - size.height)
+        window.setFrame(frame, display: true)
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -115,7 +138,7 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
             return NSRect(x: 100, y: 100, width: 236, height: 132)
         }
         let visible = screen.visibleFrame
-        let size = DesktopWidgetView.preferredSize
+        let size = DesktopWidgetView.preferredSize(for: settings.desktopWidgetStyle)
         return NSRect(
             x: visible.maxX - size.width - 24,
             y: visible.maxY - size.height - 72,

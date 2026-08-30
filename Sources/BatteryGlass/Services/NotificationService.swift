@@ -32,4 +32,19 @@ final class NotificationService {
         )
         UNUserNotificationCenter.current().add(request)
     }
+
+    func sendAdapterChange(connected: Bool, percent: Double) {
+        let content = UNMutableNotificationContent()
+        content.title = connected ? "电源适配器已接入" : "电源适配器已断开"
+        content.body = connected
+            ? String(format: "已接入充电，当前电量 %.0f%%。", percent)
+            : String(format: "当前电量 %.0f%%，正在使用电池供电。", percent)
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "batteryglass.adapter-change",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
 }

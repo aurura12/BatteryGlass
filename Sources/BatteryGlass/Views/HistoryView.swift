@@ -16,6 +16,8 @@ struct HistoryView: View {
 
                 TodayPowerChart(samples: history.samplesForDay(Date()))
 
+                HealthTrendChart(summaries: history.allSummaries())
+
                 HistoryMetricCard(
                     title: "循环次数",
                     icon: "repeat",
@@ -63,17 +65,33 @@ enum DailyEnergyMetricOrder {
 struct DailyEnergyComparisonChart: View {
     let summaries: [DailySummary]
     @Binding var range: EnergyHistoryRange
-    @State private var hoveredSummary: DailySummary?
+    @State private var grouping: EnergyGrouping = .day
+    @State private var hoveredAggregate: EnergyAggregate?
 
     private var energySummaries: [DailySummary] {
         summaries.filter { $0.energyKWh != nil }
     }
 
+    private var aggregates: [EnergyAggregate] {
+        EnergyAggregator.aggregate(summaries: energySummaries, grouping: grouping)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
-            Text("每日耗电量（\(range.title)）")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("每日耗电量（\(range.title)）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("分组", selection: $grouping) {
+                    ForEach(EnergyGrouping.allCases) { grouping in
+                        Text(grouping.title).tag(grouping)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.mini)
+                .fixedSize()
+            }
 
             Picker("统计范围", selection: $range) {
                 ForEach(EnergyHistoryRange.allCases) { range in
@@ -83,14 +101,14 @@ struct DailyEnergyComparisonChart: View {
             .pickerStyle(.segmented)
             .controlSize(.mini)
 
-            if energySummaries.isEmpty {
+            if aggregates.isEmpty {
                 ChartEmptyPlaceholder("暂无完整每日耗电量数据")
                     .frame(height: 138)
             } else {
-                Chart(energySummaries) { summary in
+                Chart(aggregates) { aggregate in
                     BarMark(
-                        x: .value("日期", summary.date, unit: .day),
-                        y: .value("耗电量", summary.energyKWh ?? 0)
+                        x: .value("日期", aggregate.periodStart),
+                        y: .value("耗电量", aggregate.energyKWh)
                     )
                     .foregroundStyle(DesignTokens.dataBlue.gradient)
                     .cornerRadius(4)
@@ -107,10 +125,14 @@ struct DailyEnergyComparisonChart: View {
                     }
                 }
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: .day)) { value in
+                    AxisMarks(values: .stride(by: grouping.xStride)) { value in
                         AxisGridLine().foregroundStyle(.clear)
                         AxisTick()
-                        AxisValueLabel(format: .dateTime.month(.defaultDigits).day(.defaultDigits))
+                        AxisValueLabel {
+                            if let date = value.as(Date.self) {
+                                Text(xAxisLabel(for: date))
+                            }
+                        }
                     }
                 }
                 .chartOverlay { proxy in
@@ -122,13 +144,13 @@ struct DailyEnergyComparisonChart: View {
                                     updateHover(phase, proxy: proxy, geometry: geometry)
                                 }
 
-                            if let hoveredSummary,
-                               let anchor = dailyTooltipAnchor(
-                                   for: hoveredSummary,
+                            if let hoveredAggregate,
+                               let anchor = tooltipAnchor(
+                                   for: hoveredAggregate,
                                    proxy: proxy,
                                    geometry: geometry
                                ) {
-                                dailyHoverTooltip(for: hoveredSummary)
+                                hoverTooltip(for: hoveredAggregate)
                                     .alignmentGuide(.leading) { dimensions in
                                         dimensions.width / 2 - anchor.x
                                     }
@@ -160,40 +182,37 @@ struct DailyEnergyComparisonChart: View {
     ) {
         switch phase {
         case .ended:
-            hoveredSummary = nil
+            hoveredAggregate = nil
         case .active(let location):
             guard let plotFrame = proxy.plotFrame else {
-                hoveredSummary = nil
+                hoveredAggregate = nil
                 return
             }
 
             let frame = geometry[plotFrame]
             guard frame.contains(location) else {
-                hoveredSummary = nil
+                hoveredAggregate = nil
                 return
             }
 
             let xPosition = location.x - frame.minX
             guard let date: Date = proxy.value(atX: xPosition) else {
-                hoveredSummary = nil
+                hoveredAggregate = nil
                 return
             }
 
-            hoveredSummary = PowerChartInteraction.nearestDailySummary(
-                to: date,
-                from: energySummaries
-            )
+            hoveredAggregate = EnergyAggregator.nearestAggregate(to: date, from: aggregates)
         }
     }
 
-    private func dailyTooltipAnchor(
-        for summary: DailySummary,
+    private func tooltipAnchor(
+        for aggregate: EnergyAggregate,
         proxy: ChartProxy,
         geometry: GeometryProxy
     ) -> CGPoint? {
         guard let plotFrame = proxy.plotFrame,
-              let xPosition = proxy.position(forX: summary.date),
-              let yPosition = proxy.position(forY: summary.energyKWh ?? 0) else {
+              let xPosition = proxy.position(forX: aggregate.periodStart),
+              let yPosition = proxy.position(forY: aggregate.energyKWh) else {
             return nil
         }
 
@@ -204,14 +223,14 @@ struct DailyEnergyComparisonChart: View {
         )
     }
 
-    private func dailyHoverTooltip(for summary: DailySummary) -> some View {
+    private func hoverTooltip(for aggregate: EnergyAggregate) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(summary.dayKey)
+            Text(aggregate.title)
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
-            Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
+            Text(BatteryFormatters.energyKWh(aggregate.energyKWh))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(DesignTokens.dataBlue)
@@ -222,12 +241,25 @@ struct DailyEnergyComparisonChart: View {
         .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
     }
 
+    private func xAxisLabel(for date: Date) -> String {
+        switch grouping {
+        case .day:
+            return BatteryFormatters.xAxisDayLabel(date)
+        case .week:
+            return BatteryFormatters.xAxisDayLabel(date)
+        case .month:
+            return BatteryFormatters.xAxisMonthLabel(date)
+        }
+    }
+
     private var comparisonMetrics: some View {
         HStack(spacing: DesignTokens.spacingM) {
-            energyMetric(title: DailyEnergyMetricOrder.today, value: todayEnergy)
-            Divider()
-                .frame(height: 24)
-            energyMetric(title: DailyEnergyMetricOrder.average, value: averageEnergy)
+            if grouping == .day {
+                energyMetric(title: DailyEnergyMetricOrder.today, value: todayEnergy)
+                Divider()
+                    .frame(height: 24)
+            }
+            energyMetric(title: grouping == .day ? DailyEnergyMetricOrder.average : "周期均", value: averageEnergy)
             Divider()
                 .frame(height: 24)
             energyMetric(title: DailyEnergyMetricOrder.total, value: totalEnergy)
@@ -248,22 +280,19 @@ struct DailyEnergyComparisonChart: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var todayKey: String {
-        BatteryFormatters.dayKey(for: Date())
-    }
-
     private var todayEnergy: Double? {
-        energySummaries.first { $0.dayKey == todayKey }?.energyKWh
+        guard grouping == .day else { return nil }
+        return aggregates.first { Calendar.current.isDateInToday($0.periodStart) }?.energyKWh
     }
 
     private var totalEnergy: Double? {
-        PowerChartInteraction.totalDailyEnergy(from: energySummaries)
+        guard !aggregates.isEmpty else { return nil }
+        return aggregates.map(\.energyKWh).reduce(0, +)
     }
 
     private var averageEnergy: Double? {
-        let values = energySummaries.compactMap(\.energyKWh)
-        guard !values.isEmpty else { return nil }
-        return values.reduce(0, +) / Double(values.count)
+        guard !aggregates.isEmpty else { return nil }
+        return aggregates.map(\.energyKWh).reduce(0, +) / Double(aggregates.count)
     }
 
     private var dailyDetails: some View {
@@ -511,6 +540,155 @@ struct TodayPowerChart: View {
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(DesignTokens.dataBlue)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+}
+
+/// 电池健康度历史趋势：取自每日汇总的最小健康度，展示长期损耗曲线（近 90 天）。
+struct HealthTrendChart: View {
+    let summaries: [DailySummary]
+    @State private var hoveredSummary: DailySummary?
+    @State private var hoverLocation: CGPoint?
+
+    private var healthEntries: [DailySummary] {
+        summaries
+            .filter { $0.minHealthPercent != nil }
+            .suffix(90)
+    }
+
+    private var latestHealth: Double? {
+        healthEntries.last?.minHealthPercent
+    }
+
+    private var yDomain: ClosedRange<Double> {
+        let healthValues = healthEntries.compactMap(\.minHealthPercent)
+        let minimum = (healthValues.min() ?? 100) - 5
+        return min(max(minimum, 0), 99)...100
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
+            Text("电池健康趋势")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if healthEntries.isEmpty {
+                ChartEmptyPlaceholder("暂无健康度数据，运行一段时间后自动生成")
+                    .frame(height: 116)
+            } else {
+                Chart(healthEntries) { summary in
+                    LineMark(
+                        x: .value("日期", summary.date),
+                        y: .value("健康度", summary.minHealthPercent ?? 0)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .foregroundStyle(BatteryStyling.healthTint(for: latestHealth))
+
+                    if let hoveredSummary {
+                        RuleMark(x: .value("悬停日期", hoveredSummary.date))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                            .foregroundStyle(.secondary.opacity(0.7))
+                        PointMark(
+                            x: .value("日期", hoveredSummary.date),
+                            y: .value("健康度", hoveredSummary.minHealthPercent ?? 0)
+                        )
+                        .foregroundStyle(BatteryStyling.healthTint(for: hoveredSummary.minHealthPercent))
+                        .symbolSize(36)
+                    }
+                }
+                .chartYScale(domain: yDomain)
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel {
+                            if let health = value.as(Double.self) {
+                                Text("\(Int(health.rounded()))%")
+                            }
+                        }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .month)) { _ in
+                        AxisGridLine().foregroundStyle(.clear)
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.month(.defaultDigits))
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        ZStack(alignment: .topLeading) {
+                            Rectangle()
+                                .fill(.clear)
+                                .onContinuousHover { phase in
+                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                                }
+
+                            if let hoveredSummary, let hoverLocation {
+                                healthTooltip(for: hoveredSummary)
+                                    .position(
+                                        x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
+                                        y: min(max(hoverLocation.y - 26, 18), geometry.size.height - 18)
+                                    )
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 116)
+            }
+        }
+        .padding(DesignTokens.spacingM)
+        .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    private func updateHover(
+        _ phase: HoverPhase,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        switch phase {
+        case .ended:
+            hoveredSummary = nil
+            hoverLocation = nil
+        case .active(let location):
+            guard let plotFrame = proxy.plotFrame else {
+                hoveredSummary = nil
+                hoverLocation = nil
+                return
+            }
+            let frame = geometry[plotFrame]
+            guard frame.contains(location) else {
+                hoveredSummary = nil
+                hoverLocation = nil
+                return
+            }
+            let xPosition = location.x - frame.minX
+            guard let date: Date = proxy.value(atX: xPosition) else {
+                hoveredSummary = nil
+                hoverLocation = nil
+                return
+            }
+            hoverLocation = location
+            hoveredSummary = PowerChartInteraction.nearestDailySummary(to: date, from: healthEntries)
+        }
+    }
+
+    private func healthTooltip(for summary: DailySummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(summary.dayKey)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Text(summary.minHealthPercent.map { String(format: "%.0f%%", $0) } ?? "--")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(BatteryStyling.healthTint(for: summary.minHealthPercent))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
