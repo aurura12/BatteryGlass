@@ -42,6 +42,34 @@ final class PowerChartInteractionTests: XCTestCase {
         )
     }
 
+    func testNearestDailySummarySelectsEnergyForHoveredDate() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let summaries = [
+            summary(at: first, dayKey: "2026-08-28", energy: 0.136),
+            summary(at: first.addingTimeInterval(86_400), dayKey: "2026-08-29", energy: 0.174),
+            summary(at: first.addingTimeInterval(172_800), dayKey: "2026-08-30", energy: 0.238)
+        ]
+
+        let nearest = PowerChartInteraction.nearestDailySummary(
+            to: first.addingTimeInterval(86_400 + 1_800),
+            from: summaries
+        )
+
+        XCTAssertEqual(nearest?.dayKey, "2026-08-29")
+        XCTAssertEqual(nearest?.energyKWh, 0.174)
+    }
+
+    func testTotalDailyEnergySumsOnlyCompleteSummaries() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let summaries = [
+            summary(at: first, dayKey: "2026-08-28", energy: 0.136),
+            summary(at: first.addingTimeInterval(86_400), dayKey: "2026-08-29", energy: nil),
+            summary(at: first.addingTimeInterval(172_800), dayKey: "2026-08-30", energy: 0.238)
+        ]
+
+        XCTAssertEqual(PowerChartInteraction.totalDailyEnergy(from: summaries), 0.374)
+    }
+
     private func sample(at timestamp: Date, power: Double) -> HistorySample {
         HistorySample(
             timestamp: timestamp,
@@ -50,6 +78,20 @@ final class PowerChartInteractionTests: XCTestCase {
             percent: 50,
             cycleCount: 1,
             healthPercent: 100
+        )
+    }
+
+    private func summary(at date: Date, dayKey: String, energy: Double?) -> DailySummary {
+        DailySummary(
+            dayKey: dayKey,
+            date: date,
+            sampleCount: 1,
+            maxCycleCount: 1,
+            minHealthPercent: 100,
+            energyKWh: energy,
+            averagePower: 10,
+            maxPower: 10,
+            minPower: 10
         )
     }
 }
