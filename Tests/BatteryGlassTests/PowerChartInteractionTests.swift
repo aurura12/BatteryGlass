@@ -72,6 +72,13 @@ final class PowerChartInteractionTests: XCTestCase {
         XCTAssertEqual(anchor.y, 54)
     }
 
+    func testDailyEnergyMetricOrderPlacesAverageBeforeTotal() {
+        XCTAssertEqual(
+            DailyEnergyMetricOrder.titles,
+            ["今日", "日均", "总计"]
+        )
+    }
+
     func testTotalDailyEnergySumsOnlyCompleteSummaries() {
         let first = Date(timeIntervalSince1970: 1_000)
         let summaries = [
