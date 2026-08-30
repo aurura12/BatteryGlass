@@ -108,16 +108,26 @@ struct DailyEnergyComparisonChart: View {
                 }
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
-                        ZStack(alignment: .topTrailing) {
+                        ZStack(alignment: .topLeading) {
                             Rectangle()
                                 .fill(.clear)
                                 .onContinuousHover { phase in
                                     updateHover(phase, proxy: proxy, geometry: geometry)
                                 }
 
-                            if let hoveredSummary {
+                            if let hoveredSummary,
+                               let anchor = dailyTooltipAnchor(
+                                   for: hoveredSummary,
+                                   proxy: proxy,
+                                   geometry: geometry
+                               ) {
                                 dailyHoverTooltip(for: hoveredSummary)
-                                    .padding(8)
+                                    .alignmentGuide(.leading) { dimensions in
+                                        dimensions.width / 2 - anchor.x
+                                    }
+                                    .alignmentGuide(.top) { dimensions in
+                                        dimensions.height + 8 - anchor.y
+                                    }
                                     .allowsHitTesting(false)
                             }
                         }
@@ -167,6 +177,24 @@ struct DailyEnergyComparisonChart: View {
                 from: energySummaries
             )
         }
+    }
+
+    private func dailyTooltipAnchor(
+        for summary: DailySummary,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) -> CGPoint? {
+        guard let plotFrame = proxy.plotFrame,
+              let xPosition = proxy.position(forX: summary.date),
+              let yPosition = proxy.position(forY: summary.energyKWh ?? 0) else {
+            return nil
+        }
+
+        return PowerChartInteraction.dailyTooltipAnchor(
+            plotFrame: geometry[plotFrame],
+            xPosition: xPosition,
+            yPosition: yPosition
+        )
     }
 
     private func dailyHoverTooltip(for summary: DailySummary) -> some View {
@@ -546,6 +574,17 @@ enum PowerChartWindow {
 }
 
 enum PowerChartInteraction {
+    static func dailyTooltipAnchor(
+        plotFrame: CGRect,
+        xPosition: CGFloat,
+        yPosition: CGFloat
+    ) -> CGPoint {
+        CGPoint(
+            x: plotFrame.minX + xPosition,
+            y: plotFrame.minY + yPosition
+        )
+    }
+
     static func nearestSample(
         to timestamp: Date,
         from samples: [HistorySample]
