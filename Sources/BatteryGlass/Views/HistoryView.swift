@@ -56,6 +56,7 @@ enum EnergyHistoryRange: Int, CaseIterable, Identifiable {
 struct DailyEnergyComparisonChart: View {
     let summaries: [DailySummary]
     @Binding var range: EnergyHistoryRange
+    @State private var hoveredSummary: DailySummary?
 
     private var energySummaries: [DailySummary] {
         summaries.filter { $0.energyKWh != nil }
@@ -105,6 +106,23 @@ struct DailyEnergyComparisonChart: View {
                         AxisValueLabel(format: .dateTime.month(.defaultDigits).day(.defaultDigits))
                     }
                 }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        ZStack(alignment: .topTrailing) {
+                            Rectangle()
+                                .fill(.clear)
+                                .onContinuousHover { phase in
+                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                                }
+
+                            if let hoveredSummary {
+                                dailyHoverTooltip(for: hoveredSummary)
+                                    .padding(8)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    }
+                }
                 .frame(height: 138)
 
                 comparisonMetrics
@@ -118,12 +136,63 @@ struct DailyEnergyComparisonChart: View {
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
     }
 
+    private func updateHover(
+        _ phase: HoverPhase,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        switch phase {
+        case .ended:
+            hoveredSummary = nil
+        case .active(let location):
+            guard let plotFrame = proxy.plotFrame else {
+                hoveredSummary = nil
+                return
+            }
+
+            let frame = geometry[plotFrame]
+            guard frame.contains(location) else {
+                hoveredSummary = nil
+                return
+            }
+
+            let xPosition = location.x - frame.minX
+            guard let date: Date = proxy.value(atX: xPosition) else {
+                hoveredSummary = nil
+                return
+            }
+
+            hoveredSummary = PowerChartInteraction.nearestDailySummary(
+                to: date,
+                from: energySummaries
+            )
+        }
+    }
+
+    private func dailyHoverTooltip(for summary: DailySummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(summary.dayKey)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(DesignTokens.dataBlue)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+
     private var comparisonMetrics: some View {
         HStack(spacing: DesignTokens.spacingM) {
             energyMetric(title: "今日", value: todayEnergy)
             Divider()
                 .frame(height: 24)
-            energyMetric(title: "最高", value: maximumEnergy)
+            energyMetric(title: "总计", value: totalEnergy)
             Divider()
                 .frame(height: 24)
             energyMetric(title: "日均", value: averageEnergy)
@@ -152,8 +221,8 @@ struct DailyEnergyComparisonChart: View {
         energySummaries.first { $0.dayKey == todayKey }?.energyKWh
     }
 
-    private var maximumEnergy: Double? {
-        energySummaries.compactMap(\.energyKWh).max()
+    private var totalEnergy: Double? {
+        PowerChartInteraction.totalDailyEnergy(from: energySummaries)
     }
 
     private var averageEnergy: Double? {
@@ -501,6 +570,21 @@ enum PowerChartInteraction {
         let lowerDistance = abs(lower.timestamp.timeIntervalSince(timestamp))
         let upperDistance = abs(upper.timestamp.timeIntervalSince(timestamp))
         return lowerDistance <= upperDistance ? lower : upper
+    }
+
+    static func nearestDailySummary(
+        to date: Date,
+        from summaries: [DailySummary]
+    ) -> DailySummary? {
+        summaries.min {
+            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+        }
+    }
+
+    static func totalDailyEnergy(from summaries: [DailySummary]) -> Double? {
+        let values = summaries.compactMap(\.energyKWh)
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +)
     }
 }
 
