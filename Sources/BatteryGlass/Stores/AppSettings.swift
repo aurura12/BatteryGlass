@@ -32,6 +32,10 @@ final class AppSettings {
         didSet { defaults.set(desktopWidgetEnabled, forKey: Self.desktopWidgetKey) }
     }
 
+    var launchAtLoginEnabled: Bool {
+        didSet { defaults.set(launchAtLoginEnabled, forKey: Self.launchAtLoginKey) }
+    }
+
     var desktopWidgetFrameString: String {
         didSet { defaults.set(desktopWidgetFrameString, forKey: Self.desktopWidgetFrameKey) }
     }
@@ -54,6 +58,7 @@ final class AppSettings {
         powerDiagnosticsLoggingEnabled = defaults.object(forKey: Self.powerDiagnosticsLoggingKey) as? Bool ?? false
         desktopWidgetEnabled = defaults.object(forKey: Self.desktopWidgetKey) as? Bool ?? true
         desktopWidgetFrameString = defaults.string(forKey: Self.desktopWidgetFrameKey) ?? ""
+        launchAtLoginEnabled = defaults.object(forKey: Self.launchAtLoginKey) as? Bool ?? false
     }
 
     private static let notificationsEnabledKey = "notificationsEnabled"
@@ -64,4 +69,5 @@ final class AppSettings {
     private static let powerDiagnosticsLoggingKey = "powerDiagnosticsLoggingEnabled"
     private static let desktopWidgetKey = "desktopWidgetEnabled"
     private static let desktopWidgetFrameKey = "desktopWidgetFrameString"
+    private static let launchAtLoginKey = "launchAtLoginEnabled"
 }

@@ -4,6 +4,10 @@
 
 ## [2026-08-31]
 
+### 新增
+- 开机自启动：设置页新增"开机自启动"开关，通过 `SMAppService.mainApp` 注册/注销系统登录项（macOS 13+），启动时用系统实际状态同步开关；注册需系统批准时弹窗引导到「系统设置 → 通用 → 登录项」，未通过 .app 包运行时禁用开关并提示（LoginItemService.swift、AppSettings.swift、SettingsView.swift、BatteryGlassApp.swift）。
+- `LoginItemServiceTests` 新增 7 个用例，覆盖 enabled/notRegistered/requiresApproval/unavailable 状态 × 期望开关组合下的注册/注销决策。
+
 ### 修复
 - 修复"接通电源 + 电池放电"（重负载边缘态）时系统功耗被错误显示为适配器输入的问题：系统功耗的适配器总输入覆盖仅在非放电状态生效，放电时改用 SystemLoad 或电池放电功率，避免数值偏低（BatteryMonitor.swift，新增 `resolvedSystemPowerW` 纯函数）。
 - 修复拔电后电池 0 电流（满电待机）时系统功耗沿用陈旧的适配器值的问题：供电方式变化后不再沿用上次值，改为 nil（BatteryMonitor.swift）。
