@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
@@ -9,6 +10,7 @@ struct SettingsView: View {
     @State private var showingNotificationDeniedAlert = false
     @State private var showingLoginItemApprovalAlert = false
     @State private var showingLoginItemErrorAlert = false
+    @State private var showingExportErrorAlert = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -31,9 +33,17 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                Picker("菜单栏图标", selection: $settings.menuBarDisplayMode) {
+                    ForEach(MenuBarDisplayMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+
+                Toggle("启动时显示主窗口", isOn: $settings.showMainWindowAtLaunch)
             }
 
-            Section("低电量提醒") {
+            Section("提醒") {
                 Toggle("启用低电量通知", isOn: $settings.lowBatteryNotificationsEnabled)
                     .onChange(of: settings.lowBatteryNotificationsEnabled) { _, enabled in
                         if enabled {
@@ -55,6 +65,8 @@ struct SettingsView: View {
                     }
                     Slider(value: $settings.lowBatteryThreshold, in: 10...50, step: 5)
                 }
+
+                Toggle("外接电源变化通知", isOn: $settings.adapterChangeNotificationsEnabled)
             }
 
             Section("流体玻璃动效") {
@@ -77,6 +89,17 @@ struct SettingsView: View {
 
             Section("桌面小组件") {
                 Toggle("显示桌面小组件", isOn: $settings.desktopWidgetEnabled)
+
+                Picker("尺寸", selection: $settings.desktopWidgetStyle) {
+                    ForEach(DesktopWidgetStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: settings.desktopWidgetStyle) { _, _ in
+                    NotificationCenter.default.post(name: .desktopWidgetStyleChanged, object: nil)
+                }
+
                 Button("重置小组件位置") {
                     NotificationCenter.default.post(name: .resetDesktopWidgetPosition, object: nil)
                 }
@@ -89,6 +112,13 @@ struct SettingsView: View {
                 Toggle("记录充放电历史", isOn: $settings.recordHistory)
                 Button("清空历史数据", role: .destructive) {
                     showingClearHistoryConfirmation = true
+                }
+
+                Menu {
+                    Button("导出 CSV…") { exportHistory(asCSV: true) }
+                    Button("导出 JSON…") { exportHistory(asCSV: false) }
+                } label: {
+                    Label("导出历史数据", systemImage: "square.and.arrow.up")
                 }
 
                 Toggle("记录电源诊断日志", isOn: $settings.powerDiagnosticsLoggingEnabled)
@@ -108,7 +138,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440, height: 660)
+        .frame(width: 440, height: 800)
         .confirmationDialog(
             "确定要清空全部历史数据吗？此操作不可撤销。",
             isPresented: $showingClearHistoryConfirmation,
@@ -139,6 +169,11 @@ struct SettingsView: View {
         } message: {
             Text("无法修改开机自启动设置，请稍后重试，或到「系统设置 → 通用 → 登录项」中手动管理。")
         }
+        .alert("导出失败", isPresented: $showingExportErrorAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("无法写入导出文件，请检查目标位置是否可写。")
+        }
     }
 
     /// 未从 .app 包运行时（如直接运行可执行文件）无法操作登录项，禁用开关。
@@ -157,6 +192,28 @@ struct SettingsView: View {
         case .failed:
             settings.launchAtLoginEnabled = oldValue
             showingLoginItemErrorAlert = true
+        }
+    }
+
+    /// 导出历史数据：CSV 或 JSON，通过保存面板选择目标位置。
+    private func exportHistory(asCSV: Bool) {
+        let panel = NSSavePanel()
+        if asCSV {
+            panel.allowedContentTypes = [.commaSeparatedText]
+            panel.nameFieldStringValue = "BatteryGlass-历史数据.csv"
+        } else {
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = "BatteryGlass-历史数据.json"
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let content = asCSV
+            ? HistoryExporter.csvString(samples: history.samples)
+            : HistoryExporter.jsonString(samples: history.samples, dailySummaries: history.dailySummaries)
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            showingExportErrorAlert = true
         }
     }
 }

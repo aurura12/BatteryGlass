@@ -32,6 +32,16 @@ enum BatteryFormatters {
         return "\(total) 秒"
     }
 
+    /// 菜单栏紧凑时间格式：满小时显示 "2h15m"，不足一小时显示 "45m"。
+    static func menuBarTimeRemaining(_ interval: TimeInterval?) -> String {
+        guard let interval, interval.isFinite, interval > 0 else { return "--" }
+        let total = Int(interval.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        if hours > 0 { return "\(hours)h\(minutes)m" }
+        return "\(minutes)m"
+    }
+
     static func dayKey(for date: Date) -> String {
         dayFormatter.string(from: date)
     }
@@ -40,10 +50,34 @@ enum BatteryFormatters {
         dayFormatter.date(from: key)
     }
 
+    /// 柱状图横轴日期标签："8/30"。
+    static func xAxisDayLabel(_ date: Date) -> String {
+        xAxisDayFormatter.string(from: date)
+    }
+
+    /// 柱状图横轴月份标签："2026-08"。
+    static func xAxisMonthLabel(_ date: Date) -> String {
+        xAxisMonthFormatter.string(from: date)
+    }
+
     private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let xAxisDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "M/d"
+        return formatter
+    }()
+
+    private static let xAxisMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM"
         return formatter
     }()
 }

@@ -5,16 +5,24 @@ final class HoverModel: ObservableObject {
     @Published var hovering = false
 }
 
-/// 桌面小组件：紧凑的电池状态卡片，始终悬浮在桌面层级。
+/// 桌面小组件：紧凑或大尺寸的电池状态卡片，始终悬浮在桌面层级。
 struct DesktopWidgetView: View {
-    static let preferredSize = CGSize(width: 236, height: 132)
+    static func preferredSize(for style: DesktopWidgetStyle) -> CGSize {
+        switch style {
+        case .compact: return CGSize(width: 236, height: 132)
+        case .large: return CGSize(width: 264, height: 208)
+        }
+    }
 
     @Environment(BatteryMonitor.self) private var monitor
+    @Environment(AppSettings.self) private var settings
     var onClose: (() -> Void)? = nil
     @StateObject private var hover = HoverModel()
 
     private var snapshot: BatterySnapshot { monitor.snapshot }
     private var tint: Color { BatteryStyling.tint(for: snapshot) }
+    private var style: DesktopWidgetStyle { settings.desktopWidgetStyle }
+    private var preferredSize: CGSize { Self.preferredSize(for: style) }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -33,7 +41,7 @@ struct DesktopWidgetView: View {
 
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(percentText)
-                        .font(.system(size: 34, weight: .light, design: .rounded))
+                        .font(.system(size: style == .large ? 40 : 34, weight: .light, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(tint)
                     if snapshot.state != .unknown {
@@ -49,6 +57,10 @@ struct DesktopWidgetView: View {
                 }
 
                 SlimBar(progress: snapshot.percent / 100, tint: tint)
+
+                if style == .large {
+                    largeMetrics
+                }
 
                 Text(detailText)
                     .font(.system(size: 9))
@@ -73,7 +85,7 @@ struct DesktopWidgetView: View {
                 .transition(.opacity)
             }
         }
-        .frame(width: 236, height: 132)
+        .frame(width: preferredSize.width, height: preferredSize.height)
         .background {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -92,6 +104,41 @@ struct DesktopWidgetView: View {
         )
         .shadow(color: .black.opacity(0.28), radius: 14, y: 5)
         .onHover { hover.hovering = $0 }
+    }
+
+    /// 大尺寸小组件额外展示的指标网格。
+    private var largeMetrics: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible(), spacing: DesignTokens.spacingM),
+                GridItem(.flexible(), spacing: DesignTokens.spacingM)
+            ],
+            spacing: 8
+        ) {
+            metric(icon: "thermometer", title: "温度", value: BatteryFormatters.temperature(snapshot.temperatureCelsius))
+            metric(icon: "bolt", title: "电压", value: BatteryFormatters.voltage(snapshot.voltage))
+            metric(icon: "heart.text.square", title: "健康度", value: snapshot.healthText)
+            metric(icon: "repeat", title: "循环", value: "\(snapshot.cycleCount)")
+        }
+    }
+
+    private func metric(icon: String, title: String, value: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .regular))
+                .foregroundStyle(.secondary)
+                .frame(width: 12)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+                Text(value)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
     }
 
     private var badge: some View {

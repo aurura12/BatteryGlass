@@ -5,6 +5,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 菜单栏常驻应用：不占用 Dock。
         NSApp.setActivationPolicy(.accessory)
+
+        // 启动时隐藏主窗口：仅保留菜单栏图标与桌面小组件（设置里可关闭此行为）。
+        guard !AppSettings.shouldShowMainWindowAtLaunch() else { return }
+        DispatchQueue.main.async {
+            // 主窗口是普通 NSWindow；菜单栏弹窗是 NSPanel，不应被关闭。
+            NSApp.windows
+                .filter { !($0 is NSPanel) && $0.canBecomeMain }
+                .forEach { $0.close() }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

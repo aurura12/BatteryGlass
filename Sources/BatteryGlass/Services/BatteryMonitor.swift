@@ -12,6 +12,7 @@ final class BatteryMonitor {
     private let settings: AppSettings
     private var timer: Timer?
     private var lowBatteryNotified = false
+    private var lastAdapterConnected: Bool?
     private let recentSampleLimit = 420
 
     init(settings: AppSettings) {
@@ -134,6 +135,7 @@ final class BatteryMonitor {
         snapshot = s
         recordPowerSample(s)
         checkLowBattery(s)
+        checkAdapterChange(s)
 
         NotificationCenter.default.post(
             name: .batterySnapshotUpdated,
@@ -201,6 +203,16 @@ final class BatteryMonitor {
         } else if s.percent > settings.lowBatteryThreshold + 5 {
             lowBatteryNotified = false
         }
+    }
+
+    /// 外接电源接入/断开时发送通知（需在设置中开启；首次读取不触发）。
+    private func checkAdapterChange(_ s: BatterySnapshot) {
+        defer { lastAdapterConnected = s.adapterConnected }
+        guard settings.adapterChangeNotificationsEnabled,
+              s.isPresent,
+              let previous = lastAdapterConnected,
+              previous != s.adapterConnected else { return }
+        NotificationService.shared.sendAdapterChange(connected: s.adapterConnected, percent: s.percent)
     }
 
     private func recordPowerSample(_ s: BatterySnapshot) {
