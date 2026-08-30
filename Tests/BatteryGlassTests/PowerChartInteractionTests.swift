@@ -72,6 +72,24 @@ final class PowerChartInteractionTests: XCTestCase {
         XCTAssertEqual(anchor.y, 54)
     }
 
+    func testDailyTooltipAnchorClampsXInsidePlotFrame() {
+        let plotFrame = CGRect(x: 24, y: 12, width: 300, height: 138)
+
+        let leftEdge = PowerChartInteraction.dailyTooltipAnchor(
+            plotFrame: plotFrame,
+            xPosition: 0,
+            yPosition: 20
+        )
+        let rightEdge = PowerChartInteraction.dailyTooltipAnchor(
+            plotFrame: plotFrame,
+            xPosition: 300,
+            yPosition: 20
+        )
+
+        XCTAssertEqual(leftEdge.x, plotFrame.minX + 70)
+        XCTAssertEqual(rightEdge.x, plotFrame.maxX - 70)
+    }
+
     func testDailyEnergyMetricOrderPlacesAverageBeforeTotal() {
         XCTAssertEqual(
             DailyEnergyMetricOrder.titles,

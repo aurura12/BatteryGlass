@@ -270,7 +270,8 @@ struct DailyEnergyComparisonChart: View {
         VStack(spacing: DesignTokens.spacingXS) {
             Divider()
 
-            ForEach(summaries.reversed()) { summary in
+            // 只渲染最近 30 天，避免长期使用后「全部」范围渲染数千行。
+            ForEach(summaries.suffix(30).reversed()) { summary in
                 HStack {
                     Text(summary.dayKey)
                         .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -296,6 +297,7 @@ struct TodayPowerChart: View {
     let scrollEndDate: Date
     @State private var scrollPosition: Date
     @State private var hoveredSample: HistorySample?
+    @State private var hoverLocation: CGPoint?
 
     init(samples: [HistorySample]) {
         let chartData = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
@@ -390,9 +392,12 @@ struct TodayPowerChart: View {
                                         updateHover(phase, proxy: proxy, geometry: geometry)
                                     }
 
-                                if let hoveredSample {
+                                if let hoveredSample, let hoverLocation {
                                     hoverTooltip(for: hoveredSample)
-                                        .padding(8)
+                                        .position(
+                                            x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
+                                            y: min(max(hoverLocation.y - 26, 18), geometry.size.height - 18)
+                                        )
                                         .allowsHitTesting(false)
                                 }
                             }
@@ -462,24 +467,29 @@ struct TodayPowerChart: View {
         switch phase {
         case .ended:
             hoveredSample = nil
+            hoverLocation = nil
         case .active(let location):
             guard let plotFrame = proxy.plotFrame else {
                 hoveredSample = nil
+                hoverLocation = nil
                 return
             }
 
             let frame = geometry[plotFrame]
             guard frame.contains(location) else {
                 hoveredSample = nil
+                hoverLocation = nil
                 return
             }
 
             let xPosition = location.x - frame.minX
             guard let timestamp: Date = proxy.value(atX: xPosition) else {
                 hoveredSample = nil
+                hoverLocation = nil
                 return
             }
 
+            hoverLocation = location
             hoveredSample = PowerChartInteraction.nearestSample(
                 to: timestamp,
                 from: energySamples
@@ -581,14 +591,21 @@ enum PowerChartWindow {
 }
 
 enum PowerChartInteraction {
+    /// 计算每日耗电量柱状图 tooltip 的锚点，并将 x 钳制在绘图区内，
+    /// 避免悬停最早/最晚的柱子时 tooltip 溢出卡片边界。
     static func dailyTooltipAnchor(
         plotFrame: CGRect,
         xPosition: CGFloat,
         yPosition: CGFloat
     ) -> CGPoint {
-        CGPoint(
-            x: plotFrame.minX + xPosition,
-            y: plotFrame.minY + yPosition
+        let rawX = plotFrame.minX + xPosition
+        let rawY = plotFrame.minY + yPosition
+        guard plotFrame.width > 140 else {
+            return CGPoint(x: rawX, y: rawY)
+        }
+        return CGPoint(
+            x: min(max(rawX, plotFrame.minX + 70), plotFrame.maxX - 70),
+            y: rawY
         )
     }
 

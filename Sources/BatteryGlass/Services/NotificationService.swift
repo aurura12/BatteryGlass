@@ -7,11 +7,17 @@ final class NotificationService {
 
     private init() {}
 
-    func requestAuthorizationIfNeeded() async {
+    /// 请求通知权限（仅当状态为「尚未决定」时发起），返回最终是否已授权。
+    @discardableResult
+    func requestAuthorizationIfNeeded() async -> Bool {
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
-        guard settings.authorizationStatus == .notDetermined else { return }
-        _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        }
+        let finalSettings = await center.notificationSettings()
+        return finalSettings.authorizationStatus == .authorized
+            || finalSettings.authorizationStatus == .provisional
     }
 
     func sendLowBattery(percent: Double, threshold: Double) {

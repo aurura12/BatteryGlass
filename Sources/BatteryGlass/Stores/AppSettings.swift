@@ -43,7 +43,8 @@ final class AppSettings {
         lowBatteryNotificationsEnabled = defaults.bool(forKey: Self.notificationsEnabledKey)
 
         if defaults.object(forKey: Self.thresholdKey) != nil {
-            lowBatteryThreshold = defaults.double(forKey: Self.thresholdKey)
+            // 钳制到设置滑块的合法范围（10–50），避免存储值越界导致低电量误判。
+            lowBatteryThreshold = min(max(defaults.double(forKey: Self.thresholdKey), 10), 50)
         } else {
             lowBatteryThreshold = 20
         }
