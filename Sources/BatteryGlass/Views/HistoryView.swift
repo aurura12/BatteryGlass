@@ -53,6 +53,13 @@ enum EnergyHistoryRange: Int, CaseIterable, Identifiable {
     }
 }
 
+enum DailyEnergyMetricOrder {
+    static let today = "今日"
+    static let average = "日均"
+    static let total = "总计"
+    static let titles = [today, average, total]
+}
+
 struct DailyEnergyComparisonChart: View {
     let summaries: [DailySummary]
     @Binding var range: EnergyHistoryRange
@@ -217,13 +224,13 @@ struct DailyEnergyComparisonChart: View {
 
     private var comparisonMetrics: some View {
         HStack(spacing: DesignTokens.spacingM) {
-            energyMetric(title: "今日", value: todayEnergy)
+            energyMetric(title: DailyEnergyMetricOrder.today, value: todayEnergy)
             Divider()
                 .frame(height: 24)
-            energyMetric(title: "总计", value: totalEnergy)
+            energyMetric(title: DailyEnergyMetricOrder.average, value: averageEnergy)
             Divider()
                 .frame(height: 24)
-            energyMetric(title: "日均", value: averageEnergy)
+            energyMetric(title: DailyEnergyMetricOrder.total, value: totalEnergy)
         }
         .padding(.top, DesignTokens.spacingXS)
     }
