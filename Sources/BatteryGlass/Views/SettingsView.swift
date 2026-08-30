@@ -4,6 +4,9 @@ struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(BatteryHistoryStore.self) private var history
 
+    @State private var showingClearHistoryConfirmation = false
+    @State private var showingNotificationDeniedAlert = false
+
     var body: some View {
         @Bindable var settings = settings
 
@@ -13,7 +16,10 @@ struct SettingsView: View {
                     .onChange(of: settings.lowBatteryNotificationsEnabled) { _, enabled in
                         if enabled {
                             Task {
-                                await NotificationService.shared.requestAuthorizationIfNeeded()
+                                let authorized = await NotificationService.shared.requestAuthorizationIfNeeded()
+                                if !authorized {
+                                    showingNotificationDeniedAlert = true
+                                }
                             }
                         }
                     }
@@ -60,7 +66,7 @@ struct SettingsView: View {
             Section("数据与历史") {
                 Toggle("记录充放电历史", isOn: $settings.recordHistory)
                 Button("清空历史数据", role: .destructive) {
-                    history.clearHistory()
+                    showingClearHistoryConfirmation = true
                 }
 
                 Toggle("记录电源诊断日志", isOn: $settings.powerDiagnosticsLoggingEnabled)
@@ -81,5 +87,20 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 440, height: 560)
+        .confirmationDialog(
+            "确定要清空全部历史数据吗？此操作不可撤销。",
+            isPresented: $showingClearHistoryConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("清空", role: .destructive) {
+                history.clearHistory()
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .alert("通知权限不可用", isPresented: $showingNotificationDeniedAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("BatteryGlass 的通知权限已被拒绝，低电量提醒将不会送达。请到「系统设置 → 通知」中为 BatteryGlass 开启权限后重试。")
+        }
     }
 }

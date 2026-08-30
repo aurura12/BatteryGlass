@@ -8,9 +8,20 @@
 - 修复"接通电源 + 电池放电"（重负载边缘态）时系统功耗被错误显示为适配器输入的问题：系统功耗的适配器总输入覆盖仅在非放电状态生效，放电时改用 SystemLoad 或电池放电功率，避免数值偏低（BatteryMonitor.swift，新增 `resolvedSystemPowerW` 纯函数）。
 - 修复拔电后电池 0 电流（满电待机）时系统功耗沿用陈旧的适配器值的问题：供电方式变化后不再沿用上次值，改为 nil（BatteryMonitor.swift）。
 - 修复未检测到电池（unknown 状态）时实时功率卡/桌面小组件显示 "+0.0 W"、电量显示 "0%"、菜单栏图标变红的问题：无数据时显示 "--"、隐藏单位，图标降级为灰色（BatterySnapshot.swift、LiveDashboardView.swift、DesktopWidgetView.swift、BatteryStyling.swift）。
+- "清空历史数据"增加确认对话框，避免误触清空全部历史（SettingsView.swift）。
+- 低电量通知权限被拒时（含此前已被拒绝的情况）在设置界面弹出提示，不再静默失效（NotificationService.swift、SettingsView.swift）。
+- 低电量阈值从 UserDefaults 加载时钳制到 10–50 的合法范围，避免存储值越界导致低电量误判（AppSettings.swift）。
+- 功率趋势卡在无采样数据时显示 "--" 而非 "+0.0 W"，且去掉恒为正的 "+" 号（LiveDashboardView.swift）。
+- 今日功率曲线 hover 提示改为跟随鼠标并钳制在图表范围内（HistoryView.swift）。
+- 每日耗电量柱状图 tooltip 锚点 x 坐标钳制在绘图区内，悬停首末柱子时不再溢出卡片（HistoryView.swift）。
+- 充电时电量卡文案由"剩余 X"改为"充满还需 X"（LiveDashboardView.swift）。
+- 电池健康度低于 60%/80% 时分别显示红/琥珀色，不再恒为绿色（BatteryStyling.swift、LiveDashboardView.swift）。
+- 历史页"每日耗电量"明细列表只渲染最近 30 天，避免长期使用后"全部"范围渲染数千行（HistoryView.swift）。
+- README 动效参数表与实际代码对齐：移除已不存在的 EnergyRingView/PowerWaveformView 引用，blur 与透明度公式改为实际值。
 
 ### 新增
 - `EnergyConsumptionTests` 增加 6 个用例覆盖 `resolvedSystemPowerW`：放电状态不被适配器输入覆盖、放电时 SystemLoad 优先、插电时取"适配器输入 − 充电功率"、拔电后不沿用旧值、电池供电无数据时沿用上次值、unknown 状态功率文本显示 "--"。
+- `AppSettingsTests` 新增阈值钳制用例；`PowerChartInteractionTests` 新增 tooltip 锚点边缘钳制用例。
 
 ## [2026-08-29]
 

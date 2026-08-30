@@ -96,21 +96,19 @@ design-system/batteryglass/  # ui-ux-pro-max 设计系统（MASTER.md）
 
 ### 设置界面（运行时可调，持久化到 UserDefaults）
 
-- **玻璃浓度** `animationIntensity`（0.1–1.0）：控制流体层透明度（`0.30 + 0.45 × 浓度`）、光泽高光强度（`0.16 × 浓度`）、能量光点速度
+- **玻璃浓度** `animationIntensity`（0.1–1.0）：控制流体层透明度（`0.55 + 0.25 × 浓度`）
 - **流动速度** `animationSpeed`（0.3–2.0）：所有相位动画的时间倍率
 
-### 代码级参数（`Views/FluidGlassBackground.swift`、`Views/PowerWaveformView.swift`、`Views/EnergyRingView.swift`）
+### 代码级参数（`Views/FluidGlassBackground.swift`）
 
-| 参数 | 位置 | 作用 |
-| --- | --- | --- |
-| `phase * 9` 与 `angle + 230` | FluidGlassBackground | 主色带旋转速度与角度跨度 |
-| `offset x/y: sin(phase*0.35)*48`、`cos(phase*0.27)*40` | FluidGlassBackground | 次级光斑漂移幅度 |
-| `blur(radius: 34 / 46)` | FluidGlassBackground | 流体柔化程度 |
-| `sin(phase * 0.22)` 高光端点 | FluidGlassBackground | 光泽折射扫动周期 |
-| `sin(phase * 0.8)` 的 shimmer 位置 | PowerWaveformView | 波形光泽流动速度 |
-| `40 + 60 × intensity` | EnergyRingView.EnergyFlowDot | 能量环光点角速度 |
+| 参数 | 作用 |
+| --- | --- |
+| `sin(phase * 0.30) * 26`、`cos(phase * 0.22) * 20` | 主光斑漂移幅度 |
+| `sin(phase * 0.24) * 22`、`cos(phase * 0.33) * 16` | 次级光斑漂移幅度 |
+| `blur(radius: 56)` | 流体柔化程度 |
+| `0.55 + 0.25 × intensity` | 流体层透明度 |
 
-调节建议：想让玻璃更“液态”可提高 `intensity` 并减小 blur；想要更沉稳可把 `speed` 调到 0.5 左右。60 fps 动画只在面板可见时运行（`TimelineView` 生命周期），面板关闭后零开销。
+调节建议：想让玻璃更"液态"可提高 `intensity` 并减小 blur；想要更沉稳可把 `speed` 调到 0.5 左右。60 fps 动画只在面板可见时运行（`TimelineView` 生命周期），面板关闭后零开销。
 
 ## 已知说明
 

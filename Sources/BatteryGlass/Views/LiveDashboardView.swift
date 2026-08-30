@@ -165,6 +165,9 @@ struct BatteryPercentCard: View {
 
     private var remainingText: String {
         guard let remaining = snapshot.timeRemaining else { return "——" }
+        if snapshot.state == .charging {
+            return "充满还需 " + BatteryFormatters.timeRemaining(remaining)
+        }
         return "剩余 " + BatteryFormatters.timeRemaining(remaining)
     }
 }
@@ -257,15 +260,19 @@ struct CycleKpiCard: View {
 struct HealthKpiCard: View {
     let snapshot: BatterySnapshot
 
+    private var healthTint: Color {
+        BatteryStyling.healthTint(for: snapshot.healthPercent)
+    }
+
     var body: some View {
         KpiCard(title: "电池健康", icon: "heart.text.square") {
             Text(snapshot.healthText)
                 .font(.system(size: 30, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(DesignTokens.mint)
+                .foregroundStyle(healthTint)
             SlimBar(
                 progress: (snapshot.healthPercent ?? 0) / 100,
-                tint: DesignTokens.mint
+                tint: healthTint
             )
             Text(capacityText)
                 .font(.system(size: 10))
@@ -297,7 +304,7 @@ struct PowerTrendCard: View {
         KpiCard(title: "功率趋势", icon: "chart.line.uptrend.xyaxis") {
             HStack(spacing: DesignTokens.spacingM) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(String(format: "%+.1f W", peakPower))
+                    Text(peakText)
                         .font(.system(size: 20, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(accent)
@@ -307,7 +314,7 @@ struct PowerTrendCard: View {
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(String(format: "%+.1f W", averagePower))
+                    Text(averageText)
                         .font(.system(size: 20, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                     Text("2 分钟平均")
@@ -325,6 +332,10 @@ struct PowerTrendCard: View {
         Array(samples.suffix(240))
     }
 
+    private var hasSamples: Bool {
+        !windowSamples.isEmpty
+    }
+
     private var peakPower: Double {
         windowSamples.max(by: { abs($0.power) < abs($1.power) })?.power ?? 0
     }
@@ -334,7 +345,19 @@ struct PowerTrendCard: View {
         return windowSamples.map(\.power).reduce(0, +) / Double(windowSamples.count)
     }
 
+    /// 采样功率恒为正（消耗功率），无数据时显示 "--" 而非误导性的 "+0.0 W"。
+    private var peakText: String {
+        guard hasSamples else { return "--" }
+        return String(format: "%.1f W", peakPower)
+    }
+
+    private var averageText: String {
+        guard hasSamples else { return "--" }
+        return String(format: "%.1f W", averagePower)
+    }
+
     private var directionCaption: String {
+        if !hasSamples { return "暂无有效功率数据" }
         switch snapshot.state {
         case .charging: return "适配器供电 · 系统总功率"
         case .discharging: return "电池供电 · 系统总功率"
