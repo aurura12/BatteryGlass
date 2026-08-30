@@ -13,7 +13,8 @@ let package = Package(
             name: "BatteryGlass",
             path: "Sources/BatteryGlass",
             linkerSettings: [
-                .linkedFramework("IOKit")
+                .linkedFramework("IOKit"),
+                .linkedFramework("ServiceManagement")
             ]
         ),
         .testTarget(

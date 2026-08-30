@@ -27,6 +27,11 @@ struct BatteryGlassApp: App {
 
     init() {
         let settings = AppSettings()
+        // 用系统实际登录项状态同步设置，保证设置页开关与系统状态一致；
+        // 未从 .app 包运行时无法查询，保留存储值。
+        if let enabled = LoginItemService.systemLaunchAtLoginEnabled() {
+            settings.launchAtLoginEnabled = enabled
+        }
         let monitor = BatteryMonitor(settings: settings)
         let history = BatteryHistoryStore(settings: settings)
         let desktopWidget = DesktopWidgetController(monitor: monitor, settings: settings)

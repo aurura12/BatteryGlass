@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
@@ -6,11 +7,32 @@ struct SettingsView: View {
 
     @State private var showingClearHistoryConfirmation = false
     @State private var showingNotificationDeniedAlert = false
+    @State private var showingLoginItemApprovalAlert = false
+    @State private var showingLoginItemErrorAlert = false
 
     var body: some View {
         @Bindable var settings = settings
 
         Form {
+            Section("通用") {
+                Toggle("开机自启动", isOn: $settings.launchAtLoginEnabled)
+                    .disabled(!loginItemAvailable)
+                    .onChange(of: settings.launchAtLoginEnabled) { oldValue, newValue in
+                        guard oldValue != newValue else { return }
+                        applyLaunchAtLoginChange(from: oldValue, to: newValue)
+                    }
+
+                if loginItemAvailable {
+                    Text("登录 macOS 后自动启动 BatteryGlass。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("需通过 .app 应用运行后才能设置开机自启动。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("低电量提醒") {
                 Toggle("启用低电量通知", isOn: $settings.lowBatteryNotificationsEnabled)
                     .onChange(of: settings.lowBatteryNotificationsEnabled) { _, enabled in
@@ -86,7 +108,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440, height: 560)
+        .frame(width: 440, height: 660)
         .confirmationDialog(
             "确定要清空全部历史数据吗？此操作不可撤销。",
             isPresented: $showingClearHistoryConfirmation,
@@ -101,6 +123,40 @@ struct SettingsView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("BatteryGlass 的通知权限已被拒绝，低电量提醒将不会送达。请到「系统设置 → 通知」中为 BatteryGlass 开启权限后重试。")
+        }
+        .alert("开机自启动待批准", isPresented: $showingLoginItemApprovalAlert) {
+            Button("打开系统设置") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text("BatteryGlass 已发起开机自启动注册，需要你在系统中批准后才能生效。请到「系统设置 → 通用 → 登录项」允许 BatteryGlass。")
+        }
+        .alert("设置开机自启动失败", isPresented: $showingLoginItemErrorAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("无法修改开机自启动设置，请稍后重试，或到「系统设置 → 通用 → 登录项」中手动管理。")
+        }
+    }
+
+    /// 未从 .app 包运行时（如直接运行可执行文件）无法操作登录项，禁用开关。
+    private var loginItemAvailable: Bool {
+        LoginItemService.currentState != .unavailable
+    }
+
+    private func applyLaunchAtLoginChange(from oldValue: Bool, to newValue: Bool) {
+        switch LoginItemService.apply(desiredEnabled: newValue) {
+        case .applied:
+            break
+        case .needsApproval:
+            showingLoginItemApprovalAlert = true
+        case .unavailable:
+            settings.launchAtLoginEnabled = oldValue
+        case .failed:
+            settings.launchAtLoginEnabled = oldValue
+            showingLoginItemErrorAlert = true
         }
     }
 }
