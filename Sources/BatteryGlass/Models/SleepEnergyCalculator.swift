@@ -6,15 +6,21 @@ import Foundation
 /// - 不插电待机：消耗全部来自电池，能量 = (睡眠前电量 − 唤醒后电量) × 平均电压；
 /// - 插电待机：充入电池能量（电量差，精确）+ 系统维持功耗（唤醒后延迟采样
 ///   得到的最低直供功率 × 时长，估算）。
+///
+/// 待机模式以**睡眠前（即睡眠期间）的供电状态**为准：睡眠中无法操作电源，
+/// `adapterConnectedBefore` 才是睡眠期间的实际供电状态；唤醒瞬间的插拔变化
+/// （如睡前插电、早上拔电带走，或睡前未插电、唤醒后插上充电）不应改变归属。
 enum SleepEnergyCalculator {
     struct Input {
         var sleepStart: Date
         var capacityBeforeMAh: Double
         var voltageBeforeV: Double
+        /// 睡眠前的供电状态，即睡眠期间的实际供电状态（决定待机模式）。
         var adapterConnectedBefore: Bool
         var wakeTime: Date
         var capacityAfterMAh: Double
         var voltageAfterV: Double
+        /// 唤醒瞬间的供电状态，仅用于参考；模式判断以 `adapterConnectedBefore` 为准。
         var adapterConnectedAfter: Bool
         /// 唤醒后延迟采样得到的系统维持直供功率最小值（W）
         var maintenanceDirectPowerW: Double?
@@ -36,7 +42,10 @@ enum SleepEnergyCalculator {
         let energyKWh: Double
         let mode: SleepSegmentMode
 
-        if input.adapterConnectedAfter {
+        // 用睡眠前的供电状态决定模式：睡眠期间插电则能量来自电源（充入电量 + 维持功耗），
+        // 未插电则能量来自电池放电。若唤醒后插电掩盖了睡眠期间的放电量（唤醒后充电使
+        // 容量回升），容量差被钳为 0 后无能量，不生成区间（保守丢弃）。
+        if input.adapterConnectedBefore {
             let chargedInKWh = max(0, input.capacityAfterMAh - input.capacityBeforeMAh)
                 * averageVoltage / 1_000_000
             let maintenanceKWh = max(0, input.maintenanceDirectPowerW ?? 0)
