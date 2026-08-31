@@ -494,6 +494,33 @@ final class BatteryMonitor {
         return 0
     }
 
+    /// 解析电池设计容量（mAh）。
+    /// Intel 优先读 `BatteryData["DesignCapacity"]`；Apple Silicon 该键通常缺失，
+    /// 回退到顶层 `DesignCapacity` → `NominalChargeCapacity`（提取为纯函数便于单元测试）。
+    nonisolated static func resolvedDesignCapacityMAh(
+        batteryDesignCapacity: Double,
+        topLevelDesignCapacity: Double,
+        nominalChargeCapacity: Double
+    ) -> Double {
+        firstPositive(batteryDesignCapacity, topLevelDesignCapacity, nominalChargeCapacity)
+    }
+
+    /// 解析电池当前满充容量（mAh）。
+    /// Intel 读 `BatteryData["FullChargeCapacity"]`；Apple Silicon 该键缺失，
+    /// 满充容量位于 `BatteryData["FccComp2"]` 或顶层 `AppleRawMaxCapacity`
+    /// （提取为纯函数便于单元测试）。
+    nonisolated static func resolvedFullChargeCapacityMAh(
+        batteryFullChargeCapacity: Double,
+        batteryFccComp2: Double,
+        topLevelAppleRawMaxCapacity: Double
+    ) -> Double {
+        firstPositive(batteryFullChargeCapacity, batteryFccComp2, topLevelAppleRawMaxCapacity)
+    }
+
+    nonisolated private static func firstPositive(_ values: Double...) -> Double {
+        values.first { $0.isFinite && $0 > 0 } ?? 0
+    }
+
     nonisolated static func dischargingSystemPowerW(
         telemetryBatteryPowerMW: Double,
         electricalPowerW: Double
@@ -606,8 +633,20 @@ final class BatteryMonitor {
         }
 
         if let battery = dict["BatteryData"] as? [String: Any] {
-            data.designCapacityMAh = Self.numberValue(battery["DesignCapacity"])
-            data.fullChargeCapacityMAh = Self.numberValue(battery["FullChargeCapacity"])
+            // 容量键在 Intel / Apple Silicon 上不一致：Intel 读 BatteryData 内
+            // DesignCapacity / FullChargeCapacity；Apple Silicon 缺 FullChargeCapacity，
+            // 设计容量在顶层 DesignCapacity / NominalChargeCapacity，满充容量在
+            // BatteryData["FccComp2"] / 顶层 AppleRawMaxCapacity，见 resolved* 解析函数。
+            data.designCapacityMAh = Self.resolvedDesignCapacityMAh(
+                batteryDesignCapacity: Self.numberValue(battery["DesignCapacity"]),
+                topLevelDesignCapacity: Self.numberValue(dict["DesignCapacity"]),
+                nominalChargeCapacity: Self.numberValue(dict["NominalChargeCapacity"])
+            )
+            data.fullChargeCapacityMAh = Self.resolvedFullChargeCapacityMAh(
+                batteryFullChargeCapacity: Self.numberValue(battery["FullChargeCapacity"]),
+                batteryFccComp2: Self.numberValue(battery["FccComp2"]),
+                topLevelAppleRawMaxCapacity: Self.numberValue(dict["AppleRawMaxCapacity"])
+            )
             data.currentCapacityMAh = Self.numberValue(battery["RemainingCapacity"])
             data.currentCapacityPercent = Self.numberValue(battery["CurrentCapacity"])
         }
