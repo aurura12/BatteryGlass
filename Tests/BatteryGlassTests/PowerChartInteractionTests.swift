@@ -3,6 +3,12 @@ import XCTest
 @testable import BatteryGlass
 
 final class PowerChartInteractionTests: XCTestCase {
+    func testEnergyGroupingUsesMatchingChartTitle() {
+        XCTAssertEqual(EnergyGrouping.day.chartTitle, "每日耗电量")
+        XCTAssertEqual(EnergyGrouping.week.chartTitle, "每周耗电量")
+        XCTAssertEqual(EnergyGrouping.month.chartTitle, "每月耗电量")
+    }
+
     func testNearestSampleIsSelectedForHoverTime() {
         let first = Date(timeIntervalSince1970: 1_000)
         let samples = [

@@ -79,7 +79,7 @@ struct DailyEnergyComparisonChart: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
             HStack {
-                Text("每日耗电量（\(range.title)）")
+                Text("\(grouping.chartTitle)（\(range.title)）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()

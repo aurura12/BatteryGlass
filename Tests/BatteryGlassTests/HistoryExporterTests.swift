@@ -44,6 +44,29 @@ final class HistoryExporterTests: XCTestCase {
         XCTAssertEqual(fields[5], "")
     }
 
+    func testCSVIncludesDailySummariesAlongsideRetainedSamples() {
+        let summary = DailySummary(
+            dayKey: "2026-08-20",
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            sampleCount: 120,
+            maxCycleCount: 42,
+            minHealthPercent: 95.5,
+            energyKWh: 0.123,
+            averagePower: 10,
+            maxPower: 20,
+            minPower: 5
+        )
+
+        let csv = HistoryExporter.csvString(
+            samples: [makeSample()],
+            dailySummaries: [summary]
+        )
+
+        XCTAssertTrue(csv.contains("每日汇总,2026-08-20"))
+        XCTAssertTrue(csv.contains("0.123"))
+        XCTAssertTrue(csv.contains("120"))
+    }
+
     func testJSONRoundTripsSamplesAndSummaries() {
         let summaries = [
             DailySummary(
