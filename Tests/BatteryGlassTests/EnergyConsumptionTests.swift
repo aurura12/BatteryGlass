@@ -283,12 +283,37 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertNil(result.adapterInputPowerW)
     }
 
+    func testNonFiniteSystemTelemetryIsIgnored() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: .infinity,
+            adapterConnected: true,
+            state: .charging,
+            systemPowerInMW: .nan,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: -12_000,
+            electricalPowerW: -12,
+            previous: 9,
+            previousAdapterConnected: true
+        )
+
+        XCTAssertEqual(result.systemPowerW ?? 0, 12, accuracy: 0.0001)
+        XCTAssertNil(result.adapterInputPowerW)
+    }
+
     func testDisplayPowerTextShowsDashWhenNoBatteryDetected() {
         var snapshot = BatterySnapshot()
         snapshot.state = .unknown
         snapshot.isPresent = false
 
         XCTAssertEqual(snapshot.displayPowerText, "--")
+    }
+
+    func testUnknownBatteryPercentTextShowsDash() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .unknown
+        snapshot.isPresent = false
+
+        XCTAssertEqual(snapshot.percentText, "--")
     }
 
     private func sample(at timestamp: Date, power: Double) -> HistorySample {

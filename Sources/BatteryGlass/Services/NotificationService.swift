@@ -1,6 +1,12 @@
 import Foundation
 import UserNotifications
 
+enum NotificationPermissionPolicy {
+    static func settingValue(afterAuthorization authorized: Bool) -> Bool {
+        authorized
+    }
+}
+
 @MainActor
 final class NotificationService {
     static let shared = NotificationService()

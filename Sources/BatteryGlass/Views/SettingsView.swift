@@ -50,6 +50,8 @@ struct SettingsView: View {
                             Task {
                                 let authorized = await NotificationService.shared.requestAuthorizationIfNeeded()
                                 if !authorized {
+                                    settings.lowBatteryNotificationsEnabled =
+                                        NotificationPermissionPolicy.settingValue(afterAuthorization: authorized)
                                     showingNotificationDeniedAlert = true
                                 }
                             }
@@ -208,7 +210,7 @@ struct SettingsView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         let content = asCSV
-            ? HistoryExporter.csvString(samples: history.samples)
+            ? HistoryExporter.csvString(samples: history.samples, dailySummaries: history.dailySummaries)
             : HistoryExporter.jsonString(samples: history.samples, dailySummaries: history.dailySummaries)
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)

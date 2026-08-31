@@ -61,6 +61,19 @@ final class BatteryMonitorIOPSParsingTests: XCTestCase {
         XCTAssertEqual(data.current, -2.3, accuracy: 0.0001)
     }
 
+    func testTimeRemainingKeysConvertMinutesToSeconds() {
+        let description: [String: Any] = [
+            kIOPSIsPresentKey: true,
+            kIOPSTimeToEmptyKey: 120,
+            kIOPSTimeToFullChargeKey: 45
+        ]
+
+        let data = BatteryMonitor.parsePowerSourceDescription(description)
+
+        XCTAssertEqual(data.timeToEmpty ?? 0, 7_200, accuracy: 0.0001)
+        XCTAssertEqual(data.timeToFull ?? 0, 2_700, accuracy: 0.0001)
+    }
+
     // MARK: - IOPSPowerSourceState（供电来源枚举）
 
     func testACProvidingStateIsExternalPower() {

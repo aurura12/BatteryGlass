@@ -18,4 +18,13 @@ final class AppSettingsTests: XCTestCase {
         defaults.set(30, forKey: "lowBatteryThreshold")
         XCTAssertEqual(AppSettings(defaults: defaults).lowBatteryThreshold, 30)
     }
+
+    func testDeniedNotificationPermissionDisablesSetting() {
+        XCTAssertFalse(
+            NotificationPermissionPolicy.settingValue(afterAuthorization: false)
+        )
+        XCTAssertTrue(
+            NotificationPermissionPolicy.settingValue(afterAuthorization: true)
+        )
+    }
 }

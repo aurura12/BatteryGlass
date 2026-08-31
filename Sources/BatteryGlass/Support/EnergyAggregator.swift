@@ -16,6 +16,14 @@ enum EnergyGrouping: String, CaseIterable, Identifiable {
         }
     }
 
+    var chartTitle: String {
+        switch self {
+        case .day: return "每日耗电量"
+        case .week: return "每周耗电量"
+        case .month: return "每月耗电量"
+        }
+    }
+
     /// 横轴刻度步长。
     var xStride: Calendar.Component {
         switch self {

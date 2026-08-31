@@ -16,6 +16,12 @@
 - `LoginItemServiceTests` 新增 7 个用例覆盖 enabled/notRegistered/requiresApproval/unavailable 状态 × 期望开关组合；新增 `EnergyAggregatorTests`（5 用例）、`HistoryExporterTests`（3 用例）；`BatteryFormattersTests` 增加菜单栏时间与坐标轴标签用例。
 
 ### 修复
+- 修正 IOPS 当前供电来源的 Core Foundation ownership 处理，并忽略 NaN/∞ 系统功率遥测，避免异常数据污染功耗显示（BatteryMonitor.swift）。
+- 修复 IOPS 的剩余时间字段按分钟返回却被当作秒使用的问题，避免剩余时间显示缩短 60 倍（BatteryMonitor.swift）。
+- 修复未检测到电池时菜单栏 tooltip 与辅助功能标签仍显示 0% 的问题，统一显示为 --（BatterySnapshot.swift、MenuBarLabel.swift）。
+- 修复通知权限被拒后设置开关仍保持开启、重新授权流程不一致的问题（NotificationService.swift、SettingsView.swift）。
+- 修复 CSV 导出只包含当前保留采样的问题，现在同时导出完整每日汇总，保留长期历史信息（HistoryExporter.swift、SettingsView.swift）。
+- 修复历史能耗按周/按月分组时标题仍显示“每日耗电量”的问题（EnergyAggregator.swift、HistoryView.swift）。
 - 修复"接通电源 + 电池放电"（重负载边缘态）时系统功耗被错误显示为适配器输入的问题：系统功耗的适配器总输入覆盖仅在非放电状态生效，放电时改用 SystemLoad 或电池放电功率，避免数值偏低（BatteryMonitor.swift，新增 `resolvedSystemPowerW` 纯函数）。
 - 修复拔电后电池 0 电流（满电待机）时系统功耗沿用陈旧的适配器值的问题：供电方式变化后不再沿用上次值，改为 nil（BatteryMonitor.swift）。
 - 修复未检测到电池（unknown 状态）时实时功率卡/桌面小组件显示 "+0.0 W"、电量显示 "0%"、菜单栏图标变红的问题：无数据时显示 "--"、隐藏单位，图标降级为灰色（BatterySnapshot.swift、LiveDashboardView.swift、DesktopWidgetView.swift、BatteryStyling.swift）。

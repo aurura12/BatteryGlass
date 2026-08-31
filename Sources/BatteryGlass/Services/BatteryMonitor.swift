@@ -301,7 +301,7 @@ final class BatteryMonitor {
         // 2. 当前供电来源：UPS 不在上述取值里，需用 IOPSGetProvidingPowerSourceType
         //    检测（返回 AC/Battery/UPS）。该结果比单描述更权威——UPS 供电时笔记本电池
         //    不放电，视为外部供电；Battery Power 时即使描述里状态缺失也判为非外部供电。
-        if let providing = IOPSGetProvidingPowerSourceType(blob)?.takeRetainedValue() as String?,
+        if let providing = IOPSGetProvidingPowerSourceType(blob)?.takeUnretainedValue() as String?,
            let state = IOPSPowerSourceState(rawIOPSValue: providing) {
             data.externalConnected = state.isExternalPower
         }
@@ -399,14 +399,14 @@ final class BatteryMonitor {
         previous: Double?,
         previousAdapterConnected: Bool
     ) -> (systemPowerW: Double?, adapterInputPowerW: Double?) {
-        let adapterInput = adapterConnected && systemPowerInMW > 0
+        let adapterInput = adapterConnected && systemPowerInMW.isFinite && systemPowerInMW > 0
             ? systemPowerInMW / 1000
             : nil
 
         if let adapterInput, state != .discharging {
             return (max(0, adapterInput - (chargingPowerW ?? 0)), adapterInput)
         }
-        if systemLoadMW > 0 {
+        if systemLoadMW.isFinite && systemLoadMW > 0 {
             return (systemLoadMW / 1000, adapterInput)
         }
         if let dischargingPower = dischargingSystemPowerW(
@@ -527,6 +527,7 @@ final class BatteryMonitor {
 
     private static func positiveTime(_ value: Any?) -> TimeInterval? {
         let time = (value as? NSNumber)?.doubleValue ?? -1
-        return time > 0 ? time : nil
+        // IOPS 的 Time to Empty / Time to Full Charge 单位是分钟，内部统一使用秒。
+        return time > 0 ? time * 60 : nil
     }
 }

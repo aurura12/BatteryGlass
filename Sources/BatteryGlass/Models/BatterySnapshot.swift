@@ -97,7 +97,7 @@ struct BatterySnapshot: Equatable, Sendable {
     var adapterManufacturer: String?
 
     var percentText: String {
-        "\(Int(percent.rounded()))%"
+        state == .unknown ? "--" : "\(Int(percent.rounded()))%"
     }
 
     /// 展示功率取值：与主面板"实时功率"卡保持一致——适配器供电（充电/已接通电源）时
