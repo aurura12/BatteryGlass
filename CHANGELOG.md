@@ -19,6 +19,7 @@
 - `LoginItemServiceTests` 新增 7 个用例覆盖 enabled/notRegistered/requiresApproval/unavailable 状态 × 期望开关组合；新增 `EnergyAggregatorTests`（5 用例）、`HistoryExporterTests`（3 用例）；`BatteryFormattersTests` 增加菜单栏时间与坐标轴标签用例。
 
 ### 修复
+- 修复待机能耗补测在睡眠前后插拔状态变化时归属错误的问题：待机模式现以睡眠前的供电状态为准（睡眠期间的实际供电状态），睡前插电、唤醒时拔电的充电待机不再被当作电池放电丢弃；睡前未插电、唤醒后插电的场景因放电量被充电掩盖而保守丢弃区间（SleepEnergyCalculator.swift，新增 2 个插拔状态变化用例）。
 - 修复今日功率曲线在待机（系统睡眠）缺口处用线性插值把缺口两端直接连成一条虚假功率线的问题，缺口现断开显示（HistoryView.swift）。
 - 修正 IOPS 当前供电来源的 Core Foundation ownership 处理，并忽略 NaN/∞ 系统功率遥测，避免异常数据污染功耗显示（BatteryMonitor.swift）。
 - 修复 IOPS 的剩余时间字段按分钟返回却被当作秒使用的问题，避免剩余时间显示缩短 60 倍（BatteryMonitor.swift）。

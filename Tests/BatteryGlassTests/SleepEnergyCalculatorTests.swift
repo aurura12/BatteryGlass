@@ -8,7 +8,7 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             sleepStart: date("2026-08-27 10:00:00"),
             capacityBeforeMAh: 5000,
             voltageBeforeV: 12,
-            adapterConnectedBefore: true,
+            adapterConnectedBefore: false,
             wakeTime: date("2026-08-27 11:00:00"),
             capacityAfterMAh: 4000,
             voltageAfterV: 11.5,
@@ -117,6 +117,47 @@ final class SleepEnergyCalculatorTests: XCTestCase {
 
         XCTAssertEqual(segment.energyKWh, 1000 * 12 / 1_000_000, accuracy: 0.0000001)
         XCTAssertEqual(segment.mode, .discharging)
+    }
+
+    func testSleepChargedThenUnpluggedAtWakeUsesChargingEnergy() throws {
+        // 睡前插电（睡眠期间充电）、唤醒时拔电：按睡眠前供电状态归为充电待机，
+        // 能量 = 睡眠期间充入电量；唤醒后已拔电，无直供样本，维持功耗按 0 计。
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 3000,
+            voltageBeforeV: 12.4,
+            adapterConnectedBefore: true,
+            wakeTime: date("2026-08-27 12:00:00"),
+            capacityAfterMAh: 6000,
+            voltageAfterV: 12.6,
+            adapterConnectedAfter: false,
+            maintenanceDirectPowerW: nil
+        )
+
+        let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
+
+        // 充入：3000 mAh × 12.5 V = 37500 mWh = 0.0375 kWh；维持功耗 0
+        XCTAssertEqual(segment.energyKWh, 0.0375, accuracy: 0.0000001)
+        XCTAssertEqual(segment.averagePowerW ?? 0, 18.75, accuracy: 0.0001)
+        XCTAssertEqual(segment.mode, .charging)
+    }
+
+    func testSleepDischargingThenPluggedInAtWakeDiscardsSegment() {
+        // 睡前未插电（睡眠期间电池放电）、唤醒后插上充电：唤醒后充电使容量回升，
+        // 睡眠期间的放电量被掩盖无法准确测得，钳为 0 后不生成区间（保守丢弃）。
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 4000,
+            voltageBeforeV: 12,
+            adapterConnectedBefore: false,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 5000,
+            voltageAfterV: 12.4,
+            adapterConnectedAfter: true,
+            maintenanceDirectPowerW: 2.0
+        )
+
+        XCTAssertNil(SleepEnergyCalculator.segment(from: input))
     }
 
     func testDailyEnergySplitAcrossMidnight() {
