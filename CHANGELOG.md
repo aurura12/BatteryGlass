@@ -5,6 +5,9 @@
 ## [2026-08-31]
 
 ### 新增
+- 待机能耗补测：监听系统睡眠/唤醒，唤醒后按「电量差法」补测待机期间电脑从电源（插座或电池）消耗的能量并计入每日耗电量——不插电待机取电池放电量，插电待机取充入电量 + 唤醒后延迟采样的系统维持功耗估算（插电充满停充时仅记维持功耗）；history.json 升 v3 持久化待机区间（SleepSegment），重启后仍可见（BatteryMonitor.swift、BatteryHistoryStore.swift、SleepSegment.swift、SleepEnergyCalculator.swift、Extensions.swift）。
+- 今日功率曲线如实显示待机缺口：样本间隔超 5 分钟或落在待机区间内时断开连线、不再线性插值成虚假功率，缺口处叠加浅色背景与「待机 X · 平均 Y W（估算）」标注；待机缺口内悬停不吸附两端样本，避免误读（HistoryView.swift，新增 `PowerChartSegmentation` 纯函数）。
+- 新增 `SleepEnergyCalculatorTests`（9 用例：放电/充电/充满停充/噪声钳制/短待机忽略/跨天能量拆分）、`PowerChartSegmentationTests`（7 用例：缺口分段/待机区间过滤）；`HistoryPersistenceTests` 增加 v2 兼容与 v3 往返用例。
 - 菜单栏图标可显示百分比或剩余时间（设置 → 通用 → 菜单栏图标），未检测到电池时显示 "--"（MenuBarLabel.swift、Formatters.swift、AppSettings.swift）。
 - 新增"启动时显示主窗口"开关：关闭后启动仅保留菜单栏图标与桌面小组件，不弹主窗口（BatteryGlassApp.swift）。
 - 历史数据导出：设置页"数据与历史"新增导出菜单（CSV/JSON）。CSV 含表头（时间/功率/消耗功率/电量/循环次数/健康度），JSON 与 history.json 结构一致（HistoryExporter.swift、SettingsView.swift）。
@@ -16,6 +19,7 @@
 - `LoginItemServiceTests` 新增 7 个用例覆盖 enabled/notRegistered/requiresApproval/unavailable 状态 × 期望开关组合；新增 `EnergyAggregatorTests`（5 用例）、`HistoryExporterTests`（3 用例）；`BatteryFormattersTests` 增加菜单栏时间与坐标轴标签用例。
 
 ### 修复
+- 修复今日功率曲线在待机（系统睡眠）缺口处用线性插值把缺口两端直接连成一条虚假功率线的问题，缺口现断开显示（HistoryView.swift）。
 - 修正 IOPS 当前供电来源的 Core Foundation ownership 处理，并忽略 NaN/∞ 系统功率遥测，避免异常数据污染功耗显示（BatteryMonitor.swift）。
 - 修复 IOPS 的剩余时间字段按分钟返回却被当作秒使用的问题，避免剩余时间显示缩短 60 倍（BatteryMonitor.swift）。
 - 修复未检测到电池时菜单栏 tooltip 与辅助功能标签仍显示 0% 的问题，统一显示为 --（BatterySnapshot.swift、MenuBarLabel.swift）。

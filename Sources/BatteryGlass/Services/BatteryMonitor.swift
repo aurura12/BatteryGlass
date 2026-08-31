@@ -15,6 +15,19 @@ final class BatteryMonitor {
     private var lastAdapterConnected: Bool?
     private let recentSampleLimit = 420
 
+    // MARK: - 待机（睡眠）监听状态
+
+    /// 睡眠前基线：日期、电量、电压、是否插电。
+    private var sleepBaseline: (date: Date, capacityMAh: Double, voltageV: Double, adapterConnected: Bool)?
+    /// 唤醒瞬间基线：睡眠结束瞬间的数据，用于电量差法。
+    private var wakeBaseline: (date: Date, capacityMAh: Double, voltageV: Double, adapterConnected: Bool)?
+    /// 唤醒后延迟采样得到的直供功率样本（W）。
+    private var maintenanceSamples: [Double] = []
+    private var maintenanceSampleTick = 0
+    private var maintenanceTimer: Timer?
+    private let maintenanceSampleInterval: TimeInterval = 5
+    private let maintenanceSampleCount = 6
+
     init(settings: AppSettings) {
         self.settings = settings
         refresh()
@@ -26,6 +39,26 @@ final class BatteryMonitor {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleWillSleep()
+            }
+        }
+        workspaceCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleDidWake()
+            }
+        }
     }
 
     func refresh() {
@@ -141,6 +174,101 @@ final class BatteryMonitor {
             name: .batterySnapshotUpdated,
             object: self,
             userInfo: ["snapshot": s]
+        )
+    }
+
+    // MARK: - 睡眠/唤醒补测
+
+    /// 系统即将睡眠：记录当前快照作为基线。回调要轻，系统可能随即挂起。
+    private func handleWillSleep() {
+        // 上次唤醒后 30 秒采样窗口内再次睡眠：丢弃未完成采样，避免生成不完整区间。
+        cancelMaintenanceSampling()
+        sleepBaseline = (
+            date: snapshot.timestamp,
+            capacityMAh: snapshot.currentCapacityMAh,
+            voltageV: snapshot.voltage,
+            adapterConnected: snapshot.adapterConnected
+        )
+    }
+
+    private func handleDidWake() {
+        guard sleepBaseline != nil else { return }
+        refresh()
+        wakeBaseline = (
+            date: snapshot.timestamp,
+            capacityMAh: snapshot.currentCapacityMAh,
+            voltageV: snapshot.voltage,
+            adapterConnected: snapshot.adapterConnected
+        )
+        startMaintenanceSampling()
+    }
+
+    /// 唤醒后约 30 秒内每 5 秒采样一次直供功率，取最小值作为系统维持功耗估算。
+    private func startMaintenanceSampling() {
+        cancelMaintenanceSampling()
+        let timer = Timer(timeInterval: maintenanceSampleInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.sampleMaintenancePower()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        maintenanceTimer = timer
+        sampleMaintenancePower()
+    }
+
+    private func sampleMaintenancePower() {
+        guard maintenanceTimer != nil, sleepBaseline != nil else {
+            cancelMaintenanceSampling()
+            return
+        }
+        refresh()
+        // 直供功率仅插电场景有意义；不插电（电池供电）时无直供样本也照常推进采样计数，
+        // 保证采样窗口能结束并生成放电待机区间。
+        if let direct = snapshot.directSupplyPowerW {
+            maintenanceSamples.append(max(0, direct))
+        }
+        maintenanceSampleTick += 1
+        if maintenanceSampleTick >= maintenanceSampleCount {
+            finalizeSleepSegment()
+        }
+    }
+
+    private func cancelMaintenanceSampling() {
+        maintenanceTimer?.invalidate()
+        maintenanceTimer = nil
+        maintenanceSamples = []
+        maintenanceSampleTick = 0
+    }
+
+    private func finalizeSleepSegment() {
+        guard let baseline = sleepBaseline, let wake = wakeBaseline else {
+            cancelMaintenanceSampling()
+            sleepBaseline = nil
+            wakeBaseline = nil
+            return
+        }
+        let minimumDirectPower = maintenanceSamples.min()
+        cancelMaintenanceSampling()
+        sleepBaseline = nil
+        wakeBaseline = nil
+
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: baseline.date,
+            capacityBeforeMAh: baseline.capacityMAh,
+            voltageBeforeV: baseline.voltageV,
+            adapterConnectedBefore: baseline.adapterConnected,
+            wakeTime: wake.date,
+            capacityAfterMAh: wake.capacityMAh,
+            voltageAfterV: wake.voltageV,
+            adapterConnectedAfter: wake.adapterConnected,
+            maintenanceDirectPowerW: minimumDirectPower
+        )
+        guard let segment = SleepEnergyCalculator.segment(from: input) else { return }
+
+        NotificationCenter.default.post(
+            name: .sleepSegmentRecorded,
+            object: self,
+            userInfo: ["segment": segment]
         )
     }
 
