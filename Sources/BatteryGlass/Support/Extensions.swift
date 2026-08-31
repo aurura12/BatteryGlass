@@ -6,6 +6,7 @@ extension Notification.Name {
     static let desktopWidgetVisibilityChanged = Notification.Name("BatteryGlass.desktopWidgetVisibilityChanged")
     static let resetDesktopWidgetPosition = Notification.Name("BatteryGlass.resetDesktopWidgetPosition")
     static let desktopWidgetStyleChanged = Notification.Name("BatteryGlass.desktopWidgetStyleChanged")
+    static let sleepSegmentRecorded = Notification.Name("BatteryGlass.sleepSegmentRecorded")
 }
 
 extension Double {

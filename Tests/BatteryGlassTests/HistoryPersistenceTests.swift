@@ -109,7 +109,72 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(payload.samples[0].consumptionPowerW, 24)
     }
 
+    func testV2PayloadLoadsWithEmptySleepSegments() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let json = """
+        {
+          "version": 2,
+          "samples": [
+            {"id":"00000000-0000-0000-0000-000000000001","timestamp":"2026-08-27T10:00:00Z","power":-20,"consumptionPowerW":24,"percent":50,"cycleCount":1,"healthPercent":100}
+          ],
+          "dailySummaries": []
+        }
+        """
+        try Data(json.utf8).write(to: fileURL)
+
+        let store = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+
+        XCTAssertTrue(store.sleepSegments.isEmpty)
+    }
+
+    func testSleepSegmentsRoundTripThroughV3Payload() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let store = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+
+        let segment = SleepSegment(
+            id: UUID(),
+            start: date("2026-08-27 23:00:00"),
+            end: date("2026-08-28 01:00:00"),
+            energyKWh: 0.02,
+            averagePowerW: 10,
+            mode: .charging
+        )
+        store.recordSleepSegment(segment)
+        store.flush()
+
+        let reloaded = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        XCTAssertEqual(reloaded.sleepSegments, [segment])
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
+    }
+
+    private func date(_ string: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: string)!
     }
 }

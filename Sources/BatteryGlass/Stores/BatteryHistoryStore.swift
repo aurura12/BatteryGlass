@@ -7,11 +7,13 @@ import Observation
 final class BatteryHistoryStore {
     private(set) var samples: [HistorySample] = []
     private(set) var dailySummaries: [DailySummary] = []
+    private(set) var sleepSegments: [SleepSegment] = []
 
     private let settings: AppSettings
     private let fileURL: URL
     private var observer: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
+    private var sleepSegmentObserver: NSObjectProtocol?
     private var lastRecord = Date.distantPast
     private var lastCycleCount = -1
     private var lastHealth: Double?
@@ -55,6 +57,17 @@ final class BatteryHistoryStore {
                 self?.flush()
             }
         }
+
+        sleepSegmentObserver = NotificationCenter.default.addObserver(
+            forName: .sleepSegmentRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let segment = notification.userInfo?["segment"] as? SleepSegment else { return }
+            MainActor.assumeIsolated {
+                self?.recordSleepSegment(segment)
+            }
+        }
     }
 
     func record(_ snapshot: BatterySnapshot) {
@@ -95,6 +108,14 @@ final class BatteryHistoryStore {
         HistoryRetention.samples(forDay: date, from: samples)
     }
 
+    /// 记录一次待机区间：将其能量按跨天比例并入每日耗电量，并持久化。
+    func recordSleepSegment(_ segment: SleepSegment) {
+        sleepSegments.append(segment)
+        sleepSegments.sort { $0.start < $1.start }
+        addSleepEnergy(segment.energyKWh, from: segment.start, to: segment.end)
+        persist()
+    }
+
     func summaries(lastDays: Int) -> [DailySummary] {
         guard let cutoff = Calendar.current.date(byAdding: .day, value: -lastDays, to: Date()) else {
             return dailySummaries
@@ -112,6 +133,7 @@ final class BatteryHistoryStore {
     func clearHistory() {
         samples = []
         dailySummaries = []
+        sleepSegments = []
         lastRecordedSample = nil
         lastSamplesPrunedDay = nil
         lastPersistenceScheduledAt = .distantPast
@@ -135,6 +157,8 @@ final class BatteryHistoryStore {
         var version: Int
         var samples: [HistorySample]
         var dailySummaries: [DailySummary]
+        // v3 新增；可选以兼容 v2 旧文件（缺失时解码为 nil）。
+        var sleepSegments: [SleepSegment]?
     }
 
     private func load() {
@@ -154,6 +178,9 @@ final class BatteryHistoryStore {
             dailySummaries = payload.dailySummaries
         } else {
             dailySummaries = summaries(from: samples)
+        }
+        if payload.version >= 3 {
+            sleepSegments = payload.sleepSegments ?? []
         }
         let sanitizedSummaries = DailyEnergySummaryPolicy.markSparseLegacySummariesIncomplete(
             dailySummaries,
@@ -197,9 +224,10 @@ final class BatteryHistoryStore {
 
     private func makePayload() -> HistoryPayload {
         HistoryPayload(
-            version: 2,
+            version: 3,
             samples: samples,
-            dailySummaries: dailySummaries
+            dailySummaries: dailySummaries,
+            sleepSegments: sleepSegments
         )
     }
 
@@ -298,6 +326,14 @@ final class BatteryHistoryStore {
         guard energy.isFinite, energy >= 0 else { return }
         guard let index = dailySummaries.firstIndex(where: { $0.dayKey == dayKey }) else { return }
         dailySummaries[index].energyKWh = (dailySummaries[index].energyKWh ?? 0) + energy
+    }
+
+    /// 把待机区间能量按跨天时长比例拆分到对应日期。
+    private func addSleepEnergy(_ energyKWh: Double, from start: Date, to end: Date) {
+        let split = SleepEnergyCalculator.dailyEnergySplit(energyKWh: energyKWh, from: start, to: end)
+        for (dayKey, energy) in split {
+            addEnergy(energy, to: dayKey)
+        }
     }
 }
 

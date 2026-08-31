@@ -14,7 +14,10 @@ struct HistoryView: View {
                     range: $energyRange
                 )
 
-                TodayPowerChart(samples: history.samplesForDay(Date()))
+                TodayPowerChart(
+                    samples: history.samplesForDay(Date()),
+                    sleepSegments: history.sleepSegments
+                )
 
                 HealthTrendChart(summaries: history.allSummaries())
 
@@ -322,16 +325,20 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let energySamples: [HistorySample]
     let chartSamples: [HistorySample]
+    let sleepSegments: [SleepSegment]
     let scrollStartDate: Date
     let scrollEndDate: Date
     @State private var scrollPosition: Date
     @State private var hoveredSample: HistorySample?
     @State private var hoverLocation: CGPoint?
+    /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
+    private let hoverMaximumGap: TimeInterval = 180
 
-    init(samples: [HistorySample]) {
+    init(samples: [HistorySample], sleepSegments: [SleepSegment]) {
         let chartData = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
         self.energySamples = chartData.energySamples
         self.chartSamples = chartData.chartSamples
+        self.sleepSegments = sleepSegments
         let bounds = PowerChartWindow.scrollBounds(for: chartData.energySamples)
         let start = bounds?.start ?? Date()
         let end = bounds?.end ?? start
@@ -360,27 +367,37 @@ struct TodayPowerChart: View {
             } else {
                 VStack(spacing: 4) {
                     Chart {
-                        ForEach(visibleChartSamples) { sample in
-                            AreaMark(
-                                x: .value("时间", sample.timestamp),
-                                y: .value("功率", sample.consumptionPowerW ?? 0)
+                        ForEach(sleepSegments) { segment in
+                            RectangleMark(
+                                xStart: .value("待机开始", segment.start),
+                                xEnd: .value("待机结束", segment.end)
                             )
-                            .interpolationMethod(.linear)
-                            .foregroundStyle(
-                                LinearGradient(
-                                    colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
+                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.07))
+                        }
 
-                            LineMark(
-                                x: .value("时间", sample.timestamp),
-                                y: .value("功率", sample.consumptionPowerW ?? 0)
-                            )
-                            .interpolationMethod(.linear)
-                            .foregroundStyle(DesignTokens.dataBlue)
-                            .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        ForEach(Array(displaySegments.enumerated()), id: \.offset) { _, segment in
+                            ForEach(segment) { sample in
+                                AreaMark(
+                                    x: .value("时间", sample.timestamp),
+                                    y: .value("功率", sample.consumptionPowerW ?? 0)
+                                )
+                                .interpolationMethod(.linear)
+                                .foregroundStyle(
+                                    LinearGradient(
+                                        colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+
+                                LineMark(
+                                    x: .value("时间", sample.timestamp),
+                                    y: .value("功率", sample.consumptionPowerW ?? 0)
+                                )
+                                .interpolationMethod(.linear)
+                                .foregroundStyle(DesignTokens.dataBlue)
+                                .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            }
                         }
 
                         RuleMark(y: .value("零线", 0))
@@ -428,6 +445,18 @@ struct TodayPowerChart: View {
                                             y: min(max(hoverLocation.y - 26, 18), geometry.size.height - 18)
                                         )
                                         .allowsHitTesting(false)
+                                }
+
+                                ForEach(sleepSegments) { segment in
+                                    if let x = proxy.position(forX: segmentMidpoint(segment)),
+                                       let plotFrame = proxy.plotFrame {
+                                        sleepLabel(for: segment)
+                                            .position(
+                                                x: min(max(x, 70), geometry.size.width - 70),
+                                                y: geometry[plotFrame].minY + 16
+                                            )
+                                            .allowsHitTesting(false)
+                                    }
                                 }
                             }
                         }
@@ -477,8 +506,31 @@ struct TodayPowerChart: View {
         )
     }
 
-    private var visibleChartSamples: [HistorySample] {
-        PowerChartWindow.samples(in: visibleChartDomain, from: chartSamples)
+    /// 可见样本按待机区间过滤并按缺口断开后的连续段，缺口处不再连线。
+    private var displaySegments: [[HistorySample]] {
+        let visible = PowerChartWindow.samples(in: visibleChartDomain, from: chartSamples)
+        let filtered = PowerChartSegmentation.excludingSleepSegments(visible, sleepSegments: sleepSegments)
+        return PowerChartSegmentation.splitByGaps(filtered)
+    }
+
+    private func segmentMidpoint(_ segment: SleepSegment) -> Date {
+        segment.start.addingTimeInterval(segment.end.timeIntervalSince(segment.start) / 2)
+    }
+
+    private func sleepLabel(for segment: SleepSegment) -> some View {
+        let duration = BatteryFormatters.timeRemaining(segment.end.timeIntervalSince(segment.start))
+        let text: String
+        if let power = segment.averagePowerW {
+            text = "待机 \(duration) · 平均 \(String(format: "%.1f", power)) W（估算）"
+        } else {
+            text = "待机 \(duration)"
+        }
+        return Text(text)
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
     }
 
     private var scrollPositionBinding: Binding<Double> {
@@ -519,10 +571,20 @@ struct TodayPowerChart: View {
             }
 
             hoverLocation = location
-            hoveredSample = PowerChartInteraction.nearestSample(
+            guard let nearest = PowerChartInteraction.nearestSample(
                 to: timestamp,
                 from: energySamples
-            )
+            ) else {
+                hoveredSample = nil
+                return
+            }
+            // 待机缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
+            // 避免把待机前的功率误当成待机期间的测量值。
+            if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+                hoveredSample = nil
+                return
+            }
+            hoveredSample = nearest
         }
     }
 
@@ -714,6 +776,40 @@ struct PowerChartData {
         let step = Double(energySamples.count - 1) / Double(maximumDisplayedSamples - 1)
         self.chartSamples = (0..<maximumDisplayedSamples).map { index in
             energySamples[Int((Double(index) * step).rounded())]
+        }
+    }
+}
+
+/// 把样本按时间缺口切分为连续段，供功率曲线缺口处断开渲染。
+enum PowerChartSegmentation {
+    /// 相邻样本间隔超过 `maximumGap` 秒处断开，返回连续子段数组。
+    static func splitByGaps(
+        _ samples: [HistorySample],
+        maximumGap: TimeInterval = 300
+    ) -> [[HistorySample]] {
+        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        guard let first = sorted.first else { return [] }
+
+        var segments: [[HistorySample]] = [[first]]
+        for sample in sorted.dropFirst() {
+            guard let last = segments[segments.count - 1].last else { continue }
+            if sample.timestamp.timeIntervalSince(last.timestamp) > maximumGap {
+                segments.append([sample])
+            } else {
+                segments[segments.count - 1].append(sample)
+            }
+        }
+        return segments
+    }
+
+    /// 过滤掉落在任一待机区间时间范围内的样本。
+    static func excludingSleepSegments(
+        _ samples: [HistorySample],
+        sleepSegments: [SleepSegment]
+    ) -> [HistorySample] {
+        guard !sleepSegments.isEmpty else { return samples }
+        return samples.filter { sample in
+            !sleepSegments.contains { $0.start <= sample.timestamp && sample.timestamp <= $0.end }
         }
     }
 }
