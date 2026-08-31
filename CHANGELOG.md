@@ -2,6 +2,19 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-09-01]
+
+### 修复
+- 修复启动恢复时当天待机区间能量可能被覆盖丢失的问题：诊断日志回填触发全量重算今日耗电量时，重算值不含待机区间能量，会覆盖当天已累计的睡眠段耗电量。现重算后补回与今天有交集的待机区间能量（仅补今日份额，避免昨日重复累加）（BatteryHistoryStore.swift，新增 `restoreSleepEnergy(forToday:)`）。
+- 修复电量计电流为 0、回退遥测 BatteryPower 时丢弃实测符号、按状态猜测正负的问题：`signedMW` 已解析带符号功率（充电正/放电负），现直接采用实测符号，避免刚插电仍在放电、充满停充微放等瞬时状态错位时功率符号显示错误（BatteryMonitor.swift）。
+- 修复"清空历史数据"后采样节流状态未重置的问题：清空后 5 秒内（且循环/健康度无变化时）新样本会被节流跳过。现清空时一并重置 `lastRecord`/`lastCycleCount`/`lastHealth`，立即恢复记录（BatteryHistoryStore.swift）。
+- 修复登录项处于"待批准"状态时再次操作开关无引导的问题：系统状态为 requiresApproval 且用户期望开启时，返回 needsApproval 让设置页弹出「到系统设置批准」引导，不再静默无效（LoginItemService.swift）。
+- 修复历史每日汇总加载后未按日期排序的问题：`suffix(lastDays/90/30)` 等依赖升序的取数在旧文件/异常顺序下可能取错日期范围，加载时统一按日期排序（BatteryHistoryStore.swift）。
+- 修复 CSV 导出数值格式化依赖系统 locale 的问题：系统 locale 使用逗号小数分隔符（如 de_DE/fr_FR）时 `String(format:)` 输出 "3,5" 会破坏 CSV 列结构，现统一使用 POSIX locale 格式化数值（HistoryExporter.swift）。
+
+### 修改
+- README 数据来源说明同步：电量计电流为 0 时回退遥测 BatteryPower，功率符号直接采用遥测实测值，不再"按充放状态决定正负"。
+
 ## [2026-08-31]
 
 ### 新增

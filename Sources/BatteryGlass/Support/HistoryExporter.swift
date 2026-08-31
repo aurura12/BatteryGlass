@@ -7,11 +7,11 @@ enum HistoryExporter {
         let rows = samples.map { sample in
             [
                 Self.timeFormatter.string(from: sample.timestamp),
-                Self.csvField(String(format: "%.1f", sample.power)),
-                Self.csvField(sample.consumptionPowerW.map { String(format: "%.1f", $0) }),
-                Self.csvField(String(format: "%.0f", sample.percent)),
+                Self.csvField(Self.decimal(sample.power)),
+                Self.csvField(sample.consumptionPowerW.map { Self.decimal($0) }),
+                Self.csvField(Self.decimal(sample.percent, 0)),
                 Self.csvField("\(sample.cycleCount)"),
-                Self.csvField(sample.healthPercent.map { String(format: "%.1f", $0) })
+                Self.csvField(sample.healthPercent.map { Self.decimal($0) })
             ].joined(separator: ",")
         }
         return ([Self.header] + rows).joined(separator: "\n")
@@ -26,11 +26,11 @@ enum HistoryExporter {
             [
                 "采样",
                 Self.timeFormatter.string(from: sample.timestamp),
-                String(format: "%.1f", sample.power),
-                sample.consumptionPowerW.map { String(format: "%.1f", $0) } ?? "",
-                String(format: "%.0f", sample.percent),
+                Self.decimal(sample.power),
+                sample.consumptionPowerW.map { Self.decimal($0) } ?? "",
+                Self.decimal(sample.percent, 0),
                 "\(sample.cycleCount)",
-                sample.healthPercent.map { String(format: "%.1f", $0) } ?? "",
+                sample.healthPercent.map { Self.decimal($0) } ?? "",
                 "",
                 "",
                 "",
@@ -47,11 +47,11 @@ enum HistoryExporter {
                 "",
                 "",
                 "\(summary.maxCycleCount)",
-                summary.minHealthPercent.map { String(format: "%.1f", $0) } ?? "",
-                summary.energyKWh.map { String(format: "%.3f", $0) } ?? "",
-                String(format: "%.1f", summary.averagePower),
-                String(format: "%.1f", summary.maxPower),
-                String(format: "%.1f", summary.minPower),
+                summary.minHealthPercent.map { Self.decimal($0) } ?? "",
+                summary.energyKWh.map { Self.decimal($0, 3) } ?? "",
+                Self.decimal(summary.averagePower),
+                Self.decimal(summary.maxPower),
+                Self.decimal(summary.minPower),
                 "\(summary.sampleCount)"
             ].map(Self.csvField).joined(separator: ",")
         }
@@ -81,6 +81,12 @@ enum HistoryExporter {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+
+    /// 数值转字符串固定用 POSIX locale，避免系统 locale 使用逗号小数分隔符
+    /// （如 de_DE/fr_FR）时输出 "3,5" 破坏 CSV 的列结构。
+    private static func decimal(_ value: Double, _ digits: Int = 1) -> String {
+        String(format: "%.\(digits)f", locale: Locale(identifier: "en_US_POSIX"), value)
+    }
 
     /// 空值导出为空字段，其余按原样返回（数值字段不含逗号/引号，无需转义）。
     private static func csvField(_ value: String?) -> String {

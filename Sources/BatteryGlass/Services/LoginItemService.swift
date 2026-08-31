@@ -90,8 +90,14 @@ enum LoginItemService {
     /// 执行设置：根据期望状态注册/注销登录项，返回结果。
     @discardableResult
     static func apply(desiredEnabled: Bool) -> LoginItemApplyResult {
-        switch desiredAction(current: currentState, desiredEnabled: desiredEnabled) {
+        let state = currentState
+        switch desiredAction(current: state, desiredEnabled: desiredEnabled) {
         case .none:
+            // 系统状态为"待批准"且用户期望开启：无需重复注册，但要让界面
+            // 返回 needsApproval，引导用户去系统设置完成批准（否则开关静默无效）。
+            if state == .requiresApproval, desiredEnabled {
+                return .needsApproval
+            }
             return .applied
         case .register:
             do {

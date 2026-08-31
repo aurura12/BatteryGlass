@@ -137,6 +137,10 @@ final class BatteryHistoryStore {
         lastRecordedSample = nil
         lastSamplesPrunedDay = nil
         lastPersistenceScheduledAt = .distantPast
+        // 重置采样节流与显著变化基准，清空后立即恢复记录，避免头几条样本被跳过。
+        lastRecord = .distantPast
+        lastCycleCount = -1
+        lastHealth = nil
         persistenceQueue.sync {
             try? FileManager.default.removeItem(at: fileURL)
         }
@@ -175,7 +179,8 @@ final class BatteryHistoryStore {
         ) else { return }
         samples = payload.samples
         if payload.version >= 2 {
-            dailySummaries = payload.dailySummaries
+            // 统一按日期升序，保证依赖顺序的 suffix/UI 取最近 N 天正确。
+            dailySummaries = payload.dailySummaries.sorted { $0.date < $1.date }
         } else {
             dailySummaries = summaries(from: samples)
         }
@@ -199,6 +204,9 @@ final class BatteryHistoryStore {
                 from: samples,
                 allowedDayKeys: [BatteryFormatters.dayKey(for: Date())]
             )
+            // 上面的全量重算会整体覆盖今天的 energyKWh，而重算值不含待机区间能量；
+            // 补回与今天有交集的待机段，避免睡眠段耗电量在启动恢复时丢失。
+            restoreSleepEnergy(forToday: Date())
         }
 
         lastRecordedSample = samples.last
@@ -333,6 +341,24 @@ final class BatteryHistoryStore {
         let split = SleepEnergyCalculator.dailyEnergySplit(energyKWh: energyKWh, from: start, to: end)
         for (dayKey, energy) in split {
             addEnergy(energy, to: dayKey)
+        }
+    }
+
+    /// 把与今天有交集的待机区间能量补回今日汇总。
+    /// 用于全量重算（如诊断回填）覆盖今天的 energyKWh 之后，该重算值不含待机能量。
+    /// 只补今天份额：昨天/更早的汇总未被重算覆盖，其待机能量仍在原值中，重复累加会造成虚高。
+    private func restoreSleepEnergy(forToday now: Date) {
+        let todayKey = BatteryFormatters.dayKey(for: now)
+        let todayStart = Calendar.current.startOfDay(for: now)
+        for segment in sleepSegments where segment.end > todayStart {
+            let split = SleepEnergyCalculator.dailyEnergySplit(
+                energyKWh: segment.energyKWh,
+                from: segment.start,
+                to: segment.end
+            )
+            if let energy = split[todayKey] {
+                addEnergy(energy, to: todayKey)
+            }
         }
     }
 }

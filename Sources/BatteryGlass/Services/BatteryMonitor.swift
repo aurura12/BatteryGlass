@@ -102,12 +102,13 @@ final class BatteryMonitor {
         s.state = resolveState(io: io, ps: ps, isPresent: s.isPresent)
 
         // 功率：优先电池电气参数；电量计为 0 时使用系统遥测 BatteryPower。
+        // 遥测功率经 signedMW 解析后自带符号（充电为正、放电为负），直接采用实测
+        // 符号，不再按状态猜测，避免瞬时状态错位（如刚插电仍在放电、充满停充微放）
+        // 时功率符号显示错误。
         if io.current != 0 {
             s.current = io.current
         } else if io.telemetryBatteryPowerMW != 0 {
-            let magnitude = abs(io.telemetryBatteryPowerMW) / 1000
-            let sign: Double = (s.state == .charging) ? 1 : -1
-            s.telemetryPowerW = sign * magnitude
+            s.telemetryPowerW = io.telemetryBatteryPowerMW / 1000
             if s.voltage > 0 {
                 s.current = s.telemetryPowerW! / s.voltage
             }

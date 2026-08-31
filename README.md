@@ -78,7 +78,7 @@ design-system/batteryglass/  # ui-ux-pro-max 设计系统（MASTER.md）
 - `IOPowerSources`（IOPSCopyPowerSourcesInfo / IOPSGetPowerSourceDescription / IOPSGetTimeRemainingEstimate）：状态、容量、剩余时间、适配器
 - `AppleSmartBattery`（IOServiceMatching + IORegistryEntryCreateCFProperties）：`CycleCount`、`BatteryData.DesignCapacity`、`BatteryData.FullChargeCapacity`、`Voltage`、`InstantAmperage`、`Temperature`、`AdapterDetails`、`PowerTelemetryData`
 - 功率 = 电压(V) × 电流(A)，来自 `InstantAmperage`（充电为正、放电为负）
-- 当电量计电流为 0 时，回退到 `PowerTelemetryData.BatteryPower`（mW）并按充放状态决定正负
+- 当电量计电流为 0 时，回退到 `PowerTelemetryData.BatteryPower`（mW），直接采用遥测实测符号（充电为正、放电为负）
 
 ## UI 设计系统
 
