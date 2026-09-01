@@ -4,6 +4,14 @@ import XCTest
 
 @MainActor
 final class AppSettingsTests: XCTestCase {
+    func testMenuBarShowsBatteryPercentByDefault() {
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(AppSettings(defaults: defaults).menuBarDisplayMode, .percent)
+    }
+
     func testThresholdIsClampedToSliderRangeWhenLoadingStoredValue() {
         let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

@@ -107,7 +107,7 @@ final class AppSettings {
         desktopWidgetEnabled = defaults.object(forKey: Self.desktopWidgetKey) as? Bool ?? true
         desktopWidgetFrameString = defaults.string(forKey: Self.desktopWidgetFrameKey) ?? ""
         launchAtLoginEnabled = defaults.object(forKey: Self.launchAtLoginKey) as? Bool ?? false
-        menuBarDisplayMode = MenuBarDisplayMode(rawValue: defaults.string(forKey: Self.menuBarDisplayModeKey) ?? "") ?? .none
+        menuBarDisplayMode = MenuBarDisplayMode(rawValue: defaults.string(forKey: Self.menuBarDisplayModeKey) ?? "") ?? .percent
         showMainWindowAtLaunch = defaults.object(forKey: Self.showMainWindowAtLaunchKey) as? Bool ?? true
         adapterChangeNotificationsEnabled = defaults.object(forKey: Self.adapterChangeNotificationsKey) as? Bool ?? false
         desktopWidgetStyle = DesktopWidgetStyle(rawValue: defaults.string(forKey: Self.desktopWidgetStyleKey) ?? "") ?? .compact

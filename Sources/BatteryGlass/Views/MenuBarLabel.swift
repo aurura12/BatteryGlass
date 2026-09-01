@@ -6,7 +6,7 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             StatusBarIconView(snapshot: monitor.snapshot)
             if settings.menuBarDisplayMode != .none {
                 Text(labelText)
@@ -50,30 +50,39 @@ struct MenuBarLabel: View {
     }
 }
 
-/// 自定义状态栏图标：渐变圆角徽章 + 闪电，与系统电池图标明显区分。
+/// 菜单栏使用系统电池符号，避免 MenuBarExtra 对自绘 Shape 的渲染差异。
+enum MenuBarBatterySymbol {
+    static func name(for snapshot: BatterySnapshot) -> String {
+        if snapshot.state == .charging {
+            return "battery.100percent.bolt"
+        }
+        if snapshot.state == .unknown {
+            return "battery.0percent"
+        }
+
+        switch snapshot.percent {
+        case 87.5...:
+            return "battery.100percent"
+        case 62.5..<87.5:
+            return "battery.75percent"
+        case 37.5..<62.5:
+            return "battery.50percent"
+        case 12.5..<37.5:
+            return "battery.25percent"
+        default:
+            return "battery.0percent"
+        }
+    }
+}
+
 struct StatusBarIconView: View {
     let snapshot: BatterySnapshot
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: BatteryStyling.gradient(for: snapshot),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-                        .strokeBorder(.white.opacity(0.4), lineWidth: 0.5)
-                )
-                .shadow(color: BatteryStyling.tint(for: snapshot).opacity(0.5), radius: 2, y: 1)
-
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 8, weight: .heavy))
-                .foregroundStyle(.white)
-        }
-        .frame(width: 15, height: 15)
+        Image(systemName: MenuBarBatterySymbol.name(for: snapshot))
+            .font(.system(size: 15, weight: .medium))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(BatteryStyling.tint(for: snapshot))
+        .frame(width: 17, height: 15)
     }
 }
