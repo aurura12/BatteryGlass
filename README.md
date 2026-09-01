@@ -79,6 +79,8 @@ design-system/batteryglass/  # ui-ux-pro-max 设计系统（MASTER.md）
 - `AppleSmartBattery`（IOServiceMatching + IORegistryEntryCreateCFProperties）：`CycleCount`、`BatteryData.DesignCapacity`、`BatteryData.FullChargeCapacity`、`Voltage`、`InstantAmperage`、`Temperature`、`AdapterDetails`、`PowerTelemetryData`
 - 功率 = 电压(V) × 电流(A)，来自 `InstantAmperage`（充电为正、放电为负）
 - 当电量计电流为 0 时，回退到 `PowerTelemetryData.BatteryPower`（mW），直接采用遥测实测符号（充电为正、放电为负）
+- 每日耗电按“来源侧能量”统计：电池供电取电池放电能量，接入外部电源取适配器输入能量；系统睡眠优先使用 `AccumulatedWallEnergyEstimate` 的累计差值，计数器不可用时回退到电量差/唤醒后功率估算。
+- `PowerTelemetryData` 的累计字段属于未公开的系统遥测数据，单位和不同机型的行为必须用插座电表校准；诊断日志会保留原始 `AccumulatedWallEnergyEstimate`，回退结果会标记为估算。
 
 ## UI 设计系统
 

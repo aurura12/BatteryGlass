@@ -17,16 +17,30 @@ final class BatteryMonitor {
 
     // MARK: - 待机（睡眠）监听状态
 
-    /// 睡眠前基线：日期、电量、电压、是否插电。
-    private var sleepBaseline: (date: Date, capacityMAh: Double, voltageV: Double, adapterConnected: Bool)?
-    /// 唤醒瞬间基线：睡眠结束瞬间的数据，用于电量差法。
-    private var wakeBaseline: (date: Date, capacityMAh: Double, voltageV: Double, adapterConnected: Bool)?
+    /// 睡眠前基线：日期、电量、电压、供电状态及累计遥测计数。
+    private var sleepBaseline: (
+        date: Date,
+        capacityMAh: Double,
+        voltageV: Double,
+        adapterConnected: Bool,
+        state: PowerState,
+        telemetryCounters: PowerTelemetryCounters
+    )?
+    /// 唤醒瞬间基线：睡眠结束瞬间的数据，用于计数器差值和回退计算。
+    private var wakeBaseline: (
+        date: Date,
+        capacityMAh: Double,
+        voltageV: Double,
+        adapterConnected: Bool,
+        telemetryCounters: PowerTelemetryCounters
+    )?
     /// 唤醒后延迟采样得到的直供功率样本（W）。
     private var maintenanceSamples: [Double] = []
     private var maintenanceSampleTick = 0
     private var maintenanceTimer: Timer?
     private let maintenanceSampleInterval: TimeInterval = 5
     private let maintenanceSampleCount = 6
+    private var latestTelemetryCounters = PowerTelemetryCounters(accumulatedWallEnergyEstimate: nil)
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -64,6 +78,7 @@ final class BatteryMonitor {
     func refresh() {
         let io = readSmartBattery()
         let ps = readPowerSources()
+        latestTelemetryCounters = io.telemetryCounters
 
         var s = BatterySnapshot(timestamp: Date())
         s.isPresent = io.batteryInstalled || ps.isPresent
@@ -139,30 +154,30 @@ final class BatteryMonitor {
         s.adapterInputPowerW = resolved.adapterInputPowerW
 
         if settings.powerDiagnosticsLoggingEnabled {
-            PowerDiagnosticsLogger.shared.record(
-                PowerDiagnosticsSample(
-                    timestamp: s.timestamp,
-                    state: s.state,
-                    adapterConnected: s.adapterConnected,
-                    isCharging: io.isCharging,
-                    batteryVoltageV: s.voltage,
-                    batteryCurrentA: s.current,
-                    batteryPowerW: s.power,
-                    telemetryBatteryPowerW: io.telemetryBatteryPowerMW.nilIfZero.map { $0 / 1000 },
-                    systemPowerInW: io.telemetrySystemPowerMW.nilIfZero.map { $0 / 1000 },
-                    systemLoadW: io.telemetrySystemLoadMW.nilIfZero.map { $0 / 1000 },
-                    systemVoltageInV: io.telemetrySystemVoltageInMV.nilIfZero.map { $0 / 1000 },
-                    systemCurrentInA: io.telemetrySystemCurrentInMA.nilIfZero.map { $0 / 1000 },
-                    adapterWatts: s.adapterWatts,
-                    adapterVoltageV: s.adapterVoltage,
-                    adapterCurrentA: s.adapterCurrent,
-                    snapshotSystemPowerW: s.systemPowerW,
-                    chargingPowerW: s.chargingPowerW,
-                    directSupplyPowerW: s.directSupplyPowerW,
-                    adapterOutputPowerW: s.adapterOutputPowerW,
-                    consumptionPowerW: s.consumptionPowerW
-                )
+            let diagnosticSample = PowerDiagnosticsSample(
+                timestamp: s.timestamp,
+                state: s.state,
+                adapterConnected: s.adapterConnected,
+                isCharging: io.isCharging,
+                batteryVoltageV: s.voltage,
+                batteryCurrentA: s.current,
+                batteryPowerW: s.power,
+                telemetryBatteryPowerW: io.telemetryBatteryPowerMW.nilIfZero.map { $0 / 1000 },
+                systemPowerInW: io.telemetrySystemPowerMW.nilIfZero.map { $0 / 1000 },
+                systemLoadW: io.telemetrySystemLoadMW.nilIfZero.map { $0 / 1000 },
+                systemVoltageInV: io.telemetrySystemVoltageInMV.nilIfZero.map { $0 / 1000 },
+                systemCurrentInA: io.telemetrySystemCurrentInMA.nilIfZero.map { $0 / 1000 },
+                adapterWatts: s.adapterWatts,
+                adapterVoltageV: s.adapterVoltage,
+                adapterCurrentA: s.adapterCurrent,
+                snapshotSystemPowerW: s.systemPowerW,
+                chargingPowerW: s.chargingPowerW,
+                directSupplyPowerW: s.directSupplyPowerW,
+                adapterOutputPowerW: s.adapterOutputPowerW,
+                consumptionPowerW: s.consumptionPowerW,
+                accumulatedWallEnergyEstimate: io.telemetryCounters.accumulatedWallEnergyEstimate
             )
+            PowerDiagnosticsLogger.shared.record(diagnosticSample)
         }
 
         s.timeRemaining = estimateTimeRemaining(for: s, io: io, ps: ps)
@@ -189,7 +204,9 @@ final class BatteryMonitor {
             date: snapshot.timestamp,
             capacityMAh: snapshot.currentCapacityMAh,
             voltageV: snapshot.voltage,
-            adapterConnected: snapshot.adapterConnected
+            adapterConnected: snapshot.adapterConnected,
+            state: snapshot.state,
+            telemetryCounters: latestTelemetryCounters
         )
     }
 
@@ -200,7 +217,8 @@ final class BatteryMonitor {
             date: snapshot.timestamp,
             capacityMAh: snapshot.currentCapacityMAh,
             voltageV: snapshot.voltage,
-            adapterConnected: snapshot.adapterConnected
+            adapterConnected: snapshot.adapterConnected,
+            telemetryCounters: latestTelemetryCounters
         )
         startMaintenanceSampling()
     }
@@ -263,7 +281,10 @@ final class BatteryMonitor {
             capacityAfterMAh: wake.capacityMAh,
             voltageAfterV: wake.voltageV,
             adapterConnectedAfter: wake.adapterConnected,
-            maintenanceDirectPowerW: minimumDirectPower
+            maintenanceDirectPowerW: minimumDirectPower,
+            powerStateBefore: baseline.state,
+            wallEnergyCounterBefore: baseline.telemetryCounters.accumulatedWallEnergyEstimate,
+            wallEnergyCounterAfter: wake.telemetryCounters.accumulatedWallEnergyEstimate
         )
         guard let segment = SleepEnergyCalculator.segment(from: input) else { return }
 
@@ -608,6 +629,7 @@ final class BatteryMonitor {
         var telemetrySystemLoadMW = 0.0
         var telemetrySystemVoltageInMV = 0.0
         var telemetrySystemCurrentInMA = 0.0
+        var telemetryCounters = PowerTelemetryCounters(accumulatedWallEnergyEstimate: nil)
         var adapterWatts: Double?
         var adapterVoltage: Double?
         var adapterCurrent: Double?
@@ -670,6 +692,7 @@ final class BatteryMonitor {
             data.telemetrySystemLoadMW = Self.numberValue(telemetry["SystemLoad"])
             data.telemetrySystemVoltageInMV = Self.numberValue(telemetry["SystemVoltageIn"])
             data.telemetrySystemCurrentInMA = Self.numberValue(telemetry["SystemCurrentIn"])
+            data.telemetryCounters = Self.parsePowerTelemetryCounters(telemetry)
         }
 
         if let adapter = dict["AdapterDetails"] as? [String: Any] {
@@ -686,6 +709,13 @@ final class BatteryMonitor {
 
     private static func numberValue(_ value: Any?) -> Double {
         (value as? NSNumber)?.doubleValue ?? 0
+    }
+
+    nonisolated static func parsePowerTelemetryCounters(_ telemetry: [String: Any]) -> PowerTelemetryCounters {
+        PowerTelemetryCounters(
+            accumulatedWallEnergyEstimate: (telemetry["AccumulatedWallEnergyEstimate"] as? NSNumber)
+                .map(\.uint64Value)
+        )
     }
 
     private static func intValue(_ value: Any?) -> Int {

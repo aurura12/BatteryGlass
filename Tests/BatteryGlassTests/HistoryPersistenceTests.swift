@@ -166,6 +166,99 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(reloaded.sleepSegments, [segment])
     }
 
+    func testV3SleepSegmentWithoutMeasurementMethodDefaultsToFallback() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let json = """
+        {
+          "version": 3,
+          "samples": [],
+          "dailySummaries": [],
+          "sleepSegments": [
+            {
+              "id": "00000000-0000-0000-0000-000000000002",
+              "start": "2026-08-27T10:00:00Z",
+              "end": "2026-08-27T11:00:00Z",
+              "energyKWh": 0.02,
+              "averagePowerW": 20,
+              "mode": "discharging"
+            }
+          ]
+        }
+        """
+        try Data(json.utf8).write(to: fileURL)
+
+        let store = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+
+        XCTAssertEqual(store.sleepSegments.first?.measurementMethod, .fallbackEstimate)
+    }
+
+    func testDuplicateSleepSegmentIsCountedOnlyOnce() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+        let segment = SleepSegment(
+            id: UUID(),
+            start: date("2026-08-27 10:00:00"),
+            end: date("2026-08-27 11:00:00"),
+            energyKWh: 0.02,
+            averagePowerW: 20,
+            mode: .discharging
+        )
+
+        store.recordSleepSegment(segment)
+        store.recordSleepSegment(segment)
+
+        XCTAssertEqual(store.sleepSegments, [segment])
+    }
+
+    func testSleepSegmentDoesNotRecordWhenHistoryIsDisabled() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        settings.recordHistory = false
+        let store = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        let segment = SleepSegment(
+            id: UUID(),
+            start: date("2026-08-27 10:00:00"),
+            end: date("2026-08-27 11:00:00"),
+            energyKWh: 0.02,
+            averagePowerW: 20,
+            mode: .discharging
+        )
+
+        store.recordSleepSegment(segment)
+
+        XCTAssertTrue(store.sleepSegments.isEmpty)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

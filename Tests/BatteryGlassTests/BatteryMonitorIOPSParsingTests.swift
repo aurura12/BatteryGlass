@@ -162,4 +162,18 @@ final class BatteryMonitorIOPSParsingTests: XCTestCase {
             5_000
         )
     }
+
+    func testPowerTelemetryCountersPreserveRawUnsignedWallEnergy() {
+        let counters = BatteryMonitor.parsePowerTelemetryCounters([
+            "AccumulatedWallEnergyEstimate": NSNumber(value: UInt64(4_294_967_300))
+        ])
+
+        XCTAssertEqual(counters.accumulatedWallEnergyEstimate, 4_294_967_300)
+    }
+
+    func testPowerTelemetryCountersTreatMissingWallEnergyAsUnavailable() {
+        let counters = BatteryMonitor.parsePowerTelemetryCounters([:])
+
+        XCTAssertNil(counters.accumulatedWallEnergyEstimate)
+    }
 }

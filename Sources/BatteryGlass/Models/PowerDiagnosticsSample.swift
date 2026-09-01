@@ -21,4 +21,6 @@ struct PowerDiagnosticsSample: Codable, Sendable {
     let directSupplyPowerW: Double?
     let adapterOutputPowerW: Double?
     let consumptionPowerW: Double?
+    /// AppleSmartBattery 的原始累计墙上输入能量计数，用于硬件校准。
+    var accumulatedWallEnergyEstimate: UInt64? = nil
 }

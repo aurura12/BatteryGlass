@@ -160,6 +160,49 @@ final class SleepEnergyCalculatorTests: XCTestCase {
         XCTAssertNil(SleepEnergyCalculator.segment(from: input))
     }
 
+    func testPluggedDischargingSleepAddsBatteryDropToWallEnergyCounter() throws {
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 5000,
+            voltageBeforeV: 12,
+            adapterConnectedBefore: true,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 4000,
+            voltageAfterV: 12,
+            adapterConnectedAfter: true,
+            maintenanceDirectPowerW: nil,
+            powerStateBefore: .discharging,
+            wallEnergyCounterBefore: 1_000_000,
+            wallEnergyCounterAfter: 1_250_000
+        )
+
+        let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
+
+        // 墙上输入 0.25 kWh + 电池补充 1000 mAh × 12 V = 0.012 kWh。
+        XCTAssertEqual(segment.energyKWh, 0.262, accuracy: 0.0000001)
+        XCTAssertEqual(segment.measurementMethod, .telemetryCounter)
+    }
+
+    func testPluggedDischargingSleepFallsBackToBatteryDropPlusMaintenance() throws {
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 5000,
+            voltageBeforeV: 12,
+            adapterConnectedBefore: true,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 4000,
+            voltageAfterV: 12,
+            adapterConnectedAfter: true,
+            maintenanceDirectPowerW: 2,
+            powerStateBefore: .discharging
+        )
+
+        let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
+
+        XCTAssertEqual(segment.energyKWh, 0.014, accuracy: 0.0000001)
+        XCTAssertEqual(segment.measurementMethod, .fallbackEstimate)
+    }
+
     func testDailyEnergySplitAcrossMidnight() {
         let calendar = utcCalendar()
         let start = date("2026-08-27 23:00:00")

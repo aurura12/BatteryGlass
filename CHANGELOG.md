@@ -18,7 +18,8 @@
 - 修复 CSV 导出数值格式化依赖系统 locale 的问题：系统 locale 使用逗号小数分隔符（如 de_DE/fr_FR）时 `String(format:)` 输出 "3,5" 会破坏 CSV 列结构，现统一使用 POSIX locale 格式化数值（HistoryExporter.swift）。
 
 ### 修改
-- README 数据来源说明同步：电量计电流为 0 时回退遥测 BatteryPower，功率符号直接采用遥测实测值，不再"按充放状态决定正负"。
+- README 数据来源说明同步：电量计电流为 0 时回退遥测 BatteryPower，功率符号直接采用遥测实测值，不再“按充放状态决定正负”。
+- 待机能耗统计改为优先使用 `PowerTelemetryData.AccumulatedWallEnergyEstimate` 的累计差值；接电但电池仍放电时同时计入可观测的电池放电能量，计数器不可用时回退到带“估算”标记的电量差/维持功耗结果。诊断日志保留原始计数器，便于用插座电表校准各机型的计数器单位。
 
 ## [2026-08-31]
 

@@ -24,7 +24,8 @@ final class PowerDiagnosticsTests: XCTestCase {
             chargingPowerW: 45.4,
             directSupplyPowerW: 36.39,
             adapterOutputPowerW: 81.79,
-            consumptionPowerW: 81.79
+            consumptionPowerW: 81.79,
+            accumulatedWallEnergyEstimate: 4_294_967_300
         )
 
         let encoder = JSONEncoder()
@@ -37,5 +38,6 @@ final class PowerDiagnosticsTests: XCTestCase {
         XCTAssertEqual(decoded.systemLoadW, 91.6)
         XCTAssertEqual(decoded.chargingPowerW, 45.4)
         XCTAssertEqual(decoded.adapterOutputPowerW, 81.79)
+        XCTAssertEqual(decoded.accumulatedWallEnergyEstimate, 4_294_967_300)
     }
 }

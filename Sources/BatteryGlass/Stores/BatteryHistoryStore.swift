@@ -110,6 +110,9 @@ final class BatteryHistoryStore {
 
     /// 记录一次待机区间：将其能量按跨天比例并入每日耗电量，并持久化。
     func recordSleepSegment(_ segment: SleepSegment) {
+        guard settings.recordHistory else { return }
+        guard !sleepSegments.contains(where: { $0.id == segment.id }) else { return }
+
         sleepSegments.append(segment)
         sleepSegments.sort { $0.start < $1.start }
         addSleepEnergy(segment.energyKWh, from: segment.start, to: segment.end)

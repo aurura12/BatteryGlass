@@ -2,10 +2,10 @@ import Foundation
 
 /// 待机能耗计算（纯函数，便于单元测试）。
 ///
-/// 睡眠期间进程被挂起、无法实时采样，唤醒后按「电量差法」补测：
+/// 睡眠期间进程被挂起、无法实时采样，优先使用系统累计遥测计数器补测：
 /// - 不插电待机：消耗全部来自电池，能量 = (睡眠前电量 − 唤醒后电量) × 平均电压；
-/// - 插电待机：充入电池能量（电量差，精确）+ 系统维持功耗（唤醒后延迟采样
-///   得到的最低直供功率 × 时长，估算）。
+/// - 插电待机：优先使用累计墙上输入能量；若同时发生电池放电，则把可观测的
+///   电池放电能量一并计入；计数器不可用时回退到电量差和唤醒后功率估算。
 ///
 /// 待机模式以**睡眠前（即睡眠期间）的供电状态**为准：睡眠中无法操作电源，
 /// `adapterConnectedBefore` 才是睡眠期间的实际供电状态；唤醒瞬间的插拔变化
@@ -24,6 +24,11 @@ enum SleepEnergyCalculator {
         var adapterConnectedAfter: Bool
         /// 唤醒后延迟采样得到的系统维持直供功率最小值（W）
         var maintenanceDirectPowerW: Double?
+        /// 睡眠前实际功率状态；用于识别接电但电池仍放电的混合状态。
+        var powerStateBefore: PowerState? = nil
+        /// 睡眠前后累计墙上输入能量计数器的原始值。
+        var wallEnergyCounterBefore: UInt64? = nil
+        var wallEnergyCounterAfter: UInt64? = nil
     }
 
     /// 待机时长低于该值（秒）时读数噪声占比过大，不生成区间。
@@ -41,21 +46,42 @@ enum SleepEnergyCalculator {
 
         let energyKWh: Double
         let mode: SleepSegmentMode
+        let measurementMethod: SleepEnergyMeasurementMethod
 
-        // 用睡眠前的供电状态决定模式：睡眠期间插电则能量来自电源（充入电量 + 维持功耗），
-        // 未插电则能量来自电池放电。若唤醒后插电掩盖了睡眠期间的放电量（唤醒后充电使
-        // 容量回升），容量差被钳为 0 后无能量，不生成区间（保守丢弃）。
-        if input.adapterConnectedBefore {
+        let wallCounterEnergy = PowerTelemetryEnergy.wallEnergyKWh(
+            before: input.wallEnergyCounterBefore,
+            after: input.wallEnergyCounterAfter,
+            duration: duration
+        )
+        let batteryDischargeKWh = max(0, input.capacityBeforeMAh - input.capacityAfterMAh)
+            * averageVoltage / 1_000_000
+
+        // 用睡眠前的供电状态决定模式：睡眠期间插电时优先采用墙上输入累计值；
+        // 未插电时采用电池放电量。若计数器不可用，才使用电量差和唤醒后功率回退。
+        if input.adapterConnectedBefore, let wallCounterEnergy {
+            // 混合供电时，累计墙上输入与电池下降量都属于 B 口径的能源贡献。
+            energyKWh = wallCounterEnergy
+                + (input.powerStateBefore == .discharging ? batteryDischargeKWh : 0)
+            mode = input.powerStateBefore == .discharging ? .discharging :
+                (input.capacityAfterMAh > input.capacityBeforeMAh ? .charging : .pluggedIdle)
+            measurementMethod = .telemetryCounter
+        } else if input.adapterConnectedBefore {
             let chargedInKWh = max(0, input.capacityAfterMAh - input.capacityBeforeMAh)
                 * averageVoltage / 1_000_000
             let maintenanceKWh = max(0, input.maintenanceDirectPowerW ?? 0)
                 * duration / 3_600_000
-            energyKWh = chargedInKWh + maintenanceKWh
-            mode = chargedInKWh > 0 ? .charging : .pluggedIdle
+            if input.powerStateBefore == .discharging {
+                energyKWh = batteryDischargeKWh + maintenanceKWh
+                mode = .discharging
+            } else {
+                energyKWh = chargedInKWh + maintenanceKWh
+                mode = chargedInKWh > 0 ? .charging : .pluggedIdle
+            }
+            measurementMethod = .fallbackEstimate
         } else {
-            energyKWh = max(0, input.capacityBeforeMAh - input.capacityAfterMAh)
-                * averageVoltage / 1_000_000
+            energyKWh = batteryDischargeKWh
             mode = .discharging
+            measurementMethod = .fallbackEstimate
         }
 
         guard energyKWh.isFinite, energyKWh > 0 else { return nil }
@@ -66,7 +92,8 @@ enum SleepEnergyCalculator {
             end: input.wakeTime,
             energyKWh: energyKWh,
             averagePowerW: energyKWh * 3_600_000 / duration,
-            mode: mode
+            mode: mode,
+            measurementMethod: measurementMethod
         )
     }
 

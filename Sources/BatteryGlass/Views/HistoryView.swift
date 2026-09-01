@@ -524,7 +524,8 @@ struct TodayPowerChart: View {
         let duration = BatteryFormatters.timeRemaining(segment.end.timeIntervalSince(segment.start))
         let text: String
         if let power = segment.averagePowerW {
-            text = "待机 \(duration) · 平均 \(String(format: "%.1f", power)) W（估算）"
+            let methodLabel = segment.measurementMethod == .fallbackEstimate ? "（估算）" : ""
+            text = "待机 \(duration) · 平均 \(String(format: "%.1f", power)) W\(methodLabel)"
         } else {
             text = "待机 \(duration)"
         }
