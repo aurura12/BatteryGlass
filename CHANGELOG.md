@@ -5,6 +5,11 @@
 ## [2026-09-01]
 
 ### 修复
+- 修复今日功率曲线跨天后时间窗口错乱的问题：`@State scrollPosition` 只在视图首次创建时初始化，应用跨天持续运行后样本换成新一天但滑块位置停留在昨天（用户曾滚离末尾时自动跟随不成立），图表窗口会停留在昨天的时间点显示空白/错位。现按日期给今日功率曲线加 `id`，跨天后强制重建视图并重置滑块（HistoryView.swift）。
+- 修复遥测功率回退时的强制解包隐患：`s.telemetryPowerW!` 是全项目唯一强制解包点，改为局部常量后再参与运算（BatteryMonitor.swift）。
+- 修复状态判定与功率符号数据源不一致的问题：`resolveState` 的电流判定原来只用电量计/IOPS 原始值，电量计电流为 0 而遥测 BatteryPower 为负（放电）时会把"放电中"误判为"已接通电源"。现与 `refresh()` 统一为三级回退（电量计 → 遥测功率/电压 → IOPS）（BatteryMonitor.swift）。
+- 修复历史数据 JSON 导出版本落后的问题：导出版本由 2 升至 3，与 history.json 一致并包含待机区间（SleepSegment），未来导入不丢睡眠段能耗（HistoryExporter.swift、SettingsView.swift、HistoryExporterTests.swift）。
+- 修复电池健康趋势图 y 轴上限固定 100% 的问题：新电池健康度可能超过 100%（满充容量高于设计容量），数据点会被裁剪到绘图区外，现上限随数据动态扩展（HistoryView.swift）。
 - 修复启动恢复时当天待机区间能量可能被覆盖丢失的问题：诊断日志回填触发全量重算今日耗电量时，重算值不含待机区间能量，会覆盖当天已累计的睡眠段耗电量。现重算后补回与今天有交集的待机区间能量（仅补今日份额，避免昨日重复累加）（BatteryHistoryStore.swift，新增 `restoreSleepEnergy(forToday:)`）。
 - 修复电量计电流为 0、回退遥测 BatteryPower 时丢弃实测符号、按状态猜测正负的问题：`signedMW` 已解析带符号功率（充电正/放电负），现直接采用实测符号，避免刚插电仍在放电、充满停充微放等瞬时状态错位时功率符号显示错误（BatteryMonitor.swift）。
 - 修复"清空历史数据"后采样节流状态未重置的问题：清空后 5 秒内（且循环/健康度无变化时）新样本会被节流跳过。现清空时一并重置 `lastRecord`/`lastCycleCount`/`lastHealth`，立即恢复记录（BatteryHistoryStore.swift）。

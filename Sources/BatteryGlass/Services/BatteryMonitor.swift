@@ -108,9 +108,10 @@ final class BatteryMonitor {
         if io.current != 0 {
             s.current = io.current
         } else if io.telemetryBatteryPowerMW != 0 {
-            s.telemetryPowerW = io.telemetryBatteryPowerMW / 1000
+            let telemetryPower = io.telemetryBatteryPowerMW / 1000
+            s.telemetryPowerW = telemetryPower
             if s.voltage > 0 {
-                s.current = s.telemetryPowerW! / s.voltage
+                s.current = telemetryPower / s.voltage
             }
         } else {
             s.current = ps.current
@@ -279,7 +280,18 @@ final class BatteryMonitor {
         let external = io.externalConnected || ps.externalConnected
         let charging = io.isCharging || ps.isCharging
         let finishing = io.isFinishingCharge || ps.isFinishingCharge
-        let batteryCurrent = io.current != 0 ? io.current : ps.current
+        // 电流解析与 refresh() 中的三级回退保持一致（电量计 → 遥测功率/电压 → IOPS），
+        // 避免状态判定与功率符号采用不同数据源：电量计电流为 0 而遥测为负（放电）时，
+        // 若此处只用 IOPS 原始值会把"放电中"误判为"已接通电源"。
+        let batteryVoltage = io.voltage > 0 ? io.voltage : ps.voltage
+        let batteryCurrent: Double
+        if io.current != 0 {
+            batteryCurrent = io.current
+        } else if io.telemetryBatteryPowerMW != 0, batteryVoltage > 0 {
+            batteryCurrent = io.telemetryBatteryPowerMW / 1000 / batteryVoltage
+        } else {
+            batteryCurrent = ps.current
+        }
 
         if external {
             if charging || finishing {

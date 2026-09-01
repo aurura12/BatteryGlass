@@ -59,15 +59,20 @@ enum HistoryExporter {
         return ([Self.extendedHeader] + sampleRows + summaryRows).joined(separator: "\n")
     }
 
-    /// 生成 JSON（与 history.json 相同结构，版本 2，含每日汇总）。
-    static func jsonString(samples: [HistorySample], dailySummaries: [DailySummary]) -> String {
+    /// 生成 JSON（与 history.json 相同结构，版本 3，含每日汇总与待机区间）。
+    static func jsonString(
+        samples: [HistorySample],
+        dailySummaries: [DailySummary],
+        sleepSegments: [SleepSegment] = []
+    ) -> String {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let payload = ExportPayload(
-            version: 2,
+            version: 3,
             samples: samples,
-            dailySummaries: dailySummaries
+            dailySummaries: dailySummaries,
+            sleepSegments: sleepSegments
         )
         guard let data = try? encoder.encode(payload) else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
@@ -98,4 +103,6 @@ private struct ExportPayload: Codable {
     var version: Int
     var samples: [HistorySample]
     var dailySummaries: [DailySummary]
+    // v3 新增；可选以兼容 v2 旧文件。
+    var sleepSegments: [SleepSegment]?
 }

@@ -18,6 +18,9 @@ struct HistoryView: View {
                     samples: history.samplesForDay(Date()),
                     sleepSegments: history.sleepSegments
                 )
+                // 跨天后以新的一天重建视图，重置时间滑块位置，
+                // 避免 @State scrollPosition 停留在昨天的滚动位置导致曲线窗口错乱。
+                .id(BatteryFormatters.dayKey(for: Date()))
 
                 HealthTrendChart(summaries: history.allSummaries())
 
@@ -628,8 +631,11 @@ struct HealthTrendChart: View {
 
     private var yDomain: ClosedRange<Double> {
         let healthValues = healthEntries.compactMap(\.minHealthPercent)
-        let minimum = (healthValues.min() ?? 100) - 5
-        return min(max(minimum, 0), 99)...100
+        // 上限随数据动态扩展：健康度可能超过 100%（新电池满充容量高于设计容量），
+        // 固定 100% 会把数据点裁剪到绘图区外。
+        let maximum = max(100, healthValues.max() ?? 100)
+        let minimum = min(max((healthValues.min() ?? 100) - 5, 0), maximum - 1)
+        return minimum...maximum
     }
 
     var body: some View {

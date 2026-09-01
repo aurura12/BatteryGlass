@@ -211,7 +211,11 @@ struct SettingsView: View {
 
         let content = asCSV
             ? HistoryExporter.csvString(samples: history.samples, dailySummaries: history.dailySummaries)
-            : HistoryExporter.jsonString(samples: history.samples, dailySummaries: history.dailySummaries)
+            : HistoryExporter.jsonString(
+                samples: history.samples,
+                dailySummaries: history.dailySummaries,
+                sleepSegments: history.sleepSegments
+            )
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
         } catch {
