@@ -3,6 +3,18 @@ import XCTest
 @testable import BatteryGlass
 
 final class PowerChartInteractionTests: XCTestCase {
+    func testDailyDetailsStartsCollapsedAndToggles() {
+        var state = DailyDetailsDisclosureState()
+
+        XCTAssertFalse(state.isExpanded)
+
+        state.toggle()
+        XCTAssertTrue(state.isExpanded)
+
+        state.toggle()
+        XCTAssertFalse(state.isExpanded)
+    }
+
     func testEnergyGroupingUsesMatchingChartTitle() {
         XCTAssertEqual(EnergyGrouping.day.chartTitle, "每日耗电量")
         XCTAssertEqual(EnergyGrouping.week.chartTitle, "每周耗电量")

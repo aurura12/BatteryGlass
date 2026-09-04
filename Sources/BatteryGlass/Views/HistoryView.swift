@@ -68,11 +68,20 @@ enum DailyEnergyMetricOrder {
     static let titles = [today, average, total]
 }
 
+struct DailyDetailsDisclosureState {
+    private(set) var isExpanded = false
+
+    mutating func toggle() {
+        isExpanded.toggle()
+    }
+}
+
 struct DailyEnergyComparisonChart: View {
     let summaries: [DailySummary]
     @Binding var range: EnergyHistoryRange
     @State private var grouping: EnergyGrouping = .day
     @State private var hoveredAggregate: EnergyAggregate?
+    @State private var dailyDetailsState = DailyDetailsDisclosureState()
 
     private var energySummaries: [DailySummary] {
         summaries.filter { $0.energyKWh != nil }
@@ -305,20 +314,42 @@ struct DailyEnergyComparisonChart: View {
         VStack(spacing: DesignTokens.spacingXS) {
             Divider()
 
-            // 只渲染最近 30 天，避免长期使用后「全部」范围渲染数千行。
-            ForEach(summaries.suffix(30).reversed()) { summary in
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    dailyDetailsState.toggle()
+                }
+            } label: {
                 HStack {
-                    Text(summary.dayKey)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .monospacedDigit()
+                    Text("每日明细")
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(DesignTokens.dataBlue)
+                    Image(systemName: dailyDetailsState.isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("每日明细")
+            .accessibilityValue(dailyDetailsState.isExpanded ? "已展开" : "已收起")
+
+            if dailyDetailsState.isExpanded {
+                // 只渲染最近 30 天，避免长期使用后「全部」范围渲染数千行。
+                ForEach(summaries.suffix(30).reversed()) { summary in
+                    HStack {
+                        Text(summary.dayKey)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(DesignTokens.dataBlue)
+                    }
+                    .padding(.vertical, 2)
+                }
             }
         }
         .padding(.top, DesignTokens.spacingXS)
