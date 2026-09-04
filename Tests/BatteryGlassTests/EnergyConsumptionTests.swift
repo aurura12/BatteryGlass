@@ -230,6 +230,23 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
     }
 
+    func testSystemLoadIsPreferredDuringPlugInTransitionWithStaleNegativeBatteryPower() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 36_000,
+            adapterConnected: true,
+            state: .pluggedIn,
+            systemPowerInMW: 80_000,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: -24_000,
+            electricalPowerW: -24,
+            previous: 50,
+            previousAdapterConnected: true
+        )
+
+        XCTAssertEqual(result.systemPowerW ?? 0, 36, accuracy: 0.0001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
+    }
+
     func testSystemPowerUsesAdapterInputMinusChargeWhenPlugged() {
         let result = BatteryMonitor.resolvedSystemPowerW(
             systemLoadMW: 0,
@@ -245,6 +262,23 @@ final class EnergyConsumptionTests: XCTestCase {
 
         XCTAssertEqual(result.systemPowerW ?? 0, 50, accuracy: 0.0001)
         XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
+    }
+
+    func testChargingElectricalPowerWinsOverConflictingNegativeTelemetry() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 83_715,
+            adapterConnected: true,
+            state: .charging,
+            systemPowerInMW: 69_034,
+            chargingPowerW: 50.809,
+            telemetryBatteryPowerMW: -14_681,
+            electricalPowerW: 50.809,
+            previous: 50,
+            previousAdapterConnected: true
+        )
+
+        XCTAssertEqual(result.systemPowerW ?? 0, 18.225, accuracy: 0.0001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 69.034, accuracy: 0.0001)
     }
 
     func testSystemPowerDoesNotRetainAdapterValueAfterUnplugging() {

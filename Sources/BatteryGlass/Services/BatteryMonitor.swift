@@ -301,32 +301,31 @@ final class BatteryMonitor {
         let external = io.externalConnected || ps.externalConnected
         let charging = io.isCharging || ps.isCharging
         let finishing = io.isFinishingCharge || ps.isFinishingCharge
-        // 电流解析与 refresh() 中的三级回退保持一致（电量计 → 遥测功率/电压 → IOPS），
-        // 避免状态判定与功率符号采用不同数据源：电量计电流为 0 而遥测为负（放电）时，
-        // 若此处只用 IOPS 原始值会把"放电中"误判为"已接通电源"。
-        let batteryVoltage = io.voltage > 0 ? io.voltage : ps.voltage
-        let batteryCurrent: Double
-        if io.current != 0 {
-            batteryCurrent = io.current
-        } else if io.telemetryBatteryPowerMW != 0, batteryVoltage > 0 {
-            batteryCurrent = io.telemetryBatteryPowerMW / 1000 / batteryVoltage
-        } else {
-            batteryCurrent = ps.current
-        }
+        return Self.resolvedPowerState(
+            externalConnected: external,
+            isCharging: charging,
+            isFinishingCharge: finishing,
+            isPresent: isPresent
+        )
+    }
 
-        if external {
-            if charging || finishing {
-                return .charging
-            }
-            if batteryCurrent < -0.01 {
-                return .discharging
-            }
-            return .pluggedIn
+    /// Resolve the user-facing power source state.
+    ///
+    /// The external-power signal is the authoritative source for the transition.
+    /// Battery current is intentionally not used here: during adapter insertion,
+    /// AppleSmartBattery can report the previous negative current for several
+    /// refreshes, which otherwise leaves the UI stuck on "battery power".
+    nonisolated static func resolvedPowerState(
+        externalConnected: Bool,
+        isCharging: Bool,
+        isFinishingCharge: Bool,
+        isPresent: Bool,
+        batteryCurrent: Double = 0
+    ) -> PowerState {
+        if externalConnected {
+            return isCharging || isFinishingCharge ? .charging : .pluggedIn
         }
-        if isPresent {
-            return .discharging
-        }
-        return .unknown
+        return isPresent ? .discharging : .unknown
     }
 
     private func estimateTimeRemaining(for s: BatterySnapshot, io: SmartBatteryData, ps: PowerSourcesData) -> TimeInterval? {
@@ -559,11 +558,13 @@ final class BatteryMonitor {
         telemetryBatteryPowerMW: Double,
         electricalPowerW: Double
     ) -> Double? {
-        if telemetryBatteryPowerMW.isFinite, telemetryBatteryPowerMW < 0 {
-            return abs(telemetryBatteryPowerMW) / 1000
-        }
         if electricalPowerW.isFinite, electricalPowerW < -0.01 {
             return abs(electricalPowerW)
+        }
+        // BatteryPower 在部分 Apple Silicon 机型上会相对 IsCharging 滞后；
+        // 只有电气功率不可判定时才使用该遥测回退，避免充电时被误判为放电。
+        if telemetryBatteryPowerMW.isFinite, telemetryBatteryPowerMW < 0 {
+            return abs(telemetryBatteryPowerMW) / 1000
         }
         return nil
     }
@@ -591,8 +592,15 @@ final class BatteryMonitor {
         let adapterInput = adapterConnected && systemPowerInMW.isFinite && systemPowerInMW > 0
             ? systemPowerInMW / 1000
             : nil
+        // 充电状态以 IsCharging/电气功率为准，不让滞后的 BatteryPower 覆盖；
+        // 已接通但未充电时才允许负功率遥测触发放电回退。
+        let batteryIsDischarging = state == .discharging ||
+            (state == .pluggedIn && dischargingSystemPowerW(
+                telemetryBatteryPowerMW: telemetryBatteryPowerMW,
+                electricalPowerW: electricalPowerW
+            ) != nil)
 
-        if let adapterInput, state != .discharging {
+        if let adapterInput, state != .discharging, !batteryIsDischarging {
             return (max(0, adapterInput - (chargingPowerW ?? 0)), adapterInput)
         }
         if systemLoadMW.isFinite && systemLoadMW > 0 {
