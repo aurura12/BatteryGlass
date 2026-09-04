@@ -450,17 +450,6 @@ struct TodayPowerChart: View {
                                         .allowsHitTesting(false)
                                 }
 
-                                ForEach(sleepSegments) { segment in
-                                    if let x = proxy.position(forX: segmentMidpoint(segment)),
-                                       let plotFrame = proxy.plotFrame {
-                                        sleepLabel(for: segment)
-                                            .position(
-                                                x: min(max(x, 70), geometry.size.width - 70),
-                                                y: geometry[plotFrame].minY + 16
-                                            )
-                                            .allowsHitTesting(false)
-                                    }
-                                }
                             }
                         }
                     }
@@ -514,27 +503,6 @@ struct TodayPowerChart: View {
         let visible = PowerChartWindow.samples(in: visibleChartDomain, from: chartSamples)
         let filtered = PowerChartSegmentation.excludingSleepSegments(visible, sleepSegments: sleepSegments)
         return PowerChartSegmentation.splitByGaps(filtered)
-    }
-
-    private func segmentMidpoint(_ segment: SleepSegment) -> Date {
-        segment.start.addingTimeInterval(segment.end.timeIntervalSince(segment.start) / 2)
-    }
-
-    private func sleepLabel(for segment: SleepSegment) -> some View {
-        let duration = BatteryFormatters.timeRemaining(segment.end.timeIntervalSince(segment.start))
-        let text: String
-        if let power = segment.averagePowerW {
-            let methodLabel = segment.measurementMethod == .fallbackEstimate ? "（估算）" : ""
-            text = "待机 \(duration) · 平均 \(String(format: "%.1f", power)) W\(methodLabel)"
-        } else {
-            text = "待机 \(duration)"
-        }
-        return Text(text)
-            .font(.system(size: 9, weight: .medium, design: .rounded))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
     }
 
     private var scrollPositionBinding: Binding<Double> {
