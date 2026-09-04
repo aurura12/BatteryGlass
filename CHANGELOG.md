@@ -2,6 +2,14 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-09-04]
+
+### 新增
+- 单实例保护：启动时检测同 bundle 的既有实例，终止旧实例并等待其 flush 落盘后由新实例接管；无法终止时激活对方并退出自己。避免多进程并发写 history.json 与 power-diagnostics.jsonl（如 build_and_run.sh 每次 `open -n` 重复运行时叠出多个实例，造成历史互相覆盖、诊断行交错损坏）（BatteryGlassApp.swift，新增 `enforceSingleInstance()`）。
+
+### 修改
+- 更新 CODEBUDDY.md 架构文档与当前代码对齐：补充全部通知名清单（Extensions.swift）、待机（睡眠）补测数据流、能耗计量纯函数集群（EnergyCalculator / SleepEnergyCalculator / PowerTelemetryEnergy / DailySummary / DailyEnergySummaryPolicy / EnergyAggregator 及对应测试）、LoginItemService 与 NotificationService 的职责；刷新 BatteryMonitor 纯函数清单与 history.json payload 版本（v2 → v3：samples + dailySummaries + sleepSegments）。
+
 ## [2026-09-01]
 
 ### 修复
