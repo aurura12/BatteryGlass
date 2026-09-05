@@ -15,6 +15,13 @@ final class BatteryMonitor {
     private var lastAdapterConnected: Bool?
     private let recentSampleLimit = 420
 
+    // MARK: - 「充满还需 / 剩余时间」估算状态
+
+    /// 充电速率滚动追踪：记录爬升点，在系统估计缺失时给出实测充速（%/s）。
+    private var chargeRateTracker = ChargeRateTracker()
+    /// 估算秒值平滑器：抑制 2Hz 跳变，状态切换即复位。
+    private var timeRemainingSmoother = TimeRemainingSmoother()
+
     // MARK: - 待机（睡眠）监听状态
 
     /// 睡眠前基线：日期、电量、电压、供电状态及累计遥测计数。
@@ -180,7 +187,34 @@ final class BatteryMonitor {
             PowerDiagnosticsLogger.shared.record(diagnosticSample)
         }
 
-        s.timeRemaining = estimateTimeRemaining(for: s, io: io, ps: ps)
+        // 充电/放电剩余时间估算：
+        // 先记录本拍充电进度（供短窗实测速率外推），再按防御顺序估算——
+        // 系统估计（IOPS）优先；充电缺失时用实测充速或真 mAh 缺口；放电缺失时
+        // 用真 mAh ÷ 放电电流。估算输入刻意使用 SmartBattery 侧真 mAh
+        // （io.*），不读被 IOPS 归一化容量污染的 s.currentCapacityMAh/maxCapacityMAh。
+        chargeRateTracker.record(
+            percent: s.percent,
+            at: s.timestamp,
+            isCharging: s.state == .charging
+        )
+        var estimateInput = TimeRemainingEstimator.Input()
+        estimateInput.state = s.state
+        estimateInput.percent = s.percent
+        estimateInput.isCharged = s.isCharged
+        estimateInput.currentCapacityMAh = io.currentCapacityMAh
+        estimateInput.fullChargeCapacityMAh = io.fullChargeCapacityMAh
+        estimateInput.currentA = s.current
+        estimateInput.systemTimeToEmpty = ps.timeToEmpty
+        estimateInput.systemTimeToFull = ps.timeToFull
+        if s.state == .discharging {
+            let iopsEstimate = IOPSGetTimeRemainingEstimate()
+            estimateInput.systemEstimateSeconds = (iopsEstimate.isFinite && iopsEstimate > 0) ? iopsEstimate : nil
+        }
+        estimateInput.chargePercentPerSecond = chargeRateTracker.slopePercentPerSecond(now: s.timestamp)
+        s.timeRemaining = timeRemainingSmoother.update(
+            raw: TimeRemainingEstimator.estimateSeconds(estimateInput),
+            state: s.state
+        )
 
         snapshot = s
         recordPowerSample(s)
@@ -326,27 +360,6 @@ final class BatteryMonitor {
             return isCharging || isFinishingCharge ? .charging : .pluggedIn
         }
         return isPresent ? .discharging : .unknown
-    }
-
-    private func estimateTimeRemaining(for s: BatterySnapshot, io: SmartBatteryData, ps: PowerSourcesData) -> TimeInterval? {
-        switch s.state {
-        case .discharging:
-            if let t = ps.timeToEmpty, t > 0 { return t }
-            let estimate = IOPSGetTimeRemainingEstimate()
-            if estimate > 0 { return estimate }
-            if s.current < -0.01, s.currentCapacityMAh > 0 {
-                return (s.currentCapacityMAh / 1000.0) / abs(s.current) * 3600.0
-            }
-        case .charging:
-            if let t = ps.timeToFull, t > 0 { return t }
-            if s.current > 0.01, s.maxCapacityMAh > 0 {
-                let missing = max(0, s.maxCapacityMAh - s.currentCapacityMAh) / 1000.0
-                return missing / s.current * 3600.0
-            }
-        case .pluggedIn, .unknown:
-            break
-        }
-        return nil
     }
 
     // MARK: - 低电量提醒

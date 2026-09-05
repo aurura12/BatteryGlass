@@ -173,9 +173,16 @@ struct DesktopWidgetView: View {
     }
 
     private var detailText: String {
-        if let remaining = snapshot.timeRemaining {
-            return "剩余 " + BatteryFormatters.timeRemaining(remaining)
+        if snapshot.state == .charging {
+            if let remaining = snapshot.timeRemaining {
+                return "充满还需 " + BatteryFormatters.timeRemaining(remaining)
+            }
+        } else if snapshot.state == .discharging {
+            if let remaining = snapshot.timeRemaining {
+                return "剩余 " + BatteryFormatters.timeRemaining(remaining)
+            }
         }
+        // 已接通电源 / 未知 / 充电但暂无估算 → 回退链。
         if snapshot.adapterConnected, let watts = snapshot.adapterWatts {
             return String(format: "适配器 %.0f W", watts)
         }
