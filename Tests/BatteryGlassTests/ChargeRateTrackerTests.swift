@@ -90,4 +90,26 @@ final class ChargeRateTrackerTests: XCTestCase {
 
         XCTAssertNil(tracker.slopePercentPerSecond(now: date(100)))
     }
+
+    func testRejectsWindowContainingWakeCatchUpJump() {
+        // 回归：整体斜率落在限内（(61-50)/220 = 0.05 %/s 恰为边界）但末段
+        // 10%/100s = 0.1 %/s 穿透限速（唤醒补跳），必须整窗拒绝。
+        var tracker = ChargeRateTracker()
+        tracker.record(percent: 50, at: date(0), isCharging: true)
+        tracker.record(percent: 51, at: date(120), isCharging: true)
+        tracker.record(percent: 61, at: date(220), isCharging: true)
+
+        XCTAssertNil(tracker.slopePercentPerSecond(now: date(220)))
+    }
+
+    func testAcceptsMultiStepNormalClimb() {
+        // 多段正常爬升（每段都不超过限速）不应被相邻校验误伤。
+        var tracker = ChargeRateTracker()
+        tracker.record(percent: 50, at: date(0), isCharging: true)
+        tracker.record(percent: 52, at: date(120), isCharging: true)
+        tracker.record(percent: 54, at: date(240), isCharging: true)
+
+        let slope = tracker.slopePercentPerSecond(now: date(240))
+        XCTAssertEqual(slope ?? 0, 4.0 / 240.0, accuracy: 0.000001)
+    }
 }

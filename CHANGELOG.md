@@ -6,7 +6,7 @@
 
 ### 修复
 - 修复「充满还需/剩余时间」兜底公式在 Apple Silicon 上把 IOPS 的 0-100 归一化容量当作 mAh 使用（`currentCapacityMAh/maxCapacityMAh` 被 88/100 污染），导致剩余时间被算成十几秒到几分钟的荒谬值。估算入口改为纯函数 `TimeRemainingEstimator`，直接消费 SmartBattery 侧真 mAh（`RemainingCapacity` / `FccComp2`·`AppleRawMaxCapacity`）与可靠 percent，不再读取被污染的容量快照字段；结果域校验 [60s, 48h]，越界显示 "--"（BatteryMonitor.swift、新增 `Models/TimeRemainingEstimator.swift`）。
-- 修复系统估计缺失/无效时充电剩余时间仍用瞬时电流线性外推、数值抖动大的问题：改为短窗实测 percent 斜率外推——`ChargeRateTracker` 仅记录充电爬升点、10 分钟滑窗、首尾斜率，并拦截 1% 步进噪声、明显回退与唤醒补跳（新增 `Models/ChargeRateTracker.swift`）。
+- 修复系统估计缺失/无效时充电剩余时间仍用瞬时电流线性外推、数值抖动大的问题：改为短窗实测 percent 斜率外推——`ChargeRateTracker` 仅记录充电爬升点、10 分钟滑窗、首尾斜率，并拦截 1% 步进噪声、明显回退与唤醒补跳；相邻爬升点之间速率同样不得超过限速，防止单段陡升被整体均值稀释后漏过（唤醒补跳污染）（新增 `Models/ChargeRateTracker.swift`）。
 - 修复放电态剩余时间同类单位 bug：兜底改为真 mAh `RemainingCapacity` ÷ 放电电流。
 - 修复估算值随 2Hz 刷新跳变：新增 `TimeRemainingSmoother`（EMA 平滑、首值直通、状态切换复位、nil 即清空、上下界钳制）（新增 `Models/TimeRemainingSmoother.swift`）。
 - 修复桌面小组件充电时文案误显示「剩余 X」（实际为充满所需时间）：按 `snapshot.state` 区分，「充电中」显示「充满还需 X」，与主面板文案统一（DesktopWidgetView.swift）。

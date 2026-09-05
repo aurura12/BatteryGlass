@@ -55,7 +55,10 @@ struct ChargeRateTracker {
     }
 
     /// 当前可用实测充速（%/s）。窗口内不足两个爬升点、首尾跨距不足、停滞过期、
-    /// 或斜率越界（<= 0 或 > 上限）时返回 nil。
+    /// 或任一相邻段/整体斜率越界（> 上限）时返回 nil。
+    ///
+    /// 相邻段校验的意义：仅校验首尾平均斜率时，唤醒补跳造成的单段陡升会被整体
+    /// 均值稀释（如 50→51→61，整体恰为 0.05 而末段 0.1 %/s），必须逐段检查。
     func slopePercentPerSecond(now: Date) -> Double? {
         var copy = self
         copy.prune(upTo: now)
@@ -68,6 +71,14 @@ struct ChargeRateTracker {
 
         let rate = (last.percent - first.percent) / span
         guard rate > 0, rate <= Self.maximumSlopePercentPerSecond else { return nil }
+
+        // 任意相邻爬升点之间的速率都不能超过上限；间隔非法或陡升穿透即整窗拒绝。
+        let adjacentWithinLimit = zip(copy.samples, copy.samples.dropFirst()).allSatisfy { pair in
+            let interval = pair.1.date.timeIntervalSince(pair.0.date)
+            guard interval > 0 else { return false }
+            return (pair.1.percent - pair.0.percent) / interval <= Self.maximumSlopePercentPerSecond
+        }
+        guard adjacentWithinLimit else { return nil }
         return rate
     }
 
