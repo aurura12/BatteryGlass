@@ -10,9 +10,12 @@
 - 修复放电态剩余时间同类单位 bug：兜底改为真 mAh `RemainingCapacity` ÷ 放电电流。
 - 修复估算值随 2Hz 刷新跳变：新增 `TimeRemainingSmoother`（EMA 平滑、首值直通、状态切换复位、nil 即清空、上下界钳制）（新增 `Models/TimeRemainingSmoother.swift`）。
 - 修复桌面小组件充电时文案误显示「剩余 X」（实际为充满所需时间）：按 `snapshot.state` 区分，「充电中」显示「充满还需 X」，与主面板文案统一（DesktopWidgetView.swift）。
+- 修复 Apple Silicon 上 IOPS 的 Current/Max Capacity（0-100 归一化值）被当作 mAh 存入快照容量字段的问题，统一快照容量为真 mAh 语义：SmartBattery（gas gauge）真值优先（RemainingCapacity / FccComp2·AppleRawMaxCapacity），IOPS 值仅当量级 >500（真 mAh，如 Intel）且 SmartBattery 缺失时才兜底。此前 88/100 归一值使睡眠能耗计量被低估数十倍并造成插电待机模式判定抖动、HealthKpiCard 显示「满充 100 / 设计 8694 mAh」。新增 `resolvedCapacityMAh` 纯函数，删除旧的 `resolvedMaxCapacity`（BatteryMonitor.swift）。
+- 修复 Apple Silicon 上 SmartBattery `RemainingCapacity` 缺失时当前容量读不到的问题：新增 `resolvedCurrentCapacityMAh`，回退到顶层 `AppleRawCurrentCapacity`（实测本机 6726 mAh）；「充满还需/剩余时间」估算输入同步受益（此前 AS 放电/充电容量兜底分支因 current=0 不可用）（BatteryMonitor.swift）。
 
 ### 新增
 - `TimeRemainingEstimatorTests`（15 用例）/ `ChargeRateTrackerTests`（8 用例）/ `TimeRemainingSmootherTests`（5 用例）：覆盖充电/放电各分支防御顺序、「归一化容量污染不再产出荒谬值」回归用例、斜率窗口过期与噪声拦截、EMA 平滑与状态复位。
+- `resolvedCapacityMAh` 四象限用例（SmartBattery 优先 / AS 归一化被拒 / Intel mAh 兜底 / 双真源取 SmartBattery）、`resolvedCurrentCapacityMAh` 键回退链用例（BatteryMonitorIOPSParsingTests、BatteryMonitorSmartBatteryTests）。
 
 ## [2026-09-04]
 

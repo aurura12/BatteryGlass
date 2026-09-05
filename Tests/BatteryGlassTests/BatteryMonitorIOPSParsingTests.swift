@@ -143,24 +143,45 @@ final class BatteryMonitorIOPSParsingTests: XCTestCase {
         XCTAssertEqual(data.adapterCurrent ?? 0, 4.5, accuracy: 0.0001)
     }
 
-    func testSmartBatteryFullChargeCapacityIsUsedWhenIOPSMaximumIsMissing() {
+    // MARK: - resolvedCapacityMAh（SmartBattery 真 mAh 优先，IOPS 量级兜底）
+    //
+    // 背景：Apple Silicon 上 IOPS 的 Current/Max Capacity 是 0-100 归一化值而非
+    // mAh；SmartBattery（gas gauge）在 AS 与 Intel 上均为真 mAh，故优先采用。
+    // IOPS 值仅当量级 > 500（真 mAh，如 Intel）且 SmartBattery 缺失时才兜底。
+
+    func testSmartBatteryCapacityIsUsedWhenIOPSMaximumIsMissing() {
         XCTAssertEqual(
-            BatteryMonitor.resolvedMaxCapacity(
-                powerSourcesMaximum: 0,
-                smartBatteryFullCharge: 4_321
-            ),
+            BatteryMonitor.resolvedCapacityMAh(powerSources: 0, smartBattery: 4_321),
             4_321
         )
     }
 
-    func testIOPSMaximumCapacityTakesPriorityOverSmartBatteryFallback() {
+    func testSmartBatteryCapacityTakesPriorityOverIOPS() {
+        // 两者皆为真 mAh 时，取值源从 IOPS 改为 SmartBattery（与 healthPercent
+        // 口径一致）。这是本次行为变化的显式回归点。
         XCTAssertEqual(
-            BatteryMonitor.resolvedMaxCapacity(
-                powerSourcesMaximum: 5_000,
-                smartBatteryFullCharge: 4_321
-            ),
-            5_000
+            BatteryMonitor.resolvedCapacityMAh(powerSources: 5_000, smartBattery: 4_321),
+            4_321
         )
+    }
+
+    func testNormalizedIOPSRejectedWhenSmartBatteryAvailable() {
+        // AS：IOPS 归一化（88/100）与 SmartBattery 真值并存 → 取 SmartBattery。
+        XCTAssertEqual(
+            BatteryMonitor.resolvedCapacityMAh(powerSources: 100, smartBattery: 7_544),
+            7_544
+        )
+    }
+
+    func testNormalizedIOPSRejectedWhenSmartBatteryMissing() {
+        // AS 且 SmartBattery 侧读不到时，归一化值（≤100）不得污染字段 → 0。
+        XCTAssertEqual(BatteryMonitor.resolvedCapacityMAh(powerSources: 88, smartBattery: 0), 0)
+    }
+
+    func testRealMAhIOPSUsedWhenSmartBatteryMissing() {
+        // Intel：IOPS 真 mAh（>500）在 SmartBattery 缺失时兜底。
+        XCTAssertEqual(BatteryMonitor.resolvedCapacityMAh(powerSources: 4_200, smartBattery: 0), 4_200)
+        XCTAssertEqual(BatteryMonitor.resolvedCapacityMAh(powerSources: 5_000, smartBattery: 0), 5_000)
     }
 
     func testPowerTelemetryCountersPreserveRawUnsignedWallEnergy() {

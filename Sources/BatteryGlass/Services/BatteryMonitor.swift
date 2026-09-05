@@ -90,10 +90,16 @@ final class BatteryMonitor {
         var s = BatterySnapshot(timestamp: Date())
         s.isPresent = io.batteryInstalled || ps.isPresent
 
-        s.currentCapacityMAh = ps.currentCapacityMAh > 0 ? ps.currentCapacityMAh : io.currentCapacityMAh
-        s.maxCapacityMAh = Self.resolvedMaxCapacity(
-            powerSourcesMaximum: ps.maxCapacityMAh,
-            smartBatteryFullCharge: io.fullChargeCapacityMAh
+        // 容量字段统一为真 mAh 语义：SmartBattery（gas gauge）在 AS 与 Intel 上
+        // 均为真 mAh，优先采用；IOPS 容量键在 Apple Silicon 上是 0-100 归一化值
+        // 而非 mAh，仅当量级像真 mAh（>500，如 Intel）且 SmartBattery 缺失时兜底。
+        s.currentCapacityMAh = Self.resolvedCapacityMAh(
+            powerSources: ps.currentCapacityMAh,
+            smartBattery: io.currentCapacityMAh
+        )
+        s.maxCapacityMAh = Self.resolvedCapacityMAh(
+            powerSources: ps.maxCapacityMAh,
+            smartBattery: io.fullChargeCapacityMAh
         )
         s.designCapacityMAh = ps.designCapacityMAh > 0 ? ps.designCapacityMAh : io.designCapacityMAh
         s.cycleCount = io.cycleCount > 0 ? io.cycleCount : ps.cycleCount
@@ -495,6 +501,9 @@ final class BatteryMonitor {
         data.isPresent = true
         let current = Self.numberValue(description[kIOPSCurrentCapacityKey as String])
         let maximum = Self.numberValue(description[kIOPSMaxCapacityKey as String])
+        // 注意：Apple Silicon 上 IOPS 的 Current/Max Capacity 是 0-100 归一化值而非
+        // mAh（单位不可信）。此处仅暂存原始值，mAh 语义统一发生在 refresh() 的
+        // resolvedCapacityMAh（SmartBattery 真值优先、IOPS 仅量级 >500 时兜底）。
         data.currentCapacityMAh = current
         data.maxCapacityMAh = maximum
         if maximum > 0 {
@@ -527,15 +536,20 @@ final class BatteryMonitor {
         return data
     }
 
-    nonisolated static func resolvedMaxCapacity(
-        powerSourcesMaximum: Double,
-        smartBatteryFullCharge: Double
-    ) -> Double {
-        if powerSourcesMaximum.isFinite, powerSourcesMaximum > 0 {
-            return powerSourcesMaximum
+    /// 统一「当前/满充容量」合并语义：返回值恒为真 mAh。
+    /// 背景：Apple Silicon 上 IOPS 的 Current/Max Capacity 是 0-100 归一化值而非 mAh，
+    /// 直接存入快照会污染睡眠能耗计量与 HealthKpiCard 文案。策略：
+    /// - SmartBattery（gas gauge）在 AS 与 Intel 上均为真 mAh → 优先采用（有限且 >0）；
+    /// - IOPS 仅在值 > 500 时视为真 mAh（Intel 且 SmartBattery 缺失时兜底）；
+    ///   归一化值 ≤100 一律拒绝，避免污染再次发生。
+    nonisolated static func resolvedCapacityMAh(powerSources: Double, smartBattery: Double) -> Double {
+        // 真 mAh 保守下界：Mac 电池满充 mAh 恒 >1000；归一化 IOPS 值 ≤100。
+        let mAhMagnitudeBound = 500.0
+        if smartBattery.isFinite, smartBattery > 0 {
+            return smartBattery
         }
-        if smartBatteryFullCharge.isFinite, smartBatteryFullCharge > 0 {
-            return smartBatteryFullCharge
+        if powerSources.isFinite, powerSources > mAhMagnitudeBound {
+            return powerSources
         }
         return 0
     }
@@ -561,6 +575,17 @@ final class BatteryMonitor {
         topLevelAppleRawMaxCapacity: Double
     ) -> Double {
         firstPositive(batteryFullChargeCapacity, batteryFccComp2, topLevelAppleRawMaxCapacity)
+    }
+
+    /// 解析电池当前剩余容量（mAh）。
+    /// Intel 读 `BatteryData["RemainingCapacity"]`；Apple Silicon 该键可能缺失，
+    /// 剩余容量位于顶层 `AppleRawCurrentCapacity`
+    /// （仿 resolvedFullChargeCapacityMAh 键位风格，提取为纯函数便于单元测试）。
+    nonisolated static func resolvedCurrentCapacityMAh(
+        batteryRemainingCapacity: Double,
+        topLevelAppleRawCurrentCapacity: Double
+    ) -> Double {
+        firstPositive(batteryRemainingCapacity, topLevelAppleRawCurrentCapacity)
     }
 
     nonisolated private static func firstPositive(_ values: Double...) -> Double {
@@ -690,9 +715,10 @@ final class BatteryMonitor {
 
         if let battery = dict["BatteryData"] as? [String: Any] {
             // 容量键在 Intel / Apple Silicon 上不一致：Intel 读 BatteryData 内
-            // DesignCapacity / FullChargeCapacity；Apple Silicon 缺 FullChargeCapacity，
-            // 设计容量在顶层 DesignCapacity / NominalChargeCapacity，满充容量在
-            // BatteryData["FccComp2"] / 顶层 AppleRawMaxCapacity，见 resolved* 解析函数。
+            // DesignCapacity / FullChargeCapacity / RemainingCapacity；Apple Silicon
+            // 缺 FullChargeCapacity，设计容量在顶层 DesignCapacity / NominalChargeCapacity，
+            // 满充容量在 BatteryData["FccComp2"] / 顶层 AppleRawMaxCapacity，剩余容量
+            // 可能缺 RemainingCapacity，回退顶层 AppleRawCurrentCapacity，见 resolved* 解析函数。
             data.designCapacityMAh = Self.resolvedDesignCapacityMAh(
                 batteryDesignCapacity: Self.numberValue(battery["DesignCapacity"]),
                 topLevelDesignCapacity: Self.numberValue(dict["DesignCapacity"]),
@@ -703,7 +729,10 @@ final class BatteryMonitor {
                 batteryFccComp2: Self.numberValue(battery["FccComp2"]),
                 topLevelAppleRawMaxCapacity: Self.numberValue(dict["AppleRawMaxCapacity"])
             )
-            data.currentCapacityMAh = Self.numberValue(battery["RemainingCapacity"])
+            data.currentCapacityMAh = Self.resolvedCurrentCapacityMAh(
+                batteryRemainingCapacity: Self.numberValue(battery["RemainingCapacity"]),
+                topLevelAppleRawCurrentCapacity: Self.numberValue(dict["AppleRawCurrentCapacity"])
+            )
             data.currentCapacityPercent = Self.numberValue(battery["CurrentCapacity"])
         }
 
