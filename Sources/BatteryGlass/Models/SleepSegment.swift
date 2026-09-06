@@ -31,9 +31,11 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
     var mode: SleepSegmentMode
     /// 记录该区间是由累计遥测还是回退估算得到。
     var measurementMethod: SleepEnergyMeasurementMethod = .fallbackEstimate
+    /// Whether a validated, physically calibrated counter factor was applied.
+    var isCalibrated: Bool = false
 
     private enum CodingKeys: String, CodingKey {
-        case id, start, end, energyKWh, averagePowerW, mode, measurementMethod
+        case id, start, end, energyKWh, averagePowerW, mode, measurementMethod, isCalibrated
     }
 
     init(
@@ -43,7 +45,8 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
         energyKWh: Double,
         averagePowerW: Double?,
         mode: SleepSegmentMode,
-        measurementMethod: SleepEnergyMeasurementMethod = .fallbackEstimate
+        measurementMethod: SleepEnergyMeasurementMethod = .fallbackEstimate,
+        isCalibrated: Bool = false
     ) {
         self.id = id
         self.start = start
@@ -52,6 +55,7 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
         self.averagePowerW = averagePowerW
         self.mode = mode
         self.measurementMethod = measurementMethod
+        self.isCalibrated = isCalibrated
     }
 
     init(from decoder: Decoder) throws {
@@ -66,6 +70,7 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
             SleepEnergyMeasurementMethod.self,
             forKey: .measurementMethod
         ) ?? .fallbackEstimate
+        isCalibrated = try container.decodeIfPresent(Bool.self, forKey: .isCalibrated) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -77,5 +82,6 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
         try container.encodeIfPresent(averagePowerW, forKey: .averagePowerW)
         try container.encode(mode, forKey: .mode)
         try container.encode(measurementMethod, forKey: .measurementMethod)
+        try container.encode(isCalibrated, forKey: .isCalibrated)
     }
 }

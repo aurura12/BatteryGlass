@@ -24,7 +24,15 @@ enum SleepEnergyCalculator {
         var adapterConnectedAfter: Bool
         /// 唤醒后延迟采样得到的系统维持直供功率最小值（W）
         var maintenanceDirectPowerW: Double?
-        /// 睡眠前实际功率状态；用于识别接电但电池仍放电的混合状态。
+        /// 唤醒后延迟采样得到的适配器总输入功率最小值（W）。
+        var maintenanceAdapterInputPowerW: Double? = nil
+        /// 睡眠前已由连续带符号样本确认的插电同时放电状态。
+        var batteryDischargingBefore: Bool = false
+        /// 校准后的墙上输入计数器比例；默认 1 表示未校准。
+        var wallEnergyCalibrationFactor: Double = 1.0
+        var wallEnergyIsCalibrated: Bool = false
+        /// Legacy source compatibility; runtime callers must use batteryDischargingBefore.
+        @available(*, deprecated, message: "Use batteryDischargingBefore")
         var powerStateBefore: PowerState? = nil
         /// 睡眠前后累计墙上输入能量计数器的原始值。
         var wallEnergyCounterBefore: UInt64? = nil
@@ -51,31 +59,36 @@ enum SleepEnergyCalculator {
         let wallCounterEnergy = PowerTelemetryEnergy.wallEnergyKWh(
             before: input.wallEnergyCounterBefore,
             after: input.wallEnergyCounterAfter,
-            duration: duration
+            duration: duration,
+            calibrationFactor: input.wallEnergyCalibrationFactor
         )
-        let batteryDischargeKWh = max(0, input.capacityBeforeMAh - input.capacityAfterMAh)
+        let capacityDeltaMAh = input.capacityAfterMAh - input.capacityBeforeMAh
+        guard capacityDeltaMAh.isFinite else { return nil }
+        let batteryDischargeKWh = max(0, -capacityDeltaMAh)
+            * averageVoltage / 1_000_000
+        let batteryChargeGainKWh = max(0, capacityDeltaMAh)
             * averageVoltage / 1_000_000
 
-        // 用睡眠前的供电状态决定模式：睡眠期间插电时优先采用墙上输入累计值；
-        // 未插电时采用电池放电量。若计数器不可用，才使用电量差和唤醒后功率回退。
+        // 用睡眠前的供电来源决定模式：睡眠期间插电时优先采用墙上输入累计值；
+        // 计数器不可用时，按电量净变化选择不重复的电源侧回退。
         if input.adapterConnectedBefore, let wallCounterEnergy {
             // 混合供电时，累计墙上输入与电池下降量都属于 B 口径的能源贡献。
             energyKWh = wallCounterEnergy
-                + (input.powerStateBefore == .discharging ? batteryDischargeKWh : 0)
-            mode = input.powerStateBefore == .discharging ? .discharging :
-                (input.capacityAfterMAh > input.capacityBeforeMAh ? .charging : .pluggedIdle)
+                + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
+            mode = input.batteryDischargingBefore ? .discharging :
+                (capacityDeltaMAh > 0 ? .charging : .pluggedIdle)
             measurementMethod = .telemetryCounter
         } else if input.adapterConnectedBefore {
-            let chargedInKWh = max(0, input.capacityAfterMAh - input.capacityBeforeMAh)
-                * averageVoltage / 1_000_000
-            let maintenanceKWh = max(0, input.maintenanceDirectPowerW ?? 0)
-                * duration / 3_600_000
-            if input.powerStateBefore == .discharging {
-                energyKWh = batteryDischargeKWh + maintenanceKWh
-                mode = .discharging
+            if capacityDeltaMAh > 0 {
+                energyKWh = batteryChargeGainKWh
+                    + powerEnergyKWh(input.maintenanceDirectPowerW, duration: duration)
+                mode = .charging
             } else {
-                energyKWh = chargedInKWh + maintenanceKWh
-                mode = chargedInKWh > 0 ? .charging : .pluggedIdle
+                energyKWh = powerEnergyKWh(
+                    input.maintenanceAdapterInputPowerW,
+                    duration: duration
+                ) + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
+                mode = input.batteryDischargingBefore ? .discharging : .pluggedIdle
             }
             measurementMethod = .fallbackEstimate
         } else {
@@ -93,8 +106,14 @@ enum SleepEnergyCalculator {
             energyKWh: energyKWh,
             averagePowerW: energyKWh * 3_600_000 / duration,
             mode: mode,
-            measurementMethod: measurementMethod
+            measurementMethod: measurementMethod,
+            isCalibrated: measurementMethod == .telemetryCounter && input.wallEnergyIsCalibrated
         )
+    }
+
+    private static func powerEnergyKWh(_ power: Double?, duration: TimeInterval) -> Double {
+        guard let power, power.isFinite, power > 0 else { return 0 }
+        return power * duration / 3_600_000
     }
 
     /// 取睡眠前后电压平均值；一侧为 0（读不到）时用另一侧。

@@ -17,13 +17,21 @@ enum PowerTelemetryEnergy {
     static func wallEnergyKWh(
         before: UInt64?,
         after: UInt64?,
-        duration: TimeInterval
+        duration: TimeInterval,
+        calibrationFactor: Double = 1.0
     ) -> Double? {
-        guard let before, let after, after >= before, duration > 0 else { return nil }
+        guard let before,
+              let after,
+              after >= before,
+              duration > 0,
+              calibrationFactor.isFinite,
+              calibrationFactor > 0 else {
+            return nil
+        }
         let rawDelta = after - before
         guard rawDelta > 0 else { return nil }
 
-        let energyKWh = Double(rawDelta) / rawUnitsPerKWh
+        let energyKWh = Double(rawDelta) / rawUnitsPerKWh * calibrationFactor
         let averagePowerW = energyKWh * 3_600_000 / duration
         guard energyKWh.isFinite,
               averagePowerW.isFinite,

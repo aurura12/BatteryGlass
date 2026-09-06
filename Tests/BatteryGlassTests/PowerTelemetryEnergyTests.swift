@@ -31,4 +31,26 @@ final class PowerTelemetryEnergyTests: XCTestCase {
             )
         )
     }
+
+    func testWallEnergyCounterAppliesCalibrationFactorAfterValidation() {
+        let energy = PowerTelemetryEnergy.wallEnergyKWh(
+            before: 1_000_000,
+            after: 1_250_000,
+            duration: 1_800,
+            calibrationFactor: 0.8
+        )
+
+        XCTAssertEqual(energy ?? 0, 0.2, accuracy: 0.0000001)
+    }
+
+    func testWallEnergyCounterRejectsInvalidCalibrationFactor() {
+        XCTAssertNil(
+            PowerTelemetryEnergy.wallEnergyKWh(
+                before: 1_000_000,
+                after: 1_250_000,
+                duration: 1_800,
+                calibrationFactor: 0
+            )
+        )
+    }
 }

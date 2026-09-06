@@ -34,7 +34,8 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             capacityAfterMAh: 6000,
             voltageAfterV: 12.6,
             adapterConnectedAfter: true,
-            maintenanceDirectPowerW: 2.0
+            maintenanceDirectPowerW: 2.0,
+            maintenanceAdapterInputPowerW: 70
         )
 
         let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
@@ -56,7 +57,8 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             capacityAfterMAh: 5000,
             voltageAfterV: 12.6,
             adapterConnectedAfter: true,
-            maintenanceDirectPowerW: 1.5
+            maintenanceDirectPowerW: nil,
+            maintenanceAdapterInputPowerW: 1.5
         )
 
         let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
@@ -171,7 +173,8 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             voltageAfterV: 12,
             adapterConnectedAfter: true,
             maintenanceDirectPowerW: nil,
-            powerStateBefore: .discharging,
+            maintenanceAdapterInputPowerW: 30,
+            batteryDischargingBefore: true,
             wallEnergyCounterBefore: 1_000_000,
             wallEnergyCounterAfter: 1_250_000
         )
@@ -194,13 +197,75 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             voltageAfterV: 12,
             adapterConnectedAfter: true,
             maintenanceDirectPowerW: 2,
-            powerStateBefore: .discharging
+            maintenanceAdapterInputPowerW: 30,
+            batteryDischargingBefore: true
         )
 
         let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
 
-        XCTAssertEqual(segment.energyKWh, 0.014, accuracy: 0.0000001)
+        XCTAssertEqual(segment.energyKWh, 0.042, accuracy: 0.0000001)
         XCTAssertEqual(segment.measurementMethod, .fallbackEstimate)
+    }
+
+    func testPluggedChargeFallbackPreservesChargeGainWhenDirectSampleIsMissing() throws {
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 3000,
+            voltageBeforeV: 12,
+            adapterConnectedBefore: true,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 4000,
+            voltageAfterV: 12,
+            adapterConnectedAfter: true,
+            maintenanceDirectPowerW: nil,
+            maintenanceAdapterInputPowerW: nil
+        )
+
+        let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
+
+        XCTAssertEqual(segment.energyKWh, 0.012, accuracy: 0.0000001)
+        XCTAssertEqual(segment.mode, .charging)
+    }
+
+    func testPluggedIdleWithoutAdapterSampleIsUnknown() {
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 5000,
+            voltageBeforeV: 12,
+            adapterConnectedBefore: true,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 5000,
+            voltageAfterV: 12,
+            adapterConnectedAfter: true,
+            maintenanceDirectPowerW: nil,
+            maintenanceAdapterInputPowerW: nil
+        )
+
+        XCTAssertNil(SleepEnergyCalculator.segment(from: input))
+    }
+
+    func testCalibratedCounterSegmentReportsCalibrationStatus() throws {
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 5000,
+            voltageBeforeV: 12,
+            adapterConnectedBefore: true,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 5000,
+            voltageAfterV: 12,
+            adapterConnectedAfter: true,
+            maintenanceDirectPowerW: nil,
+            maintenanceAdapterInputPowerW: nil,
+            wallEnergyCalibrationFactor: 0.8,
+            wallEnergyIsCalibrated: true,
+            wallEnergyCounterBefore: 1_000_000,
+            wallEnergyCounterAfter: 1_250_000
+        )
+
+        let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
+
+        XCTAssertEqual(segment.energyKWh, 0.2, accuracy: 0.0000001)
+        XCTAssertTrue(segment.isCalibrated)
     }
 
     func testDailyEnergySplitAcrossMidnight() {
