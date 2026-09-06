@@ -143,7 +143,7 @@ struct DailyEnergyComparisonChart: View {
                     AxisMarks(values: .stride(by: grouping.xStride)) { value in
                         AxisGridLine().foregroundStyle(.clear)
                         AxisTick()
-                        AxisValueLabel {
+                        AxisValueLabel(centered: false, anchor: .top) {
                             if let date = value.as(Date.self) {
                                 Text(xAxisLabel(for: date))
                             }
