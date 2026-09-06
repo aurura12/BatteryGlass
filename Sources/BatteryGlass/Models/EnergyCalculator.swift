@@ -4,7 +4,8 @@ enum EnergyCalculator {
     static func dailyEnergyKWh(
         samples: [HistorySample],
         calendar: Calendar = .current,
-        maximumGap: TimeInterval = 60
+        maximumGap: TimeInterval = 60,
+        excludedIntervals: [SleepInterval] = []
     ) -> [String: Double] {
         let sorted = samples.sorted { $0.timestamp < $1.timestamp }
         guard sorted.count > 1 else { return [:] }
@@ -16,6 +17,9 @@ enum EnergyCalculator {
             let second = pair.1
             let duration = second.timestamp.timeIntervalSince(first.timestamp)
             guard duration > 0, duration <= maximumGap,
+                  !excludedIntervals.contains(where: {
+                      $0.overlaps(first.timestamp, second.timestamp)
+                  }),
                   let firstPower = validPower(first.consumptionPowerW),
                   let secondPower = validPower(second.consumptionPowerW) else {
                 continue

@@ -149,6 +149,69 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertTrue(energy.isEmpty)
     }
 
+    func testDailyEnergySkipsPairCrossingShortSleepInterval() {
+        let calendar = utcCalendar()
+        let start = date("2026-08-27 10:00:00")
+        let samples = [
+            sample(at: start, power: 100),
+            sample(at: start.addingTimeInterval(30), power: 100)
+        ]
+        let interval = SleepInterval(
+            start: start.addingTimeInterval(1),
+            end: start.addingTimeInterval(29)
+        )
+
+        let energy = EnergyCalculator.dailyEnergyKWh(
+            samples: samples,
+            calendar: calendar,
+            excludedIntervals: [interval]
+        )
+
+        XCTAssertTrue(energy.isEmpty)
+    }
+
+    func testDailyEnergySkipsExactlySixtySecondSleepInterval() {
+        let calendar = utcCalendar()
+        let start = date("2026-08-27 10:00:00")
+        let samples = [
+            sample(at: start, power: 100),
+            sample(at: start.addingTimeInterval(60), power: 100)
+        ]
+        let interval = SleepInterval(start: start, end: start.addingTimeInterval(60))
+
+        let energy = EnergyCalculator.dailyEnergyKWh(
+            samples: samples,
+            calendar: calendar,
+            excludedIntervals: [interval]
+        )
+
+        XCTAssertTrue(energy.isEmpty)
+    }
+
+    func testDailyEnergyKeepsPairsTouchingSleepIntervalBoundaries() {
+        let calendar = utcCalendar()
+        let start = date("2026-08-27 10:00:00")
+        let samples = [
+            sample(at: start, power: 100),
+            sample(at: start.addingTimeInterval(10), power: 100),
+            sample(at: start.addingTimeInterval(20), power: 100),
+            sample(at: start.addingTimeInterval(30), power: 100)
+        ]
+        let interval = SleepInterval(
+            start: start.addingTimeInterval(10),
+            end: start.addingTimeInterval(20)
+        )
+
+        let energy = EnergyCalculator.dailyEnergyKWh(
+            samples: samples,
+            calendar: calendar,
+            excludedIntervals: [interval]
+        )
+
+        let expected = 2.0 * 100 * 10 / 3_600_000
+        XCTAssertEqual(energy[dayKey(for: start, calendar: calendar)] ?? 0, expected, accuracy: 0.000000001)
+    }
+
     func testDisplayPowerPrefersAdapterInputWhenPluggedIn() {
         var snapshot = BatterySnapshot()
         snapshot.state = .pluggedIn
