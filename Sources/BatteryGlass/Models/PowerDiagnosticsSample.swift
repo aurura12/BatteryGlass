@@ -8,6 +8,8 @@ struct PowerDiagnosticsSample: Codable, Sendable {
     let batteryVoltageV: Double
     let batteryCurrentA: Double
     let batteryPowerW: Double
+    let batteryDischargePowerW: Double?
+    let batteryDischargingWhilePlugged: Bool
     let telemetryBatteryPowerW: Double?
     let systemPowerInW: Double?
     let systemLoadW: Double?

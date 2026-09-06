@@ -13,6 +13,7 @@ final class BatteryMonitor {
     private var timer: Timer?
     private var lowBatteryNotified = false
     private var lastAdapterConnected: Bool?
+    private var pluggedDischargeConfirmation = BatteryDischargeConfirmation()
     private let recentSampleLimit = 420
 
     // MARK: - 「充满还需 / 剩余时间」估算状态
@@ -144,6 +145,11 @@ final class BatteryMonitor {
         } else {
             s.current = ps.current
         }
+        s.batteryDischargingWhilePlugged = pluggedDischargeConfirmation.update(
+            adapterConnected: s.adapterConnected,
+            state: s.state,
+            batteryPowerW: s.power
+        )
         // 系统功耗与适配器输入取值：
         // 1. 有可靠适配器总输入（SystemPowerIn）且电池非放电时，
         //    用"总输入 − 充电功率"得到一致的系统直供估算（放电时 SystemPowerIn 含电池
@@ -175,6 +181,8 @@ final class BatteryMonitor {
                 batteryVoltageV: s.voltage,
                 batteryCurrentA: s.current,
                 batteryPowerW: s.power,
+                batteryDischargePowerW: s.batteryDischargePowerW,
+                batteryDischargingWhilePlugged: s.batteryDischargingWhilePlugged,
                 telemetryBatteryPowerW: io.telemetryBatteryPowerMW.nilIfZero.map { $0 / 1000 },
                 systemPowerInW: io.telemetrySystemPowerMW.nilIfZero.map { $0 / 1000 },
                 systemLoadW: io.telemetrySystemLoadMW.nilIfZero.map { $0 / 1000 },

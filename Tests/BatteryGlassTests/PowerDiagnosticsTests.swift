@@ -12,6 +12,8 @@ final class PowerDiagnosticsTests: XCTestCase {
             batteryVoltageV: 12.6,
             batteryCurrentA: 3.603,
             batteryPowerW: 45.4,
+            batteryDischargePowerW: nil,
+            batteryDischargingWhilePlugged: false,
             telemetryBatteryPowerW: 0,
             systemPowerInW: 81.79,
             systemLoadW: 91.6,
@@ -39,5 +41,7 @@ final class PowerDiagnosticsTests: XCTestCase {
         XCTAssertEqual(decoded.chargingPowerW, 45.4)
         XCTAssertEqual(decoded.adapterOutputPowerW, 81.79)
         XCTAssertEqual(decoded.accumulatedWallEnergyEstimate, 4_294_967_300)
+        XCTAssertNil(decoded.batteryDischargePowerW)
+        XCTAssertFalse(decoded.batteryDischargingWhilePlugged)
     }
 }

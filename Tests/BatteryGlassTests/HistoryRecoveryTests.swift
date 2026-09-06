@@ -73,6 +73,8 @@ final class HistoryRecoveryTests: XCTestCase {
             batteryVoltageV: 12,
             batteryCurrentA: 0,
             batteryPowerW: 0,
+            batteryDischargePowerW: nil,
+            batteryDischargingWhilePlugged: false,
             telemetryBatteryPowerW: nil,
             systemPowerInW: 42,
             systemLoadW: 42,

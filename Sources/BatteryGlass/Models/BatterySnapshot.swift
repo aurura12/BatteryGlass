@@ -44,6 +44,13 @@ struct BatterySnapshot: Equatable, Sendable {
         return telemetryPowerW ?? electrical
     }
 
+    /// The positive battery-side contribution when the signed reading confirms discharge.
+    var batteryDischargePowerW: Double? {
+        let batteryPower = power
+        guard batteryPower.isFinite, batteryPower < -0.01 else { return nil }
+        return -batteryPower
+    }
+
     /// 电池充电功率（W）：仅充电状态下有意义，数值为正。
     var chargingPowerW: Double? {
         state == .charging ? max(0, power) : nil
@@ -74,13 +81,16 @@ struct BatterySnapshot: Equatable, Sendable {
 
     /// 用于每日能耗统计的统一功率：适配器输入或电池放电功率。
     var consumptionPowerW: Double? {
-        if state == .discharging, power < 0 {
-            return abs(power)
+        if state == .discharging {
+            return batteryDischargePowerW
         }
 
         if adapterConnected {
-            guard let adapterInputPowerW, adapterInputPowerW > 0 else { return nil }
+            guard let adapterInputPowerW, adapterInputPowerW > 0 else {
+                return batteryDischargingWhilePlugged ? batteryDischargePowerW : nil
+            }
             return adapterInputPowerW
+                + (batteryDischargingWhilePlugged ? (batteryDischargePowerW ?? 0) : 0)
         }
         return nil
     }
@@ -90,6 +100,8 @@ struct BatterySnapshot: Equatable, Sendable {
 
     // 电源适配器
     var adapterConnected = false
+    /// 由 BatteryMonitor 连续样本确认的插电同时放电状态。
+    var batteryDischargingWhilePlugged = false
     var adapterWatts: Double?
     var adapterVoltage: Double?
     var adapterCurrent: Double?

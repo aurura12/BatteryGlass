@@ -13,6 +13,51 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertEqual(snapshot.consumptionPowerW, 96)
     }
 
+    func testConfirmedPluggedDischargeAddsBothSourceContributions() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .pluggedIn
+        snapshot.adapterConnected = true
+        snapshot.adapterInputPowerW = 80
+        snapshot.voltage = 12
+        snapshot.current = -2
+        snapshot.batteryDischargingWhilePlugged = true
+
+        XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 104, accuracy: 0.000001)
+    }
+
+    func testUnconfirmedPluggedNegativeReadingUsesAdapterOnly() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .pluggedIn
+        snapshot.adapterConnected = true
+        snapshot.adapterInputPowerW = 80
+        snapshot.voltage = 12
+        snapshot.current = -2
+
+        XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 80, accuracy: 0.000001)
+    }
+
+    func testChargingIgnoresUnconfirmedNegativeBatteryReading() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.adapterConnected = true
+        snapshot.adapterInputPowerW = 80
+        snapshot.voltage = 12
+        snapshot.current = -2
+
+        XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 80, accuracy: 0.000001)
+    }
+
+    func testConfirmedPluggedDischargeFallsBackToBatteryWithoutAdapterInput() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .pluggedIn
+        snapshot.adapterConnected = true
+        snapshot.voltage = 12
+        snapshot.current = -2
+        snapshot.batteryDischargingWhilePlugged = true
+
+        XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 24, accuracy: 0.000001)
+    }
+
     func testAdapterSplitUsesMeasuredInputWithoutDoubleCountingCharge() {
         var snapshot = BatterySnapshot()
         snapshot.state = .charging
