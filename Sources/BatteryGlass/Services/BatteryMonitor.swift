@@ -10,6 +10,7 @@ final class BatteryMonitor {
     private(set) var recentPower: [PowerSample] = []
 
     private let settings: AppSettings
+    private let telemetryCalibrationStore: PowerTelemetryCalibrationStore
     private var timer: Timer?
     private var lowBatteryNotified = false
     private var lastAdapterConnected: Bool?
@@ -31,7 +32,7 @@ final class BatteryMonitor {
         capacityMAh: Double,
         voltageV: Double,
         adapterConnected: Bool,
-        state: PowerState,
+        batteryDischargingBefore: Bool,
         telemetryCounters: PowerTelemetryCounters
     )?
     /// 唤醒瞬间基线：睡眠结束瞬间的数据，用于计数器差值和回退计算。
@@ -44,14 +45,20 @@ final class BatteryMonitor {
     )?
     /// 唤醒后延迟采样得到的直供功率样本（W）。
     private var maintenanceSamples: [Double] = []
+    /// 唤醒后延迟采样得到的适配器总输入样本（W）。
+    private var maintenanceAdapterInputSamples: [Double] = []
     private var maintenanceSampleTick = 0
     private var maintenanceTimer: Timer?
     private let maintenanceSampleInterval: TimeInterval = 5
     private let maintenanceSampleCount = 6
     private var latestTelemetryCounters = PowerTelemetryCounters(accumulatedWallEnergyEstimate: nil)
 
-    init(settings: AppSettings) {
+    init(
+        settings: AppSettings,
+        telemetryCalibrationStore: PowerTelemetryCalibrationStore? = nil
+    ) {
         self.settings = settings
+        self.telemetryCalibrationStore = telemetryCalibrationStore ?? PowerTelemetryCalibrationStore()
         refresh()
 
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -253,13 +260,18 @@ final class BatteryMonitor {
             capacityMAh: snapshot.currentCapacityMAh,
             voltageV: snapshot.voltage,
             adapterConnected: snapshot.adapterConnected,
-            state: snapshot.state,
+            batteryDischargingBefore: snapshot.batteryDischargingWhilePlugged,
             telemetryCounters: latestTelemetryCounters
+        )
+        NotificationCenter.default.post(
+            name: .sleepIntervalStarted,
+            object: self,
+            userInfo: ["start": snapshot.timestamp]
         )
     }
 
     private func handleDidWake() {
-        guard sleepBaseline != nil else { return }
+        guard let baseline = sleepBaseline else { return }
         refresh()
         wakeBaseline = (
             date: snapshot.timestamp,
@@ -267,6 +279,14 @@ final class BatteryMonitor {
             voltageV: snapshot.voltage,
             adapterConnected: snapshot.adapterConnected,
             telemetryCounters: latestTelemetryCounters
+        )
+        NotificationCenter.default.post(
+            name: .sleepIntervalEnded,
+            object: self,
+            userInfo: [
+                "start": baseline.date,
+                "end": snapshot.timestamp
+            ]
         )
         startMaintenanceSampling()
     }
@@ -295,6 +315,12 @@ final class BatteryMonitor {
         if let direct = snapshot.directSupplyPowerW {
             maintenanceSamples.append(max(0, direct))
         }
+        if let adapterInput = snapshot.adapterInputPowerW,
+           snapshot.adapterConnected,
+           adapterInput.isFinite,
+           adapterInput > 0 {
+            maintenanceAdapterInputSamples.append(adapterInput)
+        }
         maintenanceSampleTick += 1
         if maintenanceSampleTick >= maintenanceSampleCount {
             finalizeSleepSegment()
@@ -305,6 +331,7 @@ final class BatteryMonitor {
         maintenanceTimer?.invalidate()
         maintenanceTimer = nil
         maintenanceSamples = []
+        maintenanceAdapterInputSamples = []
         maintenanceSampleTick = 0
     }
 
@@ -315,7 +342,10 @@ final class BatteryMonitor {
             wakeBaseline = nil
             return
         }
-        let minimumDirectPower = maintenanceSamples.min()
+        let minimums = Self.minimumMaintenancePowers(
+            directSamples: maintenanceSamples,
+            adapterInputSamples: maintenanceAdapterInputSamples
+        )
         cancelMaintenanceSampling()
         sleepBaseline = nil
         wakeBaseline = nil
@@ -329,8 +359,11 @@ final class BatteryMonitor {
             capacityAfterMAh: wake.capacityMAh,
             voltageAfterV: wake.voltageV,
             adapterConnectedAfter: wake.adapterConnected,
-            maintenanceDirectPowerW: minimumDirectPower,
-            powerStateBefore: baseline.state,
+            maintenanceDirectPowerW: minimums.directSupplyPowerW,
+            maintenanceAdapterInputPowerW: minimums.adapterInputPowerW,
+            batteryDischargingBefore: baseline.batteryDischargingBefore,
+            wallEnergyCalibrationFactor: telemetryCalibrationStore.calibrationFactor,
+            wallEnergyIsCalibrated: telemetryCalibrationStore.isCalibrated,
             wallEnergyCounterBefore: baseline.telemetryCounters.accumulatedWallEnergyEstimate,
             wallEnergyCounterAfter: wake.telemetryCounters.accumulatedWallEnergyEstimate
         )
@@ -341,6 +374,19 @@ final class BatteryMonitor {
             object: self,
             userInfo: ["segment": segment]
         )
+    }
+
+    nonisolated static func minimumMaintenancePowers(
+        directSamples: [Double],
+        adapterInputSamples: [Double]
+    ) -> (directSupplyPowerW: Double?, adapterInputPowerW: Double?) {
+        let minimumDirect = directSamples
+            .filter { $0.isFinite && $0 > 0 }
+            .min()
+        let minimumAdapterInput = adapterInputSamples
+            .filter { $0.isFinite && $0 > 0 }
+            .min()
+        return (minimumDirect, minimumAdapterInput)
     }
 
     // MARK: - 状态解析

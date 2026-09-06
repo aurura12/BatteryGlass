@@ -54,4 +54,14 @@ final class BatteryMonitorStateTests: XCTestCase {
             )
         )
     }
+
+    func testMaintenancePowerSelectionKeepsDirectAndAdapterInputsSeparate() {
+        let result = BatteryMonitor.minimumMaintenancePowers(
+            directSamples: [4, 2, 3],
+            adapterInputSamples: [70, 65, 68]
+        )
+
+        XCTAssertEqual(result.directSupplyPowerW ?? 0, 2, accuracy: 0.000001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 65, accuracy: 0.000001)
+    }
 }
