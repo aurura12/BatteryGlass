@@ -6,24 +6,29 @@ import XCTest
 
 final class PowerChartInteractionTests: XCTestCase {
     @MainActor
-    func testDailyEnergyXAxisLabelsAreCenteredOnBars() {
-        let summaries = [
-            summary(at: "2026-08-26", energy: 0.1),
-            summary(at: "2026-08-27", energy: 0.15),
-            summary(at: "2026-08-28", energy: 0.2),
-            summary(at: "2026-08-29", energy: 0.25),
-            summary(at: "2026-08-30", energy: 0.3)
-        ]
+    func testDailyEnergyXAxisKeepsFiveReadableLabelsAtDashboardWidth() {
+        let summaries = (0..<14).map { offset in
+            summary(
+                at: BatteryFormatters.dayKey(
+                    for: Calendar.current.date(
+                        byAdding: .day,
+                        value: offset,
+                        to: BatteryFormatters.dayKeyDate("2026-08-24")!
+                    )!
+                ),
+                energy: 0.2 + Double(offset) * 0.01
+            )
+        }
         let chart = DailyEnergyComparisonChart(
             summaries: summaries,
             range: .constant(.fourteen)
         )
         let hostingView = NSHostingView(
             rootView: chart
-                .frame(width: 600, height: 340)
+                .frame(width: 344, height: 340)
                 .background(Color.white)
         )
-        hostingView.frame = NSRect(x: 0, y: 0, width: 600, height: 340)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 344, height: 340)
         let window = NSWindow(
             contentRect: hostingView.frame,
             styleMask: .borderless,
@@ -41,23 +46,29 @@ final class PowerChartInteractionTests: XCTestCase {
         }
         hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
         let barCenters = blueBarCenters(in: bitmap)
-        guard let firstBarCenter = barCenters.first else {
-            XCTFail("未找到柱状图数据柱")
-            return
-        }
         guard let barBottom = blueBarBottom(in: bitmap) else {
             XCTFail("未找到柱状图数据柱")
             return
         }
-        let labelCenters = axisLabelCenters(in: bitmap, after: barBottom)
-            .filter { $0 >= firstBarCenter }
+        let labelColumnRanges = axisLabelColumnRanges(in: bitmap, after: barBottom)
+            .filter {
+                let center = ($0.lowerBound + $0.upperBound) / 2
+                return (barCenters.first! - 30)...(barCenters.last! + 30) ~= center
+            }
+        let labelCenters = labelColumnRanges.map { ($0.lowerBound + $0.upperBound) / 2 }
+        let labeledBarCenters = [0, 3, 7, 10, 13].map { barCenters[$0] }
+        let pixelScale = CGFloat(bitmap.pixelsWide) / hostingView.bounds.width
 
-        let interiorBarCenters = Array(barCenters.dropFirst().dropLast())
-        XCTAssertEqual(interiorBarCenters.count, 3)
-        XCTAssertEqual(labelCenters.count, interiorBarCenters.count)
-        for (barCenter, labelCenter) in zip(interiorBarCenters, labelCenters) {
-            XCTAssertEqual(labelCenter, barCenter, accuracy: 2)
+        XCTAssertEqual(barCenters.count, 14)
+        XCTAssertEqual(labelCenters.count, 5)
+        for (labelCenter, barCenter) in zip(labelCenters, labeledBarCenters) {
+            XCTAssertEqual(labelCenter, barCenter, accuracy: Int(ceil(1.5 * pixelScale)))
         }
+        XCTAssertGreaterThanOrEqual(
+            CGFloat(labelColumnRanges[0].count) / pixelScale,
+            20,
+            "首个日期标签被截断"
+        )
     }
 
     func testDailyDetailsStartsCollapsedAndToggles() {
@@ -238,8 +249,11 @@ final class PowerChartInteractionTests: XCTestCase {
         }.max()
     }
 
-    private func axisLabelCenters(in bitmap: NSBitmapImageRep, after barBottom: Int) -> [Int] {
-        let scanRange = (barBottom + 5)..<min(bitmap.pixelsHigh, barBottom + 42)
+    private func axisLabelColumnRanges(
+        in bitmap: NSBitmapImageRep,
+        after barBottom: Int
+    ) -> [ClosedRange<Int>] {
+        let scanRange = (barBottom + 12)..<min(bitmap.pixelsHigh, barBottom + 42)
         return groupedColumns(in: bitmap, rows: scanRange, where: { color in
             guard let color = color.usingColorSpace(.deviceRGB) else { return false }
             let brightness = (color.redComponent + color.greenComponent + color.blueComponent) / 3
@@ -289,7 +303,7 @@ final class PowerChartInteractionTests: XCTestCase {
         rows: Range<Int> = 0..<Int.max,
         where matches: (NSColor) -> Bool,
         minimumPixels: Int
-    ) -> [Int] {
+    ) -> [ClosedRange<Int>] {
         let validRows = rows.lowerBound..<min(rows.upperBound, bitmap.pixelsHigh)
         let columns = (0..<bitmap.pixelsWide).filter { x in
             validRows.reduce(into: 0) { count, y in
@@ -307,6 +321,6 @@ final class PowerChartInteractionTests: XCTestCase {
                 groups.append([column])
             }
         }
-        return groups.map { ($0.first! + $0.last!) / 2 }
+        return groups.map { $0.first!...$0.last! }
     }
 }

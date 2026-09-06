@@ -140,16 +140,18 @@ struct DailyEnergyComparisonChart: View {
                     }
                 }
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: grouping.xStride)) { value in
+                    AxisMarks(values: xAxisLabelDates) { value in
                         AxisGridLine().foregroundStyle(.clear)
                         AxisTick()
                         AxisValueLabel(centered: false, anchor: .top) {
                             if let date = value.as(Date.self) {
                                 Text(xAxisLabel(for: date))
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                     }
                 }
+                .chartXScale(domain: chartXDomain)
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
                         ZStack(alignment: .topLeading) {
@@ -264,6 +266,37 @@ struct DailyEnergyComparisonChart: View {
             return BatteryFormatters.xAxisDayLabel(date)
         case .month:
             return BatteryFormatters.xAxisMonthLabel(date)
+        }
+    }
+
+    private var chartXDomain: ClosedRange<Date> {
+        guard let first = aggregates.first?.periodStart,
+              let last = aggregates.last?.periodStart else {
+            let fallback = Date()
+            return fallback...fallback.addingTimeInterval(1)
+        }
+
+        let calendar = Calendar.current
+        let previous = calendar.date(byAdding: grouping.xStride, value: -1, to: first) ?? first
+        let next = calendar.date(byAdding: grouping.xStride, value: 1, to: last) ?? last
+        let lower = Date(timeIntervalSinceReferenceDate:
+            (previous.timeIntervalSinceReferenceDate + first.timeIntervalSinceReferenceDate) / 2
+        )
+        let upper = Date(timeIntervalSinceReferenceDate:
+            (last.timeIntervalSinceReferenceDate + next.timeIntervalSinceReferenceDate) / 2
+        )
+        return lower...upper
+    }
+
+    private var xAxisLabelDates: [Date] {
+        let dates = aggregates.map(\.periodStart)
+        let maximumLabelCount = 5
+        guard dates.count > maximumLabelCount else { return dates }
+
+        let lastIndex = dates.count - 1
+        return (0..<maximumLabelCount).map { position in
+            let progress = Double(position) / Double(maximumLabelCount - 1)
+            return dates[Int((progress * Double(lastIndex)).rounded())]
         }
     }
 
