@@ -12,8 +12,8 @@
   - 循环次数（cycle count）
   - 健康度（FullChargeCapacity / DesignCapacity）
 - 实时功率，精确到 0.1 W：电池供电时显示电池充放电功率（带正负号），
-  适配器供电时显示系统功率（无符号，优先适配器总输入），接入 PowerTelemetryData 遥测
-- 系统功耗/系统直供：优先 PowerTelemetryData.SystemLoad（系统自身消耗，不含电池充电）；
+  适配器供电时优先显示适配器总输入（无符号，表示电源侧输入，不是 `SystemLoad`），接入 PowerTelemetryData 遥测
+- 系统功耗/系统直供（辅助分解指标，不等同于每日耗电量）：优先 PowerTelemetryData.SystemLoad（系统自身消耗，不含电池充电）；
   有可靠的适配器总输入（SystemPowerIn）时，按“适配器输入 − 电池充电功率”估算系统直供；
   电池供电时取电池放电功率
 - 电源分配（外接电源时）：给电池充电功率 / 系统直供功率 / 适配器输出合计
@@ -28,6 +28,7 @@
   - “实时 / 历史”分段控件与页面切换动画（液态玻璃高亮胶囊 + 滑动/缩放/模糊过渡）
 - 历史记录：
   - 全天功率曲线（每 5 秒采样，可横向滚动查看）、每日耗电量（kWh）与近 14 天对比、循环次数记录（健康度以实时卡片展示）
+  - 每日耗电量表示“从电源侧消耗了多少电”：电池供电计入电池放电，正常插电计入适配器输入；插电时确认电池仍放电则同时计入两个可观测来源
   - 每 15 秒持久化到 `~/Library/Application Support/BatteryGlass/history.json`（退出前自动 flush）
 - 电源诊断：
   - 可在设置中开启诊断日志，每秒记录原始 `SystemPowerIn` / `SystemLoad`、适配器和电池电气数据，以及应用计算结果
@@ -79,8 +80,17 @@ design-system/batteryglass/  # ui-ux-pro-max 设计系统（MASTER.md）
 - `AppleSmartBattery`（IOServiceMatching + IORegistryEntryCreateCFProperties）：`CycleCount`、`BatteryData.DesignCapacity`、`BatteryData.FullChargeCapacity`、`Voltage`、`InstantAmperage`、`Temperature`、`AdapterDetails`、`PowerTelemetryData`
 - 功率 = 电压(V) × 电流(A)，来自 `InstantAmperage`（充电为正、放电为负）
 - 当电量计电流为 0 时，回退到 `PowerTelemetryData.BatteryPower`（mW），直接采用遥测实测符号（充电为正、放电为负）
-- 每日耗电按“来源侧能量”统计：电池供电取电池放电能量，接入外部电源取适配器输入能量；系统睡眠优先使用 `AccumulatedWallEnergyEstimate` 的累计差值，计数器不可用时回退到电量差/唤醒后功率估算。
-- `PowerTelemetryData` 的累计字段属于未公开的系统遥测数据，单位和不同机型的行为必须用插座电表校准；诊断日志会保留原始 `AccumulatedWallEnergyEstimate`，回退结果会标记为估算。
+- 每日耗电按“来源侧能量”统计：电池供电取电池放电能量，正常接入外部电源取适配器输入能量；插电且连续确认电池仍在放电时，同时计入适配器输入和电池放电。这里的目标是统计用户从电源侧消耗了多少电，不是用 `SystemLoad` 代表电脑内部负载。
+- 系统睡眠时优先使用 `AccumulatedWallEnergyEstimate` 的累计差值；计数器不可用时，按睡前/唤醒后的可观测来源做保守回退，并明确标记为估算。低于 60 秒的睡眠不补一段虚构能量，同时阻断普通样本之间的插值；恰好 60 秒及以上的睡眠段只计一次。
+- `PowerTelemetryData` 的累计字段属于未公开的系统遥测数据，单位和不同机型的行为必须用插座电表校准。校准记录保存到 `~/Library/Application Support/BatteryGlass/power-calibration.json`，按机型和 macOS 版本匹配；没有有效实测记录时，系数默认为 1.0 且睡眠段标记为未校准。诊断日志会保留原始 `AccumulatedWallEnergyEstimate`。
+
+## 耗电量口径与历史精度边界
+
+“每日耗电量”回答的是“这段时间从电源侧消耗了多少电”，不是“电脑内部 `SystemLoad` 有多大”。适配器输入包含电脑运行、给电池充电以及适配器/转换损耗；因此不能把 `SystemLoad` 再加到适配器输入上。只有在连续观测确认插电时电池仍在放电的混合状态下，才会把电池放电作为第二个独立来源加入。
+
+睡眠期间无法连续采样，短于 60 秒的睡眠按未知处理，不用两端样本线性插值填充；没有有效墙上能量计数器时的睡眠结果也始终是估算值。若要把私有遥测计数器换算得更接近插座读数，需要在同一机型上用实体插座电表记录同一时间窗口，生成校准系数。
+
+精度模型只向前生效：旧版历史样本没有完整的适配器输入、原始计数器和睡眠边界，无法可靠重算，因此旧的每日汇总保持不变；新版本产生的样本和睡眠区间按新口径统计。
 
 ## UI 设计系统
 
