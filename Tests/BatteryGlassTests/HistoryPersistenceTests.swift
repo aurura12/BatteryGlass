@@ -136,6 +136,116 @@ final class HistoryPersistenceTests: XCTestCase {
         )
 
         XCTAssertTrue(store.sleepSegments.isEmpty)
+        XCTAssertTrue(store.sleepIntervals.isEmpty)
+    }
+
+    func testShortSleepBoundarySkipsBridgeEnergy() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+        let start = Date()
+        store.record(snapshot(at: start, cycleCount: 1))
+        NotificationCenter.default.post(
+            name: .sleepIntervalStarted,
+            object: nil,
+            userInfo: ["start": start]
+        )
+
+        store.record(snapshot(at: start.addingTimeInterval(30), cycleCount: 2))
+        NotificationCenter.default.post(
+            name: .sleepIntervalEnded,
+            object: nil,
+            userInfo: [
+                "start": start,
+                "end": start.addingTimeInterval(30)
+            ]
+        )
+
+        XCTAssertNil(store.allSummaries().first?.energyKWh)
+        XCTAssertEqual(store.sleepIntervals.count, 1)
+    }
+
+    func testExactlySixtySecondSleepAddsOnlySleepSegmentEnergy() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+        let start = Date()
+        let end = start.addingTimeInterval(60)
+        store.record(snapshot(at: start, cycleCount: 1))
+        NotificationCenter.default.post(
+            name: .sleepIntervalStarted,
+            object: nil,
+            userInfo: ["start": start]
+        )
+        store.record(snapshot(at: end, cycleCount: 2))
+        NotificationCenter.default.post(
+            name: .sleepIntervalEnded,
+            object: nil,
+            userInfo: ["start": start, "end": end]
+        )
+
+        store.recordSleepSegment(
+            SleepSegment(
+                id: UUID(),
+                start: start,
+                end: end,
+                energyKWh: 0.02,
+                averagePowerW: 1_200,
+                mode: .pluggedIdle
+            )
+        )
+
+        XCTAssertEqual(store.allSummaries().first?.energyKWh ?? 0, 0.02, accuracy: 0.0000001)
+    }
+
+    func testSleepIntervalsRoundTripAndRejectInvalidDuplicates() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+        let start = date("2026-08-27 10:00:00")
+        let end = start.addingTimeInterval(60)
+        store.recordSleepInterval(start: start, end: start)
+        store.recordSleepInterval(start: start, end: end)
+        store.recordSleepInterval(start: start, end: end)
+        store.flush()
+
+        let reloaded = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+        XCTAssertEqual(reloaded.sleepIntervals.count, 1)
+        XCTAssertEqual(reloaded.sleepIntervals.first?.start, start)
+        XCTAssertEqual(reloaded.sleepIntervals.first?.end, end)
     }
 
     func testSleepSegmentsRoundTripThroughV3Payload() throws {
@@ -261,6 +371,18 @@ final class HistoryPersistenceTests: XCTestCase {
 
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
+    }
+
+    private func snapshot(at timestamp: Date, cycleCount: Int) -> BatterySnapshot {
+        var snapshot = BatterySnapshot()
+        snapshot.timestamp = timestamp
+        snapshot.isPresent = true
+        snapshot.state = .discharging
+        snapshot.percent = 50
+        snapshot.voltage = 12
+        snapshot.current = -2
+        snapshot.cycleCount = cycleCount
+        return snapshot
     }
 
     private func date(_ string: String) -> Date {

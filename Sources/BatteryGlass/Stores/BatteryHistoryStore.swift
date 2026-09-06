@@ -8,12 +8,16 @@ final class BatteryHistoryStore {
     private(set) var samples: [HistorySample] = []
     private(set) var dailySummaries: [DailySummary] = []
     private(set) var sleepSegments: [SleepSegment] = []
+    private(set) var sleepIntervals: [SleepInterval] = []
 
     private let settings: AppSettings
     private let fileURL: URL
     private var observer: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
     private var sleepSegmentObserver: NSObjectProtocol?
+    private var sleepIntervalStartedObserver: NSObjectProtocol?
+    private var sleepIntervalEndedObserver: NSObjectProtocol?
+    private var activeSleepStart: Date?
     private var lastRecord = Date.distantPast
     private var lastCycleCount = -1
     private var lastHealth: Double?
@@ -68,6 +72,30 @@ final class BatteryHistoryStore {
                 self?.recordSleepSegment(segment)
             }
         }
+
+        sleepIntervalStartedObserver = NotificationCenter.default.addObserver(
+            forName: .sleepIntervalStarted,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let start = notification.userInfo?["start"] as? Date else { return }
+            MainActor.assumeIsolated {
+                self?.beginSleepInterval(at: start)
+            }
+        }
+
+        sleepIntervalEndedObserver = NotificationCenter.default.addObserver(
+            forName: .sleepIntervalEnded,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let start = notification.userInfo?["start"] as? Date,
+                  let end = notification.userInfo?["end"] as? Date else { return }
+            MainActor.assumeIsolated {
+                self?.recordSleepInterval(start: start, end: end)
+                self?.activeSleepStart = nil
+            }
+        }
     }
 
     func record(_ snapshot: BatterySnapshot) {
@@ -94,7 +122,10 @@ final class BatteryHistoryStore {
         updateSummary(with: sample)
 
         if let previous = lastRecordedSample {
-            let intervalEnergy = EnergyCalculator.dailyEnergyKWh(samples: [previous, sample])
+            let intervalEnergy = EnergyCalculator.dailyEnergyKWh(
+                samples: [previous, sample],
+                excludedIntervals: currentExcludedSleepIntervals
+            )
             for (dayKey, energy) in intervalEnergy {
                 addEnergy(energy, to: dayKey)
             }
@@ -113,9 +144,26 @@ final class BatteryHistoryStore {
         guard settings.recordHistory else { return }
         guard !sleepSegments.contains(where: { $0.id == segment.id }) else { return }
 
+        recordSleepInterval(start: segment.start, end: segment.end)
         sleepSegments.append(segment)
         sleepSegments.sort { $0.start < $1.start }
         addSleepEnergy(segment.energyKWh, from: segment.start, to: segment.end)
+        persist()
+    }
+
+    /// Opens a boundary before the wake snapshot arrives so no sample pair can bridge sleep.
+    private func beginSleepInterval(at start: Date) {
+        guard settings.recordHistory else { return }
+        activeSleepStart = start
+    }
+
+    /// Persists a boundary without adding energy; a short sleep intentionally remains unknown.
+    func recordSleepInterval(start: Date, end: Date) {
+        guard settings.recordHistory, end > start else { return }
+        guard !sleepIntervals.contains(where: { $0.start == start && $0.end == end }) else { return }
+
+        sleepIntervals.append(SleepInterval(start: start, end: end))
+        sleepIntervals.sort { $0.start < $1.start }
         persist()
     }
 
@@ -137,6 +185,8 @@ final class BatteryHistoryStore {
         samples = []
         dailySummaries = []
         sleepSegments = []
+        sleepIntervals = []
+        activeSleepStart = nil
         lastRecordedSample = nil
         lastSamplesPrunedDay = nil
         lastPersistenceScheduledAt = .distantPast
@@ -166,6 +216,8 @@ final class BatteryHistoryStore {
         var dailySummaries: [DailySummary]
         // v3 新增；可选以兼容 v2 旧文件（缺失时解码为 nil）。
         var sleepSegments: [SleepSegment]?
+        // v4 新增；可选以兼容 v2/v3 旧文件。
+        var sleepIntervals: [SleepInterval]?
     }
 
     private func load() {
@@ -190,6 +242,7 @@ final class BatteryHistoryStore {
         if payload.version >= 3 {
             sleepSegments = payload.sleepSegments ?? []
         }
+        sleepIntervals = (payload.sleepIntervals ?? []).filter { $0.end > $0.start }
         let sanitizedSummaries = DailyEnergySummaryPolicy.markSparseLegacySummariesIncomplete(
             dailySummaries,
             todayKey: BatteryFormatters.dayKey(for: Date())
@@ -235,10 +288,11 @@ final class BatteryHistoryStore {
 
     private func makePayload() -> HistoryPayload {
         HistoryPayload(
-            version: 3,
+            version: 4,
             samples: samples,
             dailySummaries: dailySummaries,
-            sleepSegments: sleepSegments
+            sleepSegments: sleepSegments,
+            sleepIntervals: sleepIntervals
         )
     }
 
@@ -268,7 +322,10 @@ final class BatteryHistoryStore {
     }
 
     private func summaries(from samples: [HistorySample]) -> [DailySummary] {
-        let energyByDay = EnergyCalculator.dailyEnergyKWh(samples: samples)
+        let energyByDay = EnergyCalculator.dailyEnergyKWh(
+            samples: samples,
+            excludedIntervals: sleepIntervals
+        )
         var grouped: [String: [HistorySample]] = [:]
         for sample in samples {
             grouped[BatteryFormatters.dayKey(for: sample.timestamp), default: []].append(sample)
@@ -293,7 +350,10 @@ final class BatteryHistoryStore {
     }
 
     private func updateEnergySummaries(from samples: [HistorySample], allowedDayKeys: Set<String>) {
-        let energyByDay = EnergyCalculator.dailyEnergyKWh(samples: samples)
+        let energyByDay = EnergyCalculator.dailyEnergyKWh(
+            samples: samples,
+            excludedIntervals: sleepIntervals
+        )
         dailySummaries = DailyEnergySummaryPolicy.reconcile(
             summaries: dailySummaries,
             recalculatedEnergy: energyByDay,
@@ -345,6 +405,16 @@ final class BatteryHistoryStore {
         for (dayKey, energy) in split {
             addEnergy(energy, to: dayKey)
         }
+    }
+
+    private var currentExcludedSleepIntervals: [SleepInterval] {
+        var intervals = sleepIntervals
+        if let activeSleepStart {
+            intervals.append(
+                SleepInterval(start: activeSleepStart, end: .distantFuture)
+            )
+        }
+        return intervals
     }
 
     /// 把与今天有交集的待机区间能量补回今日汇总。
