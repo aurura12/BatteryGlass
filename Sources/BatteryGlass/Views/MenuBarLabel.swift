@@ -24,7 +24,10 @@ struct MenuBarLabel: View {
             }
         }
         .help("BatteryGlass · \(monitor.snapshot.percentText)")
-        .accessibilityLabel("BatteryGlass，电池电量 \(monitor.snapshot.percentText)")
+        // 合并为单一无障碍元素：显式播报状态（含"正在充电"），
+        // 不让新增的闪电图标对 VoiceOver 不可见。
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(MenuBarAccessibility.label(for: monitor.snapshot))
         .onAppear {
             NotificationCenter.default.post(
                 name: .desktopWidgetVisibilityChanged,
@@ -50,6 +53,25 @@ struct MenuBarLabel: View {
             return monitor.snapshot.state == .unknown ? "--" : monitor.snapshot.percentText
         case .timeRemaining:
             return BatteryFormatters.menuBarTimeRemaining(monitor.snapshot.timeRemaining)
+        }
+    }
+}
+
+/// 菜单栏 VoiceOver 文案（纯函数，便于单元测试）。
+///
+/// 显式包含供电状态，避免"充电中"只靠颜色/图标传达。
+enum MenuBarAccessibility {
+    static func label(for snapshot: BatterySnapshot) -> String {
+        let percent = snapshot.percentText
+        switch snapshot.state {
+        case .charging:
+            return "BatteryGlass，电池电量 \(percent)，正在充电"
+        case .discharging:
+            return "BatteryGlass，电池电量 \(percent)，电池供电"
+        case .pluggedIn:
+            return "BatteryGlass，电池电量 \(percent)，已接通电源"
+        case .unknown:
+            return "BatteryGlass，未检测到电池"
         }
     }
 }

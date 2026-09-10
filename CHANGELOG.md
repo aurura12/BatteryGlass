@@ -5,6 +5,7 @@
 ## [2026-09-10]
 
 ### 修复
+- 修复菜单栏无障碍文案不含充电状态的问题：VoiceOver 现在完整播报「正在充电 / 电池供电 / 已接通电源 / 未检测到电池」，新增 `MenuBarAccessibility.label(for:)` 纯函数并合并为单一无障碍元素。
 - 修复安装替换不可回滚的问题：`install_app.sh` 先把旧 App rename 到备份路径再让新 bundle 就位，任何一步失败都恢复旧 App，避免安装目录被清空；`install_app_test.sh` 新增 staging 移动失败时的回滚用例。
 - 修复登录项 `.notFound` 被等同于 `.notRegistered` 的问题：该状态也可能是服务异常或非有效 App bundle，现独立为 `.notFound`——仍允许用户发起首次注册，但 `systemLaunchAtLoginEnabled()` 返回 nil，不再在启动时用 false 覆盖已保存的开关状态。
 - 修复单实例保护的时序漏洞：把实例接管前移到 `BatteryGlassApp.init` 构造核心对象之前（提取为 `AppInstanceGuard`），避免旧实例尚未退出时新实例已启动定时器并写盘导致的双进程并发写同一文件。

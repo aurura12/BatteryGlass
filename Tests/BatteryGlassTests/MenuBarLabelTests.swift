@@ -29,4 +29,25 @@ final class MenuBarLabelTests: XCTestCase {
 
         XCTAssertEqual(MenuBarBatterySymbol.name(for: snapshot), "battery.0percent")
     }
+
+    func testAccessibilityLabelAnnouncesChargingState() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.percent = 40
+
+        let label = MenuBarAccessibility.label(for: snapshot)
+        XCTAssertTrue(label.contains("40%"))
+        XCTAssertTrue(label.contains("正在充电"))
+    }
+
+    func testAccessibilityLabelDescribesDischargingAndUnknown() {
+        var discharging = BatterySnapshot()
+        discharging.state = .discharging
+        discharging.percent = 55
+        XCTAssertTrue(MenuBarAccessibility.label(for: discharging).contains("电池供电"))
+
+        var unknown = BatterySnapshot()
+        unknown.state = .unknown
+        XCTAssertEqual(MenuBarAccessibility.label(for: unknown), "BatteryGlass，未检测到电池")
+    }
 }
