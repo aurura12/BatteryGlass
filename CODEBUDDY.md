@@ -25,7 +25,7 @@ swift scripts/generate_icon.swift                # 重新生成 AppIcon.icns
 
 测试目标依赖可执行目标，`swift test` 会同时编译 app 二进制。访问 `@MainActor` 类型（如 `BatteryMonitor`）的测试类需标注 `@MainActor`。
 
-应用带单实例保护（`AppDelegate.enforceSingleInstance`，BatteryGlassApp.swift:19）：新实例会先终止同 bundle 的旧实例并等其 flush 落盘再接管，避免 `build_and_run.sh` 重复 `open -n` 时两个进程并发写 history.json / power-diagnostics.jsonl。
+应用带单实例保护（`AppInstanceGuard.enforceSingleInstance`，在 `BatteryGlassApp.init` 构造核心对象**之前**调用）：新实例会先终止同 bundle 的旧实例并等其 flush 落盘再接管，无法接管则 `exit(0)`；检查必须早于对象构造，否则旧实例未退出时新实例已启动定时器并写盘，会造成双进程并发写 history.json / power-diagnostics.jsonl。
 
 ## 架构
 
