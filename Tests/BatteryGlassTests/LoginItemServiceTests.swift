@@ -37,10 +37,19 @@ final class LoginItemServiceTests: XCTestCase {
 
     // MARK: - 首次注册（notFound）
 
-    func testNotFoundStatusIsAvailableForFirstRegistration() {
+    func testNotFoundKeepsDedicatedStateSoItDoesNotClobberSavedSetting() {
+        // .notFound 不再等同于 .notRegistered：避免启动同步时用 false 覆盖已保存开关。
+        XCTAssertEqual(LoginItemState(status: .notFound), .notFound)
+    }
+
+    func testNotFoundAllowsFirstRegistrationButDoesNotUnregister() {
         XCTAssertEqual(
-            LoginItemState(status: .notFound),
-            .notRegistered
+            LoginItemService.desiredAction(current: .notFound, desiredEnabled: true),
+            .register
+        )
+        XCTAssertEqual(
+            LoginItemService.desiredAction(current: .notFound, desiredEnabled: false),
+            .none
         )
     }
 

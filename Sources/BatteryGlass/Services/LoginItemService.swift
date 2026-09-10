@@ -10,6 +10,12 @@ enum LoginItemState: Equatable {
     case notRegistered
     /// 已发起注册但需用户在系统设置中批准（常见于从互联网下载的应用）。
     case requiresApproval
+    /// 系统报告找不到登录项服务。
+    ///
+    /// 首次注册前 `SMAppService.mainApp.status` 可能返回 `.notFound`，但该状态也可能
+    /// 表示服务异常或当前不是有效的 App bundle。因此单独保留：允许用户尝试注册，
+    /// 但不能据此断定"当前未启用"，以免启动时用 false 覆盖已保存的开关状态。
+    case notFound
     /// 系统无法获取或操作登录项状态，此时应禁用开关。
     case unavailable
 
@@ -22,8 +28,7 @@ enum LoginItemState: Equatable {
         case .notRegistered:
             self = .notRegistered
         case .notFound:
-            // mainApp 在首次注册前可能返回 notFound；此时仍应允许用户发起注册。
-            self = .notRegistered
+            self = .notFound
         @unknown default:
             self = .unavailable
         }
@@ -58,14 +63,14 @@ enum LoginItemService {
     }
 
     /// 系统当前是否处于"登录后自动启动"状态。
-    /// 返回 nil 表示系统无法判断登录项状态。
+    /// 返回 nil 表示无法据此判断（`.notFound` / `.unavailable`），调用方应保留已保存值。
     static func systemLaunchAtLoginEnabled() -> Bool? {
         switch currentState {
         case .enabled, .requiresApproval:
             return true
         case .notRegistered:
             return false
-        case .unavailable:
+        case .notFound, .unavailable:
             return nil
         }
     }
@@ -77,6 +82,10 @@ enum LoginItemService {
         case .enabled:
             return desiredEnabled ? .none : .unregister
         case .notRegistered:
+            return desiredEnabled ? .register : .none
+        case .notFound:
+            // 首次注册前可能返回 notFound：允许用户发起注册；
+            // 期望关闭时无从注销（系统报告服务不存在），保持原状。
             return desiredEnabled ? .register : .none
         case .requiresApproval:
             // 开启时等待用户在系统设置中批准，无需重复注册；

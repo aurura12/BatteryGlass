@@ -38,7 +38,7 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
              └─→ BatteryHistoryStore
 ```
 
-核心对象之外：`NotificationService` 是单例（低电量/插拔本地通知，由 `BatteryMonitor` 在阈值/状态跃迁时触发）；`LoginItemService` 封装 `SMAppService.mainApp` 的登录项状态查询与注册/注销，App 启动时用系统登录项实际状态回写 `AppSettings.launchAtLoginEnabled`（BatteryGlassApp.swift:60-62）。注意 `SMAppService.mainApp.status` 在首次注册前可能返回 `.notFound`，此时映射为 `.notRegistered`（允许开启），不得当作不可用禁用开关；纯决策函数 `desiredAction(current:desiredEnabled:)` 对应测试 `LoginItemServiceTests`。
+核心对象之外：`NotificationService` 是单例（低电量/插拔本地通知，由 `BatteryMonitor` 在阈值/状态跃迁时触发）；`LoginItemService` 封装 `SMAppService.mainApp` 的登录项状态查询与注册/注销，App 启动时用系统登录项实际状态回写 `AppSettings.launchAtLoginEnabled`（BatteryGlassApp.swift:60-62）。注意 `SMAppService.mainApp.status` 在首次注册前可能返回 `.notFound`，该状态独立保留（不等于 `.notRegistered`）：允许用户发起注册，但 `systemLaunchAtLoginEnabled()` 返回 nil，**不得**据此禁用开关或用 false 覆盖已保存值。纯决策函数 `desiredAction(current:desiredEnabled:)` 对应测试 `LoginItemServiceTests`。
 
 全部核心类型都是 `@MainActor @Observable`（Swift Observation 框架），视图用 `@Environment(Type.self)` 读取。
 
