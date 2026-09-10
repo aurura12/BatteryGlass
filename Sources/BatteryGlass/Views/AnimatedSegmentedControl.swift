@@ -5,6 +5,12 @@ struct AnimatedSegmentedControl<T: Hashable>: View {
     let items: [T]
     @Binding var selection: T
     let label: (T) -> String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// 减弱动态时用无动画切换，避免胶囊滑动与缩放。
+    private var selectionAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -33,12 +39,12 @@ struct AnimatedSegmentedControl<T: Hashable>: View {
                 }
                 .frame(width: segmentWidth)
                 .offset(x: CGFloat(selectedIndex) * segmentWidth)
-                .animation(.spring(response: 0.42, dampingFraction: 0.82), value: selection)
+                .animation(selectionAnimation, value: selection)
 
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                         Button {
-                            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                            withAnimation(selectionAnimation) {
                                 selection = item
                             }
                         } label: {

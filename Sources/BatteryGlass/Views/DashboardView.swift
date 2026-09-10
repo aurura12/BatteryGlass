@@ -12,6 +12,7 @@ struct DashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(BatteryHistoryStore.self) private var history
     @Environment(AppSettings.self) private var settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
 
     private var tab: PanelTab {
@@ -41,10 +42,10 @@ struct DashboardView: View {
                                 .padding(.vertical, DesignTokens.spacingXS)
                         }
                         .scrollIndicators(.hidden)
-                        .transition(.pageSwitch(insertionEdge: insertionEdge, removalEdge: removalEdge))
+                        .transition(pageTransition)
                     } else {
                         HistoryView()
-                            .transition(.pageSwitch(insertionEdge: insertionEdge, removalEdge: removalEdge))
+                            .transition(pageTransition)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -62,7 +63,12 @@ struct DashboardView: View {
             .panelGlassSurface(cornerRadius: DesignTokens.cornerRadiusPanel)
         }
         .frame(width: 392, height: 672)
-        .animation(.spring(response: 0.5, dampingFraction: 0.86), value: tab)
+        .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.86), value: tab)
+    }
+
+    /// 减弱动态时只做淡入淡出，去掉滑动/缩放/模糊位移。
+    private var pageTransition: AnyTransition {
+        reduceMotion ? .opacity : .pageSwitch(insertionEdge: insertionEdge, removalEdge: removalEdge)
     }
 
     /// 历史页从右侧滑入，实时页从左侧滑入，形成方向感切换。
