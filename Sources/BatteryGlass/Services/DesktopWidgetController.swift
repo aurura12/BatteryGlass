@@ -49,6 +49,18 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
                 }
             }
         )
+        // 分辨率/显示器配置变化后，窗口可能落在屏幕外，需要拉回可见区。
+        observers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleScreenParametersChange()
+                }
+            }
+        )
     }
 
     func setVisible(_ visible: Bool) {
@@ -121,6 +133,16 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
     func windowDidMove(_ notification: Notification) {
         guard let window else { return }
         settings.desktopWidgetFrameString = NSStringFromRect(window.frame)
+    }
+
+    /// 屏幕参数变化后，若窗口不再与任何屏幕的可见区相交，则移回默认位置。
+    private func handleScreenParametersChange() {
+        guard let window else { return }
+        let frame = window.frame
+        guard !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) else {
+            return
+        }
+        window.setFrame(defaultFrame(), display: true)
     }
 
     private func restoredFrame() -> NSRect? {
