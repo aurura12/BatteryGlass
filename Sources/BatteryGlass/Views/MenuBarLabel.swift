@@ -7,6 +7,14 @@ struct MenuBarLabel: View {
     var body: some View {
         HStack(spacing: 3) {
             StatusBarIconView(snapshot: monitor.snapshot)
+            if monitor.snapshot.state == .charging {
+                // 只有 battery.100percent.bolt 带闪电变体，其余电量档没有；
+                // 因此电量图标按真实电量显示，充电状态另用一个小闪电标识，
+                // 避免"充电中恒显满电"且不违反"状态不只靠颜色传达"。
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(BatteryStyling.tint(for: monitor.snapshot))
+            }
             if settings.menuBarDisplayMode != .none {
                 Text(labelText)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -49,9 +57,6 @@ struct MenuBarLabel: View {
 /// 菜单栏使用系统电池符号，避免 MenuBarExtra 对自绘 Shape 的渲染差异。
 enum MenuBarBatterySymbol {
     static func name(for snapshot: BatterySnapshot) -> String {
-        if snapshot.state == .charging {
-            return "battery.100percent.bolt"
-        }
         if snapshot.state == .unknown {
             return "battery.0percent"
         }

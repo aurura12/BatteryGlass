@@ -9,4 +9,24 @@ final class MenuBarLabelTests: XCTestCase {
 
         XCTAssertEqual(MenuBarBatterySymbol.name(for: snapshot), "battery.75percent")
     }
+
+    func testChargingIconReflectsActualLevelInsteadOfFullBattery() {
+        var low = BatterySnapshot()
+        low.state = .charging
+        low.percent = 40
+        XCTAssertEqual(MenuBarBatterySymbol.name(for: low), "battery.50percent")
+
+        var high = BatterySnapshot()
+        high.state = .charging
+        high.percent = 92
+        XCTAssertEqual(MenuBarBatterySymbol.name(for: high), "battery.100percent")
+    }
+
+    func testUnknownStateUsesEmptyBatterySymbol() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .unknown
+        snapshot.percent = 0
+
+        XCTAssertEqual(MenuBarBatterySymbol.name(for: snapshot), "battery.0percent")
+    }
 }
