@@ -92,24 +92,32 @@ final class HistoryExporterTests: XCTestCase {
                 mode: .discharging
             )
         ]
+        let sleepIntervals = [
+            SleepInterval(
+                start: Date(timeIntervalSince1970: 1_700_000_000),
+                end: Date(timeIntervalSince1970: 1_700_000_030)
+            )
+        ]
         let json = HistoryExporter.jsonString(
             samples: [sample],
             dailySummaries: summaries,
-            sleepSegments: sleepSegments
+            sleepSegments: sleepSegments,
+            sleepIntervals: sleepIntervals
         )
 
         let data = Data(json.utf8)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try? decoder.decode(ExportPayloadFixture.self, from: data)
-        XCTAssertEqual(decoded?.version, 3)
+        XCTAssertEqual(decoded?.version, 4)
         XCTAssertEqual(decoded?.samples.count, 1)
         XCTAssertEqual(decoded?.samples.first?.cycleCount, 42)
         XCTAssertEqual(decoded?.dailySummaries.count, 1)
         XCTAssertEqual(decoded?.dailySummaries.first?.dayKey, "2026-08-30")
-        // v3 导出包含待机区间，往返不丢失。
+        // v3 起导出包含待机区间，v4 起包含睡眠边界，往返不丢失。
         XCTAssertEqual(decoded?.sleepSegments?.count, 1)
         XCTAssertEqual(decoded?.sleepSegments?.first?.mode, .discharging)
+        XCTAssertEqual(decoded?.sleepIntervals?.count, 1)
     }
 }
 
@@ -118,4 +126,5 @@ private struct ExportPayloadFixture: Decodable {
     var samples: [HistorySample]
     var dailySummaries: [DailySummary]
     var sleepSegments: [SleepSegment]?
+    var sleepIntervals: [SleepInterval]?
 }

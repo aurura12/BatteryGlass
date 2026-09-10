@@ -212,7 +212,8 @@ struct SettingsView: View {
             : HistoryExporter.jsonString(
                 samples: history.samples,
                 dailySummaries: history.dailySummaries,
-                sleepSegments: history.sleepSegments
+                sleepSegments: history.sleepSegments,
+                sleepIntervals: history.sleepIntervals
             )
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
