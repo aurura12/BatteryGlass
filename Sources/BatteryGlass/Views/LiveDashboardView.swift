@@ -53,7 +53,7 @@ struct AdapterSplitCard: View {
                 Divider()
                     .frame(height: 26)
                 splitItem(
-                    title: "系统估算",
+                    title: "系统直供",
                     icon: "laptopcomputer",
                     value: snapshot.directSupplyPowerW.map { String(format: "%.1f W", $0) } ?? "--",
                     tint: DesignTokens.dataBlue
@@ -371,9 +371,9 @@ struct PowerTrendCard: View {
     private var directionCaption: String {
         if !hasSamples { return "暂无有效功率数据" }
         switch snapshot.state {
-        case .charging: return "适配器供电 · 系统总功率"
-        case .discharging: return "电池供电 · 系统总功率"
-        case .pluggedIn: return "适配器供电 · 系统总功率"
+        case .charging: return "适配器供电 · 适配器输入功率"
+        case .discharging: return "电池供电 · 电池放电功率"
+        case .pluggedIn: return "适配器供电 · 适配器输入功率"
         case .unknown: return "暂无有效功率数据"
         }
     }

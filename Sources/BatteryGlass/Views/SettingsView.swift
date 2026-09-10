@@ -138,7 +138,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440, height: 800)
+        // 高度留出小屏（可见高度约 700pt）余地，超出内容由 Form 滚动。
+        .frame(width: 440, height: 640)
         .confirmationDialog(
             "确定要清空全部历史数据吗？此操作不可撤销。",
             isPresented: $showingClearHistoryConfirmation,
