@@ -4,6 +4,9 @@
 
 ## [2026-09-10]
 
+### 修复
+- 修复开机自启动开关在首次注册前因 `SMAppService.mainApp` 返回 `.notFound` 而被错误禁用的问题。
+
 ### 修改
 - 更新 `CODEBUDDY.md`：补充电源状态判定（`BatteryDischargeConfirmation`）与「充满还需/剩余时间」链路（`TimeRemainingEstimator` / `ChargeRateTracker` / `TimeRemainingSmoother`）、遥测校准持久化（`PowerTelemetryCalibrationStore`）、`HistoryExporter`、单实例保护、脚本命令与完整测试类地图。
 - 将应用收敛为纯菜单栏模式：移除主窗口 Scene、主窗口启动设置和 Dock reopen 路径；保留菜单栏面板、设置窗口与桌面小组件。

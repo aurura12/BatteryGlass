@@ -35,6 +35,15 @@ final class LoginItemServiceTests: XCTestCase {
         )
     }
 
+    // MARK: - 首次注册（notFound）
+
+    func testNotFoundStatusIsAvailableForFirstRegistration() {
+        XCTAssertEqual(
+            LoginItemState(status: .notFound),
+            .notRegistered
+        )
+    }
+
     // MARK: - 待批准（requiresApproval）
 
     func testRequiresApprovalWithDesiredEnabledWaitsForSystemApproval() {

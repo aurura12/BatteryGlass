@@ -176,7 +176,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 未从 .app 包运行时（如直接运行可执行文件）无法操作登录项，禁用开关。
+    /// 系统无法查询登录项状态时禁用开关。
     private var loginItemAvailable: Bool {
         LoginItemService.currentState != .unavailable
     }

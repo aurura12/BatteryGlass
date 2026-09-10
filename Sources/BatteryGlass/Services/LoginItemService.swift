@@ -10,7 +10,7 @@ enum LoginItemState: Equatable {
     case notRegistered
     /// 已发起注册但需用户在系统设置中批准（常见于从互联网下载的应用）。
     case requiresApproval
-    /// 无法获取或操作登录项（如未通过 .app 包运行），此时应禁用开关。
+    /// 系统无法获取或操作登录项状态，此时应禁用开关。
     case unavailable
 
     init(status: SMAppService.Status) {
@@ -22,8 +22,8 @@ enum LoginItemState: Equatable {
         case .notRegistered:
             self = .notRegistered
         case .notFound:
-            // 未从 .app 包运行（如直接运行可执行文件），系统不认为存在可注册的 App。
-            self = .unavailable
+            // mainApp 在首次注册前可能返回 notFound；此时仍应允许用户发起注册。
+            self = .notRegistered
         @unknown default:
             self = .unavailable
         }
@@ -43,7 +43,7 @@ enum LoginItemApplyResult: Equatable {
     case applied
     /// 注册已发起，但需用户在系统设置中批准。
     case needsApproval
-    /// 无法操作登录项（未从 .app 包运行）。
+    /// 无法操作登录项（系统状态不可用）。
     case unavailable
     /// 系统调用失败。
     case failed
@@ -58,7 +58,7 @@ enum LoginItemService {
     }
 
     /// 系统当前是否处于"登录后自动启动"状态。
-    /// 返回 nil 表示无法判断（未从 .app 包运行）。
+    /// 返回 nil 表示系统无法判断登录项状态。
     static func systemLaunchAtLoginEnabled() -> Bool? {
         switch currentState {
         case .enabled, .requiresApproval:
