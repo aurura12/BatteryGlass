@@ -17,6 +17,7 @@
 - 为历史页三个图表补充无障碍标签与概要值（每日耗电量、今日功率曲线、电池健康趋势），便于 VoiceOver 播报。
 
 ### 修改
+- 优化历史页性能：今日样本与功率曲线数据按样本集合记忆化，避免面板 2Hz 重渲染时反复全量过滤与抽样（`TodaySamplesCache` / `PowerChartDataCache`）。
 - 统一电源术语：电源分配卡的「系统估算」改为「系统直供」，功率趋势卡副标题改为准确的「适配器输入功率 / 电池放电功率」，与 README 口径一致。
 - 设置窗口高度由固定 800 调整为 640，避免在可见高度较小的屏幕上超出屏幕（超出内容由表单滚动）。
 - 修复文档漂移：`CODEBUDDY.md` 补全睡眠边界通知（`sleepIntervalStarted/Ended`）、history payload 版本更新为 v4（含 `sleepIntervals`）、删除对不存在的 `EnergyRingView.swift` / `PowerWaveformView.swift` 的引用、修正 `HistoryExporter` 职责描述；`README.md` 移除已废弃的「主窗口」描述、更新历史页功能说明、修正项目结构与脚本清单。

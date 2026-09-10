@@ -5,6 +5,17 @@ struct HistoryView: View {
     @Environment(BatteryHistoryStore.self) private var history
     @Environment(BatteryMonitor.self) private var monitor
     @State private var energyRange: EnergyHistoryRange = .fourteen
+    // 面板以 2Hz 重渲染；用记忆化避免每次重算今日样本与曲线数据。
+    @State private var todayCache = TodaySamplesCache()
+    @State private var chartCache = PowerChartDataCache()
+
+    private var todaySamples: [HistorySample] {
+        todayCache.samples(from: history.samples)
+    }
+
+    private var chartData: PowerChartData {
+        chartCache.data(for: todaySamples)
+    }
 
     var body: some View {
         ScrollView {
@@ -15,7 +26,7 @@ struct HistoryView: View {
                 )
 
                 TodayPowerChart(
-                    samples: history.samplesForDay(Date()),
+                    chartData: chartData,
                     sleepSegments: history.sleepSegments
                 )
                 // 跨天后以新的一天重建视图，重置时间滑块位置，
@@ -39,6 +50,44 @@ struct HistoryView: View {
 
     private var cycleCount: Int {
         history.samples.last?.cycleCount ?? monitor.snapshot.cycleCount
+    }
+}
+
+/// 今日样本记忆化：仅在样本数量、最后一条 id 或日期变化时重新过滤。
+final class TodaySamplesCache {
+    private var cached: [HistorySample] = []
+    private var lastCount = -1
+    private var lastID: UUID?
+    private var dayKey = ""
+
+    func samples(from all: [HistorySample], now: Date = Date()) -> [HistorySample] {
+        let key = BatteryFormatters.dayKey(for: now)
+        if lastCount == all.count, lastID == all.last?.id, dayKey == key {
+            return cached
+        }
+        cached = HistoryRetention.samples(forDay: now, from: all)
+        lastCount = all.count
+        lastID = all.last?.id
+        dayKey = key
+        return cached
+    }
+}
+
+/// 功率曲线数据记忆化：仅在样本集合变化时重建（抽样到 800 点是 O(n) 开销）。
+final class PowerChartDataCache {
+    private var cached: PowerChartData?
+    private var lastCount = -1
+    private var lastID: UUID?
+
+    func data(for samples: [HistorySample]) -> PowerChartData {
+        if let cached, lastCount == samples.count, lastID == samples.last?.id {
+            return cached
+        }
+        let data = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
+        cached = data
+        lastCount = samples.count
+        lastID = samples.last?.id
+        return data
     }
 }
 
@@ -399,8 +448,7 @@ struct DailyEnergyComparisonChart: View {
 }
 
 struct TodayPowerChart: View {
-    let energySamples: [HistorySample]
-    let chartSamples: [HistorySample]
+    let chartData: PowerChartData
     let sleepSegments: [SleepSegment]
     let scrollStartDate: Date
     let scrollEndDate: Date
@@ -410,10 +458,11 @@ struct TodayPowerChart: View {
     /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
     private let hoverMaximumGap: TimeInterval = 180
 
-    init(samples: [HistorySample], sleepSegments: [SleepSegment]) {
-        let chartData = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
-        self.energySamples = chartData.energySamples
-        self.chartSamples = chartData.chartSamples
+    private var energySamples: [HistorySample] { chartData.energySamples }
+    private var chartSamples: [HistorySample] { chartData.chartSamples }
+
+    init(chartData: PowerChartData, sleepSegments: [SleepSegment]) {
+        self.chartData = chartData
         self.sleepSegments = sleepSegments
         let bounds = PowerChartWindow.scrollBounds(for: chartData.energySamples)
         let start = bounds?.start ?? Date()
