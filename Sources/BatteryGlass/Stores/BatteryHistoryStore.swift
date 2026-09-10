@@ -135,10 +135,6 @@ final class BatteryHistoryStore {
         persist()
     }
 
-    func samplesForDay(_ date: Date) -> [HistorySample] {
-        HistoryRetention.samples(forDay: date, from: samples)
-    }
-
     /// 记录一次待机区间：将其能量按跨天比例并入每日耗电量，并持久化。
     func recordSleepSegment(_ segment: SleepSegment) {
         guard settings.recordHistory else { return }
