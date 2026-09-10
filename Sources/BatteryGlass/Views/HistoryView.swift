@@ -180,6 +180,8 @@ struct DailyEnergyComparisonChart: View {
                     }
                 }
                 .frame(height: 138)
+                .accessibilityLabel("每日耗电量图表")
+                .accessibilityValue(energyAccessibilitySummary)
 
                 comparisonMetrics
             }
@@ -190,6 +192,13 @@ struct DailyEnergyComparisonChart: View {
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    /// VoiceOver 概要：周期数与总耗电量。
+    private var energyAccessibilitySummary: String {
+        guard !aggregates.isEmpty else { return "暂无数据" }
+        let total = aggregates.map(\.energyKWh).reduce(0, +)
+        return "共 \(aggregates.count) 个周期，总计 \(BatteryFormatters.energyKWh(total))"
     }
 
     private func updateHover(
@@ -518,6 +527,8 @@ struct TodayPowerChart: View {
                         }
                     }
                     .frame(height: 138)
+                    .accessibilityLabel("今日功率曲线")
+                    .accessibilityValue(powerAccessibilitySummary)
 
                     if scrollEndDate > scrollStartDate {
                         Slider(
@@ -567,6 +578,13 @@ struct TodayPowerChart: View {
         let visible = PowerChartWindow.samples(in: visibleChartDomain, from: chartSamples)
         let filtered = PowerChartSegmentation.excludingSleepSegments(visible, sleepSegments: sleepSegments)
         return PowerChartSegmentation.splitByGaps(filtered)
+    }
+
+    /// VoiceOver 概要：最新一条可见功率样本。
+    private var powerAccessibilitySummary: String {
+        guard let latest = energySamples.last,
+              let power = latest.consumptionPowerW else { return "暂无数据" }
+        return String(format: "最新 %.1f 瓦", power)
     }
 
     private var scrollPositionBinding: Binding<Double> {
@@ -742,10 +760,18 @@ struct HealthTrendChart: View {
                     }
                 }
                 .frame(height: 116)
+                .accessibilityLabel("电池健康趋势")
+                .accessibilityValue(healthAccessibilitySummary)
             }
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    /// VoiceOver 概要：最新健康度。
+    private var healthAccessibilitySummary: String {
+        guard let latestHealth else { return "暂无数据" }
+        return String(format: "最新健康度 %.0f%%", latestHealth)
     }
 
     private func updateHover(
