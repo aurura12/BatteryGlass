@@ -9,11 +9,15 @@ MIN_SYSTEM_VERSION="14.0"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+BATTERYGLASS_INSTALL_DIR="${BATTERYGLASS_INSTALL_DIR:-/Applications}"
+INSTALLED_APP_BUNDLE="$BATTERYGLASS_INSTALL_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+
+source "$ROOT_DIR/script/install_app.sh"
 
 stop_running_app() {
   if ! pgrep -x "$APP_NAME" >/dev/null 2>&1; then
@@ -91,7 +95,8 @@ if command -v codesign >/dev/null 2>&1; then
 fi
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  install_app "$APP_BUNDLE" "$INSTALLED_APP_BUNDLE"
+  /usr/bin/open -n "$INSTALLED_APP_BUNDLE"
 }
 
 case "$MODE" in

@@ -11,23 +11,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 菜单栏常驻应用：不占用 Dock。
         NSApp.setActivationPolicy(.accessory)
-
-        // 启动时隐藏主窗口：仅保留菜单栏图标与桌面小组件（设置里可关闭此行为）。
-        guard !AppSettings.shouldShowMainWindowAtLaunch() else { return }
-        DispatchQueue.main.async {
-            // 主窗口是普通 NSWindow；菜单栏弹窗是 NSPanel，不应被关闭。
-            NSApp.windows
-                .filter { !($0 is NSPanel) && $0.canBecomeMain }
-                .forEach { $0.close() }
-        }
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            // 用户点击 Dock 图标时，若主窗口已关闭则重新打开。
-            NotificationCenter.default.post(name: .requestDashboardWindow, object: nil)
-        }
-        return true
     }
 
     /// 终止同 bundle 的其他运行实例，确保本进程成为唯一实例。
@@ -87,16 +70,6 @@ struct BatteryGlassApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("BatteryGlass", id: "dashboard") {
-            DashboardView()
-                .environment(monitor)
-                .environment(history)
-                .environment(settings)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 400, height: 700)
-        .windowResizability(.contentSize)
-
         MenuBarExtra {
             DashboardView()
                 .environment(monitor)

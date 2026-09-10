@@ -40,7 +40,7 @@
 
 - 标准：macOS 27（本机 SDK 已验证，Swift 6.4 / macOS 27 SDK）
 - 兼容：macOS 14/15，Liquid Glass API 自动降级为 `.ultraThinMaterial` / `.regularMaterial`
-- 设计说明：菜单栏常驻应用（`LSUIElement = true`，无 Dock 图标）+ 启动时显示主窗口；双击 `.app` 可打开仪表盘
+- 设计说明：纯菜单栏常驻应用（`LSUIElement = true`，无 Dock 图标）；点击菜单栏图标打开仪表盘
 
 ## 构建与运行
 
@@ -52,7 +52,7 @@
 ./script/build_and_run.sh --logs   # 启动并跟随日志
 ```
 
-脚本会执行 `swift build`、生成 `dist/BatteryGlass.app`（含 Info.plist、ad-hoc 签名），再用 `open -n` 启动。
+脚本会执行 `swift build`、生成 `dist/BatteryGlass.app`（含 Info.plist、ad-hoc 签名），同步安装到 `/Applications/BatteryGlass.app`，再从安装路径启动。
 
 也可以直接用 Xcode 打开 `Package.swift` 运行。
 

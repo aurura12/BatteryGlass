@@ -39,8 +39,6 @@ struct SettingsView: View {
                         Text(mode.title).tag(mode)
                     }
                 }
-
-                Toggle("启动时显示主窗口", isOn: $settings.showMainWindowAtLaunch)
             }
 
             Section("提醒") {

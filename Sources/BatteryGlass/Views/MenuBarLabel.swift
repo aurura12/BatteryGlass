@@ -3,7 +3,6 @@ import SwiftUI
 struct MenuBarLabel: View {
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(AppSettings.self) private var settings
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 3) {
@@ -18,9 +17,6 @@ struct MenuBarLabel: View {
         }
         .help("BatteryGlass · \(monitor.snapshot.percentText)")
         .accessibilityLabel("BatteryGlass，电池电量 \(monitor.snapshot.percentText)")
-        .onReceive(NotificationCenter.default.publisher(for: .requestDashboardWindow)) { _ in
-            openWindow(id: "dashboard")
-        }
         .onAppear {
             NotificationCenter.default.post(
                 name: .desktopWidgetVisibilityChanged,

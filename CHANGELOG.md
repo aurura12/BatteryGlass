@@ -2,6 +2,17 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-09-10]
+
+### 修改
+- 更新 `CODEBUDDY.md`：补充电源状态判定（`BatteryDischargeConfirmation`）与「充满还需/剩余时间」链路（`TimeRemainingEstimator` / `ChargeRateTracker` / `TimeRemainingSmoother`）、遥测校准持久化（`PowerTelemetryCalibrationStore`）、`HistoryExporter`、单实例保护、脚本命令与完整测试类地图。
+- 将应用收敛为纯菜单栏模式：移除主窗口 Scene、主窗口启动设置和 Dock reopen 路径；保留菜单栏面板、设置窗口与桌面小组件。
+
+## [2026-09-09]
+
+### 修复
+- 修复构建脚本只更新 `dist/BatteryGlass.app`、没有同步到 `/Applications` 的问题：现在构建完成后会替换安装目录中的应用，并从安装路径启动；新增 App bundle 安装替换测试。
+
 ## [2026-09-06]
 
 ### 修复
