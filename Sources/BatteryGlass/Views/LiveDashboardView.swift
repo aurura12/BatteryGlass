@@ -45,10 +45,10 @@ struct AdapterSplitCard: View {
 
             HStack(spacing: DesignTokens.spacingM) {
                 splitItem(
-                    title: "给电池",
-                    icon: "battery.100percent.bolt",
-                    value: String(format: "%+.1f W", snapshot.chargingPowerW ?? 0),
-                    tint: DesignTokens.statusGreen
+                    title: batterySplit.title,
+                    icon: batterySplit.icon,
+                    value: batterySplit.value,
+                    tint: batterySplit.tint
                 )
                 Divider()
                     .frame(height: 26)
@@ -70,6 +70,18 @@ struct AdapterSplitCard: View {
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    /// 电池侧分配：充电显示充入功率；插电但连续确认电池仍在放电时显示放电功率，
+    /// 避免把真实的电池放电误显示成「+0.0 W」。
+    private var batterySplit: (title: String, icon: String, value: String, tint: Color) {
+        if snapshot.state == .charging, let charging = snapshot.chargingPowerW {
+            return ("给电池", "battery.100percent.bolt", String(format: "%+.1f W", charging), DesignTokens.statusGreen)
+        }
+        if snapshot.batteryDischargingWhilePlugged, let discharge = snapshot.batteryDischargePowerW {
+            return ("电池放电", "battery.25percent", String(format: "-%.1f W", discharge), DesignTokens.statusRed)
+        }
+        return ("给电池", "battery.100percent.bolt", "0.0 W", .secondary)
     }
 
     private func splitItem(title: String, icon: String, value: String, tint: Color) -> some View {
