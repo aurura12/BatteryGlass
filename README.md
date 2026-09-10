@@ -5,7 +5,7 @@
 ## 功能
 
 - 常驻菜单栏（不占用 Dock）：自定义闪电徽章图标，随充电/放电/低电量变色，不显示百分比，与系统电池图标明显区分
-- 主窗口：启动时显示仪表盘窗口，双击应用可重新打开
+- 菜单栏面板：点击菜单栏图标打开仪表盘，顶部「实时 / 历史」分页切换，底部可进入设置或退出
 - 桌面小组件：常驻桌面层级的紧凑电池卡片（默认开启，可拖动、悬停关闭、设置中可重置位置）
 - 实时数据（IOKit，2 Hz 采样，资源占用低）：
   - 电量百分比与充电/放电剩余时间
@@ -27,7 +27,9 @@
   - 指标行：温度 / 电压 / 系统功耗 / 适配器
   - “实时 / 历史”分段控件与页面切换动画（液态玻璃高亮胶囊 + 滑动/缩放/模糊过渡）
 - 历史记录：
-  - 全天功率曲线（每 5 秒采样，可横向滚动查看）、每日耗电量（kWh）与近 14 天对比、循环次数记录（健康度以实时卡片展示）
+  - 每日耗电量（kWh）：支持近 7/14/30/90 天与全部范围，可按日/按周/按月聚合，含今日/周期均/总计与每日明细
+  - 今日功率曲线（每 5 秒采样，拖动时间滑块查看，待机缺口自动断开不连线）
+  - 电池健康趋势（近 90 天）与循环次数卡片
   - 每日耗电量表示“从电源侧消耗了多少电”：电池供电计入电池放电，正常插电计入适配器输入；插电时确认电池仍放电则同时计入两个可观测来源
   - 每 15 秒持久化到 `~/Library/Application Support/BatteryGlass/history.json`（退出前自动 flush）
 - 电源诊断：
@@ -60,14 +62,18 @@
 
 ```
 Sources/BatteryGlass/
-├── App/                 # @main 入口、AppDelegate（accessory 策略）
+├── App/                 # @main 入口、AppDelegate（accessory 策略 + 单实例保护）
 ├── Models/              # BatterySnapshot、PowerSample、HistorySample
+│                        # 纯函数：EnergyCalculator、SleepEnergyCalculator、
+│                        # TimeRemainingEstimator、ChargeRateTracker、TimeRemainingSmoother
 ├── Services/            # BatteryMonitor（IOKit）、NotificationService
 │                        # DesktopWidgetController（桌面小组件窗口）
-├── Stores/              # AppSettings、BatteryHistoryStore
-├── Support/             # 格式化、配色、Liquid Glass 修饰器
-└── Views/               # 面板、环形仪表、波形、历史图表、设置
-script/build_and_run.sh  # 一键构建/运行/验证
+│                        # LoginItemService（SMAppService）、PowerDiagnosticsLogger
+├── Stores/              # AppSettings、BatteryHistoryStore、BoundedFileReader
+├── Support/             # 格式化、配色、Liquid Glass 修饰器、EnergyAggregator、HistoryExporter
+└── Views/               # 菜单栏面板、KPI 卡片、历史图表、设置、桌面小组件、菜单栏图标
+script/build_and_run.sh  # 一键构建/运行/验证（内部用 install_app.sh 安装替换）
+script/install_app_test.sh / menu_bar_only_test.sh  # 安装替换与"纯菜单栏"回归测试
 scripts/generate_icon.swift  # 重新生成应用图标（矢量绘制 → AppIcon.icns）
 Resources/  # AppIcon.iconset 与 AppIcon.icns
 design-system/batteryglass/  # ui-ux-pro-max 设计系统（MASTER.md）

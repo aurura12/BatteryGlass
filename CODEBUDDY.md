@@ -38,7 +38,7 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
              └─→ BatteryHistoryStore
 ```
 
-核心对象之外：`NotificationService` 是单例（低电量/插拔本地通知，由 `BatteryMonitor` 在阈值/状态跃迁时触发）；`LoginItemService` 是 SMLoginItemSetEnabled 封装，App 启动时用系统登录项实际状态回写 `AppSettings.launchAtLoginEnabled`（BatteryGlassApp.swift:60-62）。
+核心对象之外：`NotificationService` 是单例（低电量/插拔本地通知，由 `BatteryMonitor` 在阈值/状态跃迁时触发）；`LoginItemService` 封装 `SMAppService.mainApp` 的登录项状态查询与注册/注销，App 启动时用系统登录项实际状态回写 `AppSettings.launchAtLoginEnabled`（BatteryGlassApp.swift:60-62）。注意 `SMAppService.mainApp.status` 在首次注册前可能返回 `.notFound`，此时映射为 `.notRegistered`（允许开启），不得当作不可用禁用开关；纯决策函数 `desiredAction(current:desiredEnabled:)` 对应测试 `LoginItemServiceTests`。
 
 全部核心类型都是 `@MainActor @Observable`（Swift Observation 框架），视图用 `@Environment(Type.self)` 读取。
 
@@ -47,9 +47,9 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 1. `BatteryMonitor.refresh()` 每 0.5 秒（2 Hz，`Timer` 挂在 RunLoop `.common` 模式）从两个 IOKit 源读取并合并：
    - `readSmartBattery()`：`AppleSmartBattery` 注册表（容量/循环/温度/电气参数/AdapterDetails/PowerTelemetryData）
    - `readPowerSources()`：`IOPowerSources` IOPS 描述（容量/状态/剩余时间/适配器）
-2. 合并后的 `BatterySnapshot` 通过通知发布（`userInfo["snapshot"]`）。全部通知名集中定义于 `Support/Extensions.swift`：`batterySnapshotUpdated`、`sleepSegmentRecorded`、`desktopWidgetVisibilityChanged`、`resetDesktopWidgetPosition`、`desktopWidgetStyleChanged`。
-3. `BatteryHistoryStore` 观察 `batterySnapshotUpdated` 与 `sleepSegmentRecorded` 做记录；`DesktopWidgetController` 观察 widget 显隐/重置/风格通知。
-4. 待机（睡眠）补测：`BatteryMonitor` 监听 `NSWorkspace.willSleep/didWake`（见 `Services/BatteryMonitor.swift`「待机（睡眠）监听」段）。睡眠前记录基线，唤醒后约 30 秒内每 5 秒采样一次系统直供功率取最小值，再按睡眠前供电状态归属成 `SleepSegment`，发 `sleepSegmentRecorded` 通知供能耗计量使用。
+2. 合并后的 `BatterySnapshot` 通过通知发布（`userInfo["snapshot"]`）。全部通知名集中定义于 `Support/Extensions.swift`：`batterySnapshotUpdated`、`sleepSegmentRecorded`、`sleepIntervalStarted`、`sleepIntervalEnded`、`desktopWidgetVisibilityChanged`、`resetDesktopWidgetPosition`、`desktopWidgetStyleChanged`。
+3. `BatteryHistoryStore` 观察 `batterySnapshotUpdated`、`sleepSegmentRecorded` 及 `sleepIntervalStarted/Ended`（睡眠边界）做记录；`DesktopWidgetController` 观察 widget 显隐/重置/风格通知。
+4. 待机（睡眠）补测：`BatteryMonitor` 监听 `NSWorkspace.willSleep/didWake`（见 `Services/BatteryMonitor.swift`「待机（睡眠）监听」段）。睡眠前记录基线并发 `sleepIntervalStarted`，唤醒后发 `sleepIntervalEnded` 建立边界，随后约 30 秒内每 5 秒采样一次系统直供功率取最小值，再按睡眠前供电状态归属成 `SleepSegment`，发 `sleepSegmentRecorded` 通知供能耗计量使用。
 
 ### 电源状态判定与时间估算
 
@@ -81,16 +81,16 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 ### Stores / 持久化
 
 - `AppSettings`：UserDefaults 持久化，key 见文件内 static 常量。
-- `BatteryHistoryStore`：`~/Library/Application Support/BatteryGlass/history.json`。payload 版本化（当前 v3：samples + dailySummaries + sleepSegments），每 15 秒异步写盘（串行 `persistenceQueue`），退出时 `flush()` 同步写盘（`willTerminateNotification`）。样本 ≥5 秒记一条，cycleCount/health 显著变化立即记。加载时按 `payload.version` 逐级迁移（v2 起含 dailySummaries，v3 起含 sleepSegments），并含"用 power-diagnostics.jsonl 回填 `consumptionPowerW`"的恢复逻辑。
+- `BatteryHistoryStore`：`~/Library/Application Support/BatteryGlass/history.json`。payload 版本化（当前 v4：samples + dailySummaries + sleepSegments + sleepIntervals），每 15 秒异步写盘（串行 `persistenceQueue`），退出时 `flush()` 同步写盘（`willTerminateNotification`）。样本 ≥5 秒记一条，cycleCount/health 显著变化立即记。加载时按 `payload.version` 逐级迁移（v2 起含 dailySummaries，v3 起含 sleepSegments，v4 起含 sleepIntervals，后两者缺失按默认值处理），并含"用 power-diagnostics.jsonl 回填 `consumptionPowerW`"的恢复逻辑。
 - `PowerDiagnosticsLogger`（单例）：JSONL 追加写 `power-diagnostics.jsonl`，5 MB 自动轮换为 `.1.jsonl`。
 - `BoundedFileReader` / `HistoryLoadLimits`：所有本地文件读取必须走这里（历史上限 20 MB/10 万样本，诊断 50 MB/10 万样本），防止异常本地文件拖慢启动。
-- `HistoryExporter`（`Support/HistoryExporter.swift`）：历史样本 / 日志的 CSV、JSON 序列化，设置页导出按钮调用，纯函数。
+- `HistoryExporter`（`Support/HistoryExporter.swift`）：把历史样本与每日汇总序列化为 CSV、JSON（JSON 另含睡眠区间），设置页导出按钮调用，纯函数。
 - 持久化模式是"主线程同步记录 → 后台串行队列写文件"，新增类似逻辑时保持一致。
 
 ### Views / UI
 
 - `DashboardView` 是 `MenuBarExtra` window 的面板根视图；`PanelTab` 分段控件切换 `LiveDashboardView` / `HistoryView`（HistoryView 用 Swift Charts）。
-- 动效集中在 `Views/FluidGlassBackground.swift`、`EnergyRingView.swift`、`PowerWaveformView.swift`；设计令牌（8pt 间距栅格、交通灯状态色、数据蓝）见 `Support/DesignTokens.swift`，配色见 `Support/BatteryStyling.swift`。动效参数调节说明见 README「流体玻璃动画参数调节」。
+- 动效集中在 `Views/FluidGlassBackground.swift`（流体光斑）、`Views/AnimatedSegmentedControl.swift`（胶囊滑动）与 `Support/PageTransition.swift`（页面切换过渡）；设计令牌（8pt 间距栅格、交通灯状态色、数据蓝）见 `Support/DesignTokens.swift`，配色见 `Support/BatteryStyling.swift`。动效参数调节说明见 README「流体玻璃动画参数调节」。
 - 桌面小组件是应用内 NSWindow（`DesktopWidgetController`），非 WidgetKit。
 - UI 规范以 `design-system/batteryglass/MASTER.md` 为基准。
 
