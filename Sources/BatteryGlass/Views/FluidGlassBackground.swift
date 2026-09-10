@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct FluidGlassBackground: View {
-    var state: PowerState
     var colors: [Color]
     var intensity: Double
     var speed: Double

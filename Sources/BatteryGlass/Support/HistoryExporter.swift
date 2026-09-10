@@ -2,21 +2,6 @@ import Foundation
 
 /// 历史数据导出：纯函数生成 CSV / JSON 文本，便于单元测试。
 enum HistoryExporter {
-    /// 生成 CSV（逗号分隔，UTF-8，含表头）。
-    static func csvString(samples: [HistorySample]) -> String {
-        let rows = samples.map { sample in
-            [
-                Self.timeFormatter.string(from: sample.timestamp),
-                Self.csvField(Self.decimal(sample.power)),
-                Self.csvField(sample.consumptionPowerW.map { Self.decimal($0) }),
-                Self.csvField(Self.decimal(sample.percent, 0)),
-                Self.csvField("\(sample.cycleCount)"),
-                Self.csvField(sample.healthPercent.map { Self.decimal($0) })
-            ].joined(separator: ",")
-        }
-        return ([Self.header] + rows).joined(separator: "\n")
-    }
-
     /// 生成包含保留原始采样与完整每日汇总的 CSV，避免高频采样长期累积导致文件无限增长。
     static func csvString(
         samples: [HistorySample],
@@ -80,7 +65,6 @@ enum HistoryExporter {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    private static let header = "时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%)"
     private static let extendedHeader = "类型,时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%),耗电量(kWh),平均功率(W),最大功率(W),最小功率(W),样本数"
 
     private static let timeFormatter: ISO8601DateFormatter = {

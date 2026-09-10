@@ -21,27 +21,25 @@ final class HistoryExporterTests: XCTestCase {
         )
     }
 
-    func testCSVIncludesHeaderAndRows() {
-        let csv = HistoryExporter.csvString(samples: [makeSample()])
+    func testCSVIncludesExtendedHeader() {
+        let csv = HistoryExporter.csvString(samples: [makeSample()], dailySummaries: [])
+        let header = csv.split(separator: "\n").first
 
-        let lines = csv.split(separator: "\n")
-        XCTAssertEqual(lines.count, 2)
-        XCTAssertEqual(lines[0], "时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%)")
-        XCTAssertTrue(lines[1].contains("12.3"))
-        XCTAssertTrue(lines[1].contains("88")) // percent 四舍五入
-        XCTAssertTrue(lines[1].contains("42"))
-        XCTAssertTrue(lines[1].contains("95.5"))
+        XCTAssertEqual(
+            header,
+            "类型,时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%),耗电量(kWh),平均功率(W),最大功率(W),最小功率(W),样本数"
+        )
     }
 
     func testCSVLeavesNilFieldsEmpty() {
         let sample = makeSample(consumptionPowerW: nil, healthPercent: nil)
-        let csv = HistoryExporter.csvString(samples: [sample])
+        let csv = HistoryExporter.csvString(samples: [sample], dailySummaries: [])
         let dataLine = csv.split(separator: "\n")[1]
 
-        // 消耗功率与健康度列为空：第 3、6 个字段为空字符串。
+        // 消耗功率与健康度列为空：第 4、7 个字段（索引 3、6）为空字符串。
         let fields = dataLine.split(separator: ",", omittingEmptySubsequences: false)
-        XCTAssertEqual(fields[2], "")
-        XCTAssertEqual(fields[5], "")
+        XCTAssertEqual(fields[3], "")
+        XCTAssertEqual(fields[6], "")
     }
 
     func testCSVIncludesDailySummariesAlongsideRetainedSamples() {

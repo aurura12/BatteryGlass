@@ -54,7 +54,6 @@ struct DashboardView: View {
             .padding(DesignTokens.spacingXL)
             .background {
                 FluidGlassBackground(
-                    state: monitor.snapshot.state,
                     colors: BatteryStyling.gradient(for: monitor.snapshot),
                     intensity: settings.animationIntensity,
                     speed: settings.animationSpeed

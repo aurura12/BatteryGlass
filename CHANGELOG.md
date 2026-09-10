@@ -16,6 +16,9 @@
 - 更新 `CODEBUDDY.md`：补充电源状态判定（`BatteryDischargeConfirmation`）与「充满还需/剩余时间」链路（`TimeRemainingEstimator` / `ChargeRateTracker` / `TimeRemainingSmoother`）、遥测校准持久化（`PowerTelemetryCalibrationStore`）、`HistoryExporter`、单实例保护、脚本命令与完整测试类地图。
 - 将应用收敛为纯菜单栏模式：移除主窗口 Scene、主窗口启动设置和 Dock reopen 路径；保留菜单栏面板、设置窗口与桌面小组件。
 
+### 重构
+- 清理死代码：删除 `FluidGlassBackground` 中未使用的 `state` 参数（同步更新 `DashboardView` 调用），删除生产代码未使用的 `HistoryExporter.csvString(samples:)` 单参重载，并把 CSV 字段断言迁移到扩展格式。
+
 ## [2026-09-09]
 
 ### 修复
