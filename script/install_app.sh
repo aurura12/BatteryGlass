@@ -34,17 +34,32 @@ install_app() {
     return 1
   fi
 
-  if ! rm -rf "$destination_bundle"; then
-    rm -rf "$staging_bundle" || true
-    printf 'cannot replace existing app: %s\n' "$destination_bundle" >&2
-    return 1
+  # 先把现有 App 移到同目录备份（rename），再让新 bundle 就位；任一步失败都恢复旧 App，
+  # 避免"先删旧、后 mv 失败"导致安装目录被清空。
+  local backup_bundle="${destination_bundle}.backup.$$"
+  local had_existing=0
+
+  if [[ -e "$destination_bundle" ]]; then
+    rm -rf "$backup_bundle" || true
+    if ! mv "$destination_bundle" "$backup_bundle"; then
+      rm -rf "$staging_bundle" || true
+      printf 'cannot move existing app aside: %s\n' "$destination_bundle" >&2
+      return 1
+    fi
+    had_existing=1
   fi
 
   if ! mv "$staging_bundle" "$destination_bundle"; then
     rm -rf "$staging_bundle" || true
+    if (( had_existing )); then
+      rm -rf "$destination_bundle" || true
+      mv "$backup_bundle" "$destination_bundle" || true
+    fi
     printf 'cannot finish app installation: %s\n' "$destination_bundle" >&2
     return 1
   fi
+
+  rm -rf "$backup_bundle" || true
 
   printf 'installed app: %s\n' "$destination_bundle"
 }
