@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MenuBarLabel: View {
@@ -7,14 +8,6 @@ struct MenuBarLabel: View {
     var body: some View {
         HStack(spacing: 3) {
             StatusBarIconView(snapshot: monitor.snapshot)
-            if monitor.snapshot.state == .charging {
-                // 只有 battery.100percent.bolt 带闪电变体，其余电量档没有；
-                // 因此电量图标按真实电量显示，充电状态另用一个小闪电标识，
-                // 避免"充电中恒显满电"且不违反"状态不只靠颜色传达"。
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(BatteryStyling.tint(for: monitor.snapshot))
-            }
             if settings.menuBarDisplayMode != .none {
                 Text(labelText)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -76,6 +69,22 @@ enum MenuBarAccessibility {
     }
 }
 
+enum MenuBarPowerIndicator {
+    static let batteryIconWidth: CGFloat = 23
+
+    static func shouldShow(for snapshot: BatterySnapshot) -> Bool {
+        badgeSymbolName(for: snapshot) != nil
+    }
+
+    static func badgeSymbolName(for snapshot: BatterySnapshot) -> String? {
+        snapshot.adapterConnected ? "bolt.fill" : nil
+    }
+
+    static func iconWidth(for snapshot: BatterySnapshot) -> CGFloat {
+        batteryIconWidth
+    }
+}
+
 /// 菜单栏使用系统电池符号，避免 MenuBarExtra 对自绘 Shape 的渲染差异。
 enum MenuBarBatterySymbol {
     static func name(for snapshot: BatterySnapshot) -> String {
@@ -98,14 +107,83 @@ enum MenuBarBatterySymbol {
     }
 }
 
+/// 把菜单栏图标合成为一张 NSImage，避免 MenuBarExtra 丢弃多层 SwiftUI 子视图。
+/// 使用动态系统颜色，让内部闪电与电池填充形成对比，同时适配浅色/深色菜单栏。
+enum MenuBarIconRenderer {
+    private static let batteryWidth = MenuBarPowerIndicator.batteryIconWidth
+    private static let iconHeight: CGFloat = 18
+
+    static func image(for snapshot: BatterySnapshot) -> NSImage {
+        let width = MenuBarPowerIndicator.iconWidth(for: snapshot)
+        let image = NSImage(size: NSSize(width: width, height: iconHeight))
+        image.isTemplate = false
+        image.lockFocus()
+        defer { image.unlockFocus() }
+
+        let symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 15,
+            weight: .medium
+        ).applying(
+            NSImage.SymbolConfiguration(paletteColors: [.labelColor])
+        )
+        let battery = NSImage(
+            systemSymbolName: MenuBarBatterySymbol.name(for: snapshot),
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(symbolConfiguration)
+        battery?.draw(
+            in: NSRect(x: 0, y: 1.5, width: batteryWidth, height: 15),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+
+        if let indicatorName = MenuBarPowerIndicator.badgeSymbolName(for: snapshot) {
+            let indicatorOutlineConfiguration = NSImage.SymbolConfiguration(
+                pointSize: 10,
+                weight: .bold
+            ).applying(
+                NSImage.SymbolConfiguration(paletteColors: [.labelColor])
+            )
+            let indicatorFillConfiguration = NSImage.SymbolConfiguration(
+                pointSize: 9,
+                weight: .bold
+            ).applying(
+                NSImage.SymbolConfiguration(paletteColors: [.controlBackgroundColor])
+            )
+            let indicatorOutline = NSImage(
+                systemSymbolName: indicatorName,
+                accessibilityDescription: nil
+            )?.withSymbolConfiguration(indicatorOutlineConfiguration)
+            indicatorOutline?.draw(
+                // 闪电位于电池主体内部；外轮廓和内芯形成稳定对比，
+                // 低电量的空白区域与满电的填充区域都能看见。
+                in: NSRect(x: 6, y: 1, width: 9, height: 16),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+            let indicatorFill = NSImage(
+                systemSymbolName: indicatorName,
+                accessibilityDescription: nil
+            )?.withSymbolConfiguration(indicatorFillConfiguration)
+            indicatorFill?.draw(
+                in: NSRect(x: 6.5, y: 1.5, width: 8, height: 15),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+        }
+
+        return image
+    }
+}
+
 struct StatusBarIconView: View {
     let snapshot: BatterySnapshot
 
     var body: some View {
-        Image(systemName: MenuBarBatterySymbol.name(for: snapshot))
-            .font(.system(size: 15, weight: .medium))
-            .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(BatteryStyling.tint(for: snapshot))
-        .frame(width: 17, height: 15)
+        Image(nsImage: MenuBarIconRenderer.image(for: snapshot))
+            .renderingMode(.original)
+            .frame(width: MenuBarPowerIndicator.iconWidth(for: snapshot), height: 18, alignment: .leading)
     }
 }

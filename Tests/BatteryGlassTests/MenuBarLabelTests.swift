@@ -30,6 +30,41 @@ final class MenuBarLabelTests: XCTestCase {
         XCTAssertEqual(MenuBarBatterySymbol.name(for: snapshot), "battery.0percent")
     }
 
+    func testPowerIndicatorShowsWhenAdapterIsConnectedButNotCharging() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .pluggedIn
+        snapshot.adapterConnected = true
+
+        XCTAssertTrue(MenuBarPowerIndicator.shouldShow(for: snapshot))
+    }
+
+    func testPowerIndicatorHidesWhenAdapterIsDisconnected() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.adapterConnected = false
+
+        XCTAssertFalse(MenuBarPowerIndicator.shouldShow(for: snapshot))
+    }
+
+    func testPowerIndicatorUsesBoltBadgeWhenAdapterIsConnected() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.adapterConnected = true
+
+        XCTAssertEqual(
+            MenuBarPowerIndicator.badgeSymbolName(for: snapshot),
+            "bolt.fill"
+        )
+    }
+
+    func testPowerIndicatorUsesSlightlyWiderBatteryIcon() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.adapterConnected = true
+
+        XCTAssertEqual(MenuBarPowerIndicator.iconWidth(for: snapshot), 23)
+    }
+
     func testAccessibilityLabelAnnouncesChargingState() {
         var snapshot = BatterySnapshot()
         snapshot.state = .charging
