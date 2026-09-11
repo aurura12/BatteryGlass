@@ -85,25 +85,14 @@ enum MenuBarPowerIndicator {
     }
 }
 
-/// 菜单栏使用系统电池符号，避免 MenuBarExtra 对自绘 Shape 的渲染差异。
-enum MenuBarBatterySymbol {
-    static func name(for snapshot: BatterySnapshot) -> String {
-        if snapshot.state == .unknown {
-            return "battery.0percent"
+/// 菜单栏电池主体的连续填充比例。
+enum MenuBarBatteryFill {
+    static func fraction(for snapshot: BatterySnapshot) -> CGFloat {
+        guard snapshot.state != .unknown, snapshot.percent.isFinite else {
+            return 0
         }
 
-        switch snapshot.percent {
-        case 87.5...:
-            return "battery.100percent"
-        case 62.5..<87.5:
-            return "battery.75percent"
-        case 37.5..<62.5:
-            return "battery.50percent"
-        case 12.5..<37.5:
-            return "battery.25percent"
-        default:
-            return "battery.0percent"
-        }
+        return CGFloat(min(max(snapshot.percent, 0), 100) / 100)
     }
 }
 
@@ -120,22 +109,49 @@ enum MenuBarIconRenderer {
         image.lockFocus()
         defer { image.unlockFocus() }
 
-        let symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 15,
-            weight: .medium
-        ).applying(
-            NSImage.SymbolConfiguration(paletteColors: [.labelColor])
+        let batteryBody = NSRect(x: 1, y: 3, width: 19, height: 12)
+        let batteryTerminal = NSRect(x: 20, y: 6.5, width: 2.5, height: 5)
+        let batteryInterior = NSRect(
+            x: 3,
+            y: 4.5,
+            width: 15.5,
+            height: 9
         )
-        let battery = NSImage(
-            systemSymbolName: MenuBarBatterySymbol.name(for: snapshot),
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(symbolConfiguration)
-        battery?.draw(
-            in: NSRect(x: 0, y: 1.5, width: batteryWidth, height: 15),
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1
+        let fillFraction = MenuBarBatteryFill.fraction(for: snapshot)
+        NSGraphicsContext.current?.saveGraphicsState()
+        let interiorPath = NSBezierPath(
+            roundedRect: batteryInterior,
+            xRadius: 1.5,
+            yRadius: 1.5
         )
+        interiorPath.addClip()
+        NSColor.labelColor.withAlphaComponent(0.22).setFill()
+        batteryInterior.fill()
+        if fillFraction > 0 {
+            NSColor.labelColor.setFill()
+            NSRect(
+                x: batteryInterior.minX,
+                y: batteryInterior.minY,
+                width: batteryInterior.width * fillFraction,
+                height: batteryInterior.height
+            ).fill()
+        }
+        NSGraphicsContext.current?.restoreGraphicsState()
+
+        NSColor.labelColor.setFill()
+        NSBezierPath(
+            roundedRect: batteryTerminal,
+            xRadius: 1,
+            yRadius: 1
+        ).fill()
+        NSColor.labelColor.setStroke()
+        let bodyPath = NSBezierPath(
+            roundedRect: batteryBody,
+            xRadius: 3,
+            yRadius: 3
+        )
+        bodyPath.lineWidth = 2
+        bodyPath.stroke()
 
         if let indicatorName = MenuBarPowerIndicator.badgeSymbolName(for: snapshot) {
             let indicatorOutlineConfiguration = NSImage.SymbolConfiguration(

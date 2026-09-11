@@ -1,33 +1,39 @@
+import AppKit
 import XCTest
 @testable import BatteryGlass
 
 final class MenuBarLabelTests: XCTestCase {
-    func testBatteryIconUsesNativeSymbolForNormalBattery() {
+    func testBatteryIconFillTracksActualPercentage() {
         var snapshot = BatterySnapshot()
         snapshot.state = .discharging
-        snapshot.percent = 80
+        snapshot.percent = 74
 
-        XCTAssertEqual(MenuBarBatterySymbol.name(for: snapshot), "battery.75percent")
+        XCTAssertEqual(
+            MenuBarBatteryFill.fraction(for: snapshot),
+            0.74,
+            accuracy: 0.0001
+        )
+
+        snapshot.percent = 74.9
+        XCTAssertEqual(
+            MenuBarBatteryFill.fraction(for: snapshot),
+            0.749,
+            accuracy: 0.0001
+        )
     }
 
-    func testChargingIconReflectsActualLevelInsteadOfFullBattery() {
-        var low = BatterySnapshot()
-        low.state = .charging
-        low.percent = 40
-        XCTAssertEqual(MenuBarBatterySymbol.name(for: low), "battery.50percent")
-
-        var high = BatterySnapshot()
-        high.state = .charging
-        high.percent = 92
-        XCTAssertEqual(MenuBarBatterySymbol.name(for: high), "battery.100percent")
-    }
-
-    func testUnknownStateUsesEmptyBatterySymbol() {
+    func testBatteryIconFillClampsAndHidesWhenUnavailable() {
         var snapshot = BatterySnapshot()
-        snapshot.state = .unknown
-        snapshot.percent = 0
+        snapshot.state = .discharging
+        snapshot.percent = 120
+        XCTAssertEqual(MenuBarBatteryFill.fraction(for: snapshot), 1)
 
-        XCTAssertEqual(MenuBarBatterySymbol.name(for: snapshot), "battery.0percent")
+        snapshot.percent = -20
+        XCTAssertEqual(MenuBarBatteryFill.fraction(for: snapshot), 0)
+
+        snapshot.state = .unknown
+        snapshot.percent = 80
+        XCTAssertEqual(MenuBarBatteryFill.fraction(for: snapshot), 0)
     }
 
     func testPowerIndicatorShowsWhenAdapterIsConnectedButNotCharging() {
@@ -63,6 +69,38 @@ final class MenuBarLabelTests: XCTestCase {
         snapshot.adapterConnected = true
 
         XCTAssertEqual(MenuBarPowerIndicator.iconWidth(for: snapshot), 23)
+    }
+
+    func testBatteryIconKeepsEmptyTrackVisibleNearFull() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.percent = 87
+
+        let image = MenuBarIconRenderer.image(for: snapshot)
+        let preview = NSImage(size: image.size)
+        preview.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: image.size).fill()
+        image.draw(
+            in: NSRect(origin: .zero, size: image.size),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        preview.unlockFocus()
+
+        guard let tiff = preview.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let filledColor = bitmap.colorAt(x: 20, y: 16)?.usingColorSpace(.deviceRGB),
+              let emptyColor = bitmap.colorAt(x: 36, y: 16)?.usingColorSpace(.deviceRGB) else {
+            XCTFail("Unable to inspect battery icon pixels")
+            return
+        }
+
+        XCTAssertGreaterThan(
+            emptyColor.redComponent - filledColor.redComponent,
+            0.1
+        )
     }
 
     func testAccessibilityLabelAnnouncesChargingState() {
