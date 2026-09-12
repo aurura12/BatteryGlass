@@ -3,6 +3,47 @@ import XCTest
 @testable import BatteryGlass
 
 final class MenuBarLabelTests: XCTestCase {
+    func testBatteryIconUsesShorterMenuBarHeight() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.percent = 50
+
+        let image = MenuBarIconRenderer.image(for: snapshot)
+
+        XCTAssertEqual(image.size.height, 15, accuracy: 0.001)
+    }
+
+    func testBatteryIconContentStaysInsideCanvasEdges() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.percent = 50
+
+        let image = MenuBarIconRenderer.image(for: snapshot)
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else {
+            XCTFail("Unable to inspect battery icon pixels")
+            return
+        }
+
+        let topRowHasInk = (0..<bitmap.pixelsWide).contains { x in
+            guard let color = bitmap.colorAt(x: x, y: bitmap.pixelsHigh - 1),
+                  let rgbColor = color.usingColorSpace(.deviceRGB) else {
+                return false
+            }
+            return rgbColor.alphaComponent > 0.05
+        }
+        let bottomRowHasInk = (0..<bitmap.pixelsWide).contains { x in
+            guard let color = bitmap.colorAt(x: x, y: 0),
+                  let rgbColor = color.usingColorSpace(.deviceRGB) else {
+                return false
+            }
+            return rgbColor.alphaComponent > 0.05
+        }
+
+        XCTAssertFalse(topRowHasInk)
+        XCTAssertFalse(bottomRowHasInk)
+    }
+
     func testBatteryIconFillTracksActualPercentage() {
         var snapshot = BatterySnapshot()
         snapshot.state = .discharging

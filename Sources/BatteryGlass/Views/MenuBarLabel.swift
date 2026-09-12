@@ -100,7 +100,8 @@ enum MenuBarBatteryFill {
 /// 使用动态系统颜色，让内部闪电与电池填充形成对比，同时适配浅色/深色菜单栏。
 enum MenuBarIconRenderer {
     private static let batteryWidth = MenuBarPowerIndicator.batteryIconWidth
-    private static let iconHeight: CGFloat = 18
+    private static let designHeight: CGFloat = 18
+    private static let iconHeight: CGFloat = 15
 
     static func image(for snapshot: BatterySnapshot) -> NSImage {
         let width = MenuBarPowerIndicator.iconWidth(for: snapshot)
@@ -108,6 +109,17 @@ enum MenuBarIconRenderer {
         image.isTemplate = false
         image.lockFocus()
         defer { image.unlockFocus() }
+
+        // Keep the original drawing geometry, but scale it vertically into the
+        // shorter canvas so the outline stays centered instead of being clipped.
+        NSGraphicsContext.current?.saveGraphicsState()
+        defer { NSGraphicsContext.current?.restoreGraphicsState() }
+        let verticalScale = iconHeight / designHeight
+        let verticalTransform = NSAffineTransform()
+        verticalTransform.translateX(by: 0, yBy: iconHeight / 2)
+        verticalTransform.scaleX(by: 1, yBy: verticalScale)
+        verticalTransform.translateX(by: 0, yBy: -designHeight / 2)
+        verticalTransform.concat()
 
         let batteryBody = NSRect(x: 1, y: 3, width: 19, height: 12)
         let batteryTerminal = NSRect(x: 20, y: 6.5, width: 2.5, height: 5)
@@ -200,6 +212,6 @@ struct StatusBarIconView: View {
     var body: some View {
         Image(nsImage: MenuBarIconRenderer.image(for: snapshot))
             .renderingMode(.original)
-            .frame(width: MenuBarPowerIndicator.iconWidth(for: snapshot), height: 18, alignment: .leading)
+            .frame(width: MenuBarPowerIndicator.iconWidth(for: snapshot), height: 15, alignment: .leading)
     }
 }
