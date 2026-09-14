@@ -9,7 +9,7 @@ struct MetricsGrid: View {
     ]
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: DesignTokens.spacingM) {
+        LazyVGrid(columns: columns, spacing: DashboardLayout.contentSpacing) {
             MetricCell(
                 icon: "thermometer.medium",
                 title: "温度",
@@ -72,7 +72,7 @@ struct MetricCell: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, DesignTokens.spacingS)
+        .padding(.vertical, DashboardLayout.metricVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusSmall)
     }

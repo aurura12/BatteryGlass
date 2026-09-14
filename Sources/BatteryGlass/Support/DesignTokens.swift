@@ -32,3 +32,16 @@ enum DesignTokens {
         scheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06)
     }
 }
+
+/// 实时面板的紧凑布局参数。
+///
+/// 菜单栏面板的高度固定，需要让常用数据在标准字号下一屏展示；
+/// 单独定义而不是修改全局间距，避免压缩历史页和设置页的布局。
+enum DashboardLayout {
+    static let panelPadding: CGFloat = 20
+    static let sectionSpacing: CGFloat = 12
+    static let contentSpacing: CGFloat = 8
+    static let contentInset: CGFloat = 2
+    static let cardVerticalPadding: CGFloat = 10
+    static let metricVerticalPadding: CGFloat = 6
+}

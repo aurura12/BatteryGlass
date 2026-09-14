@@ -1047,7 +1047,7 @@ struct HistoryMetricCard: View {
     let tint: Color
 
     var body: some View {
-        KpiCard(title: title, icon: icon) {
+        KpiCard(title: title, icon: icon, verticalPadding: DesignTokens.spacingM) {
             Text(value)
                 .font(.system(size: 30, weight: .semibold, design: .rounded))
                 .monospacedDigit()

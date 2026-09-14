@@ -22,7 +22,7 @@ struct DashboardView: View {
 
     var body: some View {
         GlassContainerIfAvailable {
-            VStack(spacing: DesignTokens.spacingL) {
+            VStack(spacing: DashboardLayout.sectionSpacing) {
                 header
 
                 AnimatedSegmentedControl(
@@ -37,11 +37,18 @@ struct DashboardView: View {
 
                 ZStack {
                     if tab == .live {
-                        ScrollView {
+                        // 标准字号下直接展示完整实时面板，避免出现右侧滚动进度。
+                        // 字体被系统放大导致空间不足时，自动回退到可滚动版本。
+                        ViewThatFits(in: .vertical) {
                             LiveDashboardView()
-                                .padding(.vertical, DesignTokens.spacingXS)
+                                .padding(.vertical, DashboardLayout.contentInset)
+
+                            ScrollView {
+                                LiveDashboardView()
+                                    .padding(.vertical, DashboardLayout.contentInset)
+                            }
+                            .scrollIndicators(.hidden)
                         }
-                        .scrollIndicators(.hidden)
                         .transition(pageTransition)
                     } else {
                         HistoryView()
@@ -52,7 +59,7 @@ struct DashboardView: View {
 
                 footer
             }
-            .padding(DesignTokens.spacingXL)
+            .padding(DashboardLayout.panelPadding)
             .background {
                 FluidGlassBackground(
                     colors: BatteryStyling.gradient(for: monitor.snapshot),

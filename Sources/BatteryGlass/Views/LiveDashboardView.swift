@@ -4,13 +4,13 @@ struct LiveDashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
 
     var body: some View {
-        VStack(spacing: DesignTokens.spacingM) {
+        VStack(spacing: DashboardLayout.contentSpacing) {
             LazyVGrid(
                 columns: [
                     GridItem(.flexible(), spacing: DesignTokens.spacingM),
                     GridItem(.flexible(), spacing: DesignTokens.spacingM)
                 ],
-                spacing: DesignTokens.spacingM
+                spacing: DashboardLayout.contentSpacing
             ) {
                 BatteryPercentCard(snapshot: monitor.snapshot)
                 PowerKpiCard(snapshot: monitor.snapshot)
@@ -68,7 +68,8 @@ struct AdapterSplitCard: View {
                 )
             }
         }
-        .padding(DesignTokens.spacingM)
+        .padding(.horizontal, DesignTokens.spacingM)
+        .padding(.vertical, DashboardLayout.cardVerticalPadding)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
     }
 
@@ -109,7 +110,20 @@ struct AdapterSplitCard: View {
 struct KpiCard<Content: View>: View {
     let title: String
     let icon: String
-    @ViewBuilder var content: Content
+    let verticalPadding: CGFloat
+    let content: Content
+
+    init(
+        title: String,
+        icon: String,
+        verticalPadding: CGFloat = DashboardLayout.cardVerticalPadding,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.icon = icon
+        self.verticalPadding = verticalPadding
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -118,8 +132,9 @@ struct KpiCard<Content: View>: View {
                 .foregroundStyle(.secondary)
             content
         }
-        .padding(DesignTokens.spacingM)
-        .frame(maxWidth: .infinity, minHeight: 96, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, DesignTokens.spacingM)
+        .padding(.vertical, verticalPadding)
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
     }
 }
