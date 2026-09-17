@@ -96,17 +96,16 @@ enum MenuBarBatteryFill {
     }
 }
 
-/// 把菜单栏图标合成为一张 NSImage，避免 MenuBarExtra 丢弃多层 SwiftUI 子视图。
-/// 使用动态系统颜色，让内部闪电与电池填充形成对比，同时适配浅色/深色菜单栏。
+/// 把菜单栏图标合成为一张模板 NSImage，避免 MenuBarExtra 丢弃多层 SwiftUI 子视图。
+/// 模板图只携带透明度遮罩，由菜单栏按当前外观着色。
 enum MenuBarIconRenderer {
-    private static let batteryWidth = MenuBarPowerIndicator.batteryIconWidth
     private static let designHeight: CGFloat = 18
     private static let iconHeight: CGFloat = 15
 
     static func image(for snapshot: BatterySnapshot) -> NSImage {
         let width = MenuBarPowerIndicator.iconWidth(for: snapshot)
         let image = NSImage(size: NSSize(width: width, height: iconHeight))
-        image.isTemplate = false
+        image.isTemplate = true
         image.lockFocus()
         defer { image.unlockFocus() }
 
@@ -137,10 +136,12 @@ enum MenuBarIconRenderer {
             yRadius: 1.5
         )
         interiorPath.addClip()
-        NSColor.labelColor.withAlphaComponent(0.22).setFill()
+        // Template images use alpha as their mask, so the empty track stays
+        // visible as a softer version of the menu bar's current foreground.
+        NSColor.black.withAlphaComponent(0.22).setFill()
         batteryInterior.fill()
         if fillFraction > 0 {
-            NSColor.labelColor.setFill()
+            NSColor.black.setFill()
             NSRect(
                 x: batteryInterior.minX,
                 y: batteryInterior.minY,
@@ -150,13 +151,13 @@ enum MenuBarIconRenderer {
         }
         NSGraphicsContext.current?.restoreGraphicsState()
 
-        NSColor.labelColor.setFill()
+        NSColor.black.setFill()
         NSBezierPath(
             roundedRect: batteryTerminal,
             xRadius: 1,
             yRadius: 1
         ).fill()
-        NSColor.labelColor.setStroke()
+        NSColor.black.setStroke()
         let bodyPath = NSBezierPath(
             roundedRect: batteryBody,
             xRadius: 3,
@@ -166,38 +167,20 @@ enum MenuBarIconRenderer {
         bodyPath.stroke()
 
         if let indicatorName = MenuBarPowerIndicator.badgeSymbolName(for: snapshot) {
-            let indicatorOutlineConfiguration = NSImage.SymbolConfiguration(
+            let indicatorConfiguration = NSImage.SymbolConfiguration(
                 pointSize: 10,
                 weight: .bold
-            ).applying(
-                NSImage.SymbolConfiguration(paletteColors: [.labelColor])
             )
-            let indicatorFillConfiguration = NSImage.SymbolConfiguration(
-                pointSize: 9,
-                weight: .bold
-            ).applying(
-                NSImage.SymbolConfiguration(paletteColors: [.controlBackgroundColor])
-            )
-            let indicatorOutline = NSImage(
+            let indicator = NSImage(
                 systemSymbolName: indicatorName,
                 accessibilityDescription: nil
-            )?.withSymbolConfiguration(indicatorOutlineConfiguration)
-            indicatorOutline?.draw(
-                // 闪电位于电池主体内部；外轮廓和内芯形成稳定对比，
-                // 低电量的空白区域与满电的填充区域都能看见。
+            )?.withSymbolConfiguration(indicatorConfiguration)
+            indicator?.draw(
+                // Knock the bolt out of the mask so the menu bar background
+                // shows through in both light and dark appearances.
                 in: NSRect(x: 6, y: 1, width: 9, height: 16),
                 from: .zero,
-                operation: .sourceOver,
-                fraction: 1
-            )
-            let indicatorFill = NSImage(
-                systemSymbolName: indicatorName,
-                accessibilityDescription: nil
-            )?.withSymbolConfiguration(indicatorFillConfiguration)
-            indicatorFill?.draw(
-                in: NSRect(x: 6.5, y: 1.5, width: 8, height: 15),
-                from: .zero,
-                operation: .sourceOver,
+                operation: .destinationOut,
                 fraction: 1
             )
         }
@@ -211,7 +194,8 @@ struct StatusBarIconView: View {
 
     var body: some View {
         Image(nsImage: MenuBarIconRenderer.image(for: snapshot))
-            .renderingMode(.original)
+            .renderingMode(.template)
+            .foregroundStyle(.primary)
             .frame(width: MenuBarPowerIndicator.iconWidth(for: snapshot), height: 15, alignment: .leading)
     }
 }

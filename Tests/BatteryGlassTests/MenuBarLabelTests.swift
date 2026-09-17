@@ -13,6 +13,43 @@ final class MenuBarLabelTests: XCTestCase {
         XCTAssertEqual(image.size.height, 15, accuracy: 0.001)
     }
 
+    func testChargingBoltIsCutOutOfAppearanceAdaptiveTemplate() {
+        var withoutBolt = BatterySnapshot()
+        withoutBolt.state = .discharging
+        withoutBolt.percent = 50
+
+        var withBolt = withoutBolt
+        withBolt.adapterConnected = true
+
+        let regularImage = MenuBarIconRenderer.image(for: withoutBolt)
+        let chargingImage = MenuBarIconRenderer.image(for: withBolt)
+        XCTAssertTrue(regularImage.isTemplate)
+        XCTAssertTrue(chargingImage.isTemplate)
+
+        guard let regularData = regularImage.tiffRepresentation,
+              let regularBitmap = NSBitmapImageRep(data: regularData),
+              let chargingData = chargingImage.tiffRepresentation,
+              let chargingBitmap = NSBitmapImageRep(data: chargingData) else {
+            XCTFail("Unable to inspect battery icon mask")
+            return
+        }
+
+        var transparentBoltPixels = 0
+        for y in 0..<min(regularBitmap.pixelsHigh, chargingBitmap.pixelsHigh) {
+            for x in 0..<min(regularBitmap.pixelsWide, chargingBitmap.pixelsWide) {
+                guard let regularColor = regularBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let chargingColor = chargingBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                    continue
+                }
+                if regularColor.alphaComponent - chargingColor.alphaComponent > 0.1 {
+                    transparentBoltPixels += 1
+                }
+            }
+        }
+
+        XCTAssertGreaterThan(transparentBoltPixels, 10)
+    }
+
     func testBatteryIconContentStaysInsideCanvasEdges() {
         var snapshot = BatterySnapshot()
         snapshot.state = .discharging
@@ -112,34 +149,31 @@ final class MenuBarLabelTests: XCTestCase {
         XCTAssertEqual(MenuBarPowerIndicator.iconWidth(for: snapshot), 23)
     }
 
-    func testBatteryIconKeepsEmptyTrackVisibleNearFull() {
+    func testBatteryIconUsesLowerMaskOpacityForEmptyTrackNearFull() {
         var snapshot = BatterySnapshot()
         snapshot.state = .discharging
         snapshot.percent = 87
 
         let image = MenuBarIconRenderer.image(for: snapshot)
-        let preview = NSImage(size: image.size)
-        preview.lockFocus()
-        NSColor.white.setFill()
-        NSRect(origin: .zero, size: image.size).fill()
-        image.draw(
-            in: NSRect(origin: .zero, size: image.size),
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1
-        )
-        preview.unlockFocus()
-
-        guard let tiff = preview.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let filledColor = bitmap.colorAt(x: 20, y: 16)?.usingColorSpace(.deviceRGB),
-              let emptyColor = bitmap.colorAt(x: 36, y: 16)?.usingColorSpace(.deviceRGB) else {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else {
             XCTFail("Unable to inspect battery icon pixels")
             return
         }
 
+        let pixelsPerPointX = CGFloat(bitmap.pixelsWide) / image.size.width
+        let pixelsPerPointY = CGFloat(bitmap.pixelsHigh) / image.size.height
+        let sampleY = Int(8 * pixelsPerPointY)
+        let filledX = Int(10 * pixelsPerPointX)
+        let emptyX = Int(18 * pixelsPerPointX)
+        guard let filledColor = bitmap.colorAt(x: filledX, y: sampleY)?.usingColorSpace(.deviceRGB),
+              let emptyColor = bitmap.colorAt(x: emptyX, y: sampleY)?.usingColorSpace(.deviceRGB) else {
+            XCTFail("Unable to inspect battery icon mask samples")
+            return
+        }
+
         XCTAssertGreaterThan(
-            emptyColor.redComponent - filledColor.redComponent,
+            filledColor.alphaComponent - emptyColor.alphaComponent,
             0.1
         )
     }
