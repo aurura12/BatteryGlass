@@ -8,6 +8,7 @@ struct HistoryView: View {
     // 面板以 2Hz 重渲染；用记忆化避免每次重算今日样本与曲线数据。
     @State private var todayCache = TodaySamplesCache()
     @State private var chartCache = PowerChartDataCache()
+    @State private var levelChartCache = BatteryLevelChartDataCache()
 
     private var todaySamples: [HistorySample] {
         todayCache.samples(from: history.samples)
@@ -15,6 +16,10 @@ struct HistoryView: View {
 
     private var chartData: PowerChartData {
         chartCache.data(for: todaySamples)
+    }
+
+    private var levelChartData: BatteryLevelChartData {
+        levelChartCache.data(for: todaySamples)
     }
 
     var body: some View {
@@ -32,6 +37,10 @@ struct HistoryView: View {
                 // 跨天后以新的一天重建视图，重置时间滑块位置，
                 // 避免 @State scrollPosition 停留在昨天的滚动位置导致曲线窗口错乱。
                 .id(BatteryFormatters.dayKey(for: Date()))
+
+                TodayBatteryLevelChart(
+                    chartData: levelChartData
+                )
 
                 HealthTrendChart(summaries: history.allSummaries())
 
@@ -84,6 +93,24 @@ final class PowerChartDataCache {
             return cached
         }
         let data = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
+        cached = data
+        lastCount = samples.count
+        lastID = samples.last?.id
+        return data
+    }
+}
+
+/// 电量曲线数据记忆化：仅在样本集合变化时重建（抽样到 800 点是 O(n) 开销）。
+final class BatteryLevelChartDataCache {
+    private var cached: BatteryLevelChartData?
+    private var lastCount = -1
+    private var lastID: UUID?
+
+    func data(for samples: [HistorySample]) -> BatteryLevelChartData {
+        if let cached, lastCount == samples.count, lastID == samples.last?.id {
+            return cached
+        }
+        let data = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 800)
         cached = data
         lastCount = samples.count
         lastID = samples.last?.id
@@ -713,6 +740,202 @@ struct TodayPowerChart: View {
     }
 }
 
+/// 今日电量曲线：整日一屏展示，不做横向滚动，支持悬停查看时间与电量。
+struct TodayBatteryLevelChart: View {
+    let chartData: BatteryLevelChartData
+    @State private var hoveredSample: HistorySample?
+    @State private var hoverLocation: CGPoint?
+    /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
+    private let hoverMaximumGap: TimeInterval = 180
+
+    private var samples: [HistorySample] { chartData.samples }
+
+    /// 以最后一条样本时间结尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
+    private var xDomain: ClosedRange<Date> {
+        BatteryLevelAxis.xDomain(now: samples.last?.timestamp ?? Date())
+    }
+
+    /// 缺口处断开连线；待机期间不记录样本，故无需再按待机区间过滤。
+    private var displaySegments: [[HistorySample]] {
+        PowerChartSegmentation.splitByGaps(chartData.displayedSamples)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("今日电量曲线")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if samples.isEmpty {
+                ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
+                    .frame(height: 120)
+            } else {
+                Chart {
+                    ForEach(Array(displaySegments.enumerated()), id: \.offset) { _, segment in
+                        ForEach(segment) { sample in
+                            AreaMark(
+                                x: .value("时间", sample.timestamp),
+                                yStart: .value("电量下界", chartData.percentDomain.lowerBound),
+                                yEnd: .value("电量", sample.percent)
+                            )
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+
+                            LineMark(
+                                x: .value("时间", sample.timestamp),
+                                y: .value("电量", sample.percent)
+                            )
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(DesignTokens.dataBlue)
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        }
+                    }
+
+                    if let hoveredSample {
+                        RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
+
+                        PointMark(
+                            x: .value("时间", hoveredSample.timestamp),
+                            y: .value("电量", hoveredSample.percent)
+                        )
+                        .foregroundStyle(DesignTokens.dataBlue)
+                        .symbolSize(36)
+                    }
+                }
+                .chartXScale(domain: xDomain)
+                .chartYScale(domain: chartData.percentDomain)
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel {
+                            if let percent = value.as(Double.self) {
+                                Text("\(Int(percent.rounded()))%")
+                            }
+                        }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
+                        AxisGridLine().foregroundStyle(.clear)
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        ZStack(alignment: .topTrailing) {
+                            Rectangle()
+                                .fill(.clear)
+                                .onContinuousHover { phase in
+                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                                }
+
+                            if let hoveredSample, let hoverLocation {
+                                hoverTooltip(for: hoveredSample)
+                                    .position(
+                                        x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
+                                        y: min(max(hoverLocation.y - 26, 18), geometry.size.height - 18)
+                                    )
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 138)
+                .clipped()
+                .accessibilityLabel("今日电量曲线")
+                .accessibilityValue(levelAccessibilitySummary)
+            }
+        }
+        .padding(DesignTokens.spacingM)
+        .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    /// VoiceOver 概要：最新一条电量样本。
+    private var levelAccessibilitySummary: String {
+        guard let latest = samples.last else { return "暂无数据" }
+        return "最新电量 \(BatteryFormatters.percent(latest.percent))"
+    }
+
+    private func updateHover(
+        _ phase: HoverPhase,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        switch phase {
+        case .ended:
+            hoveredSample = nil
+            hoverLocation = nil
+        case .active(let location):
+            guard let plotFrame = proxy.plotFrame else {
+                hoveredSample = nil
+                hoverLocation = nil
+                return
+            }
+
+            let frame = geometry[plotFrame]
+            guard frame.contains(location) else {
+                hoveredSample = nil
+                hoverLocation = nil
+                return
+            }
+
+            let xPosition = location.x - frame.minX
+            guard let timestamp: Date = proxy.value(atX: xPosition) else {
+                hoveredSample = nil
+                hoverLocation = nil
+                return
+            }
+
+            hoverLocation = location
+            guard let nearest = PowerChartInteraction.nearestSample(
+                to: timestamp,
+                from: samples
+            ) else {
+                hoveredSample = nil
+                return
+            }
+            // 缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
+            // 避免把待机前的电量误当成待机期间的读数。
+            if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+                hoveredSample = nil
+                return
+            }
+            hoveredSample = nearest
+        }
+    }
+
+    private func hoverTooltip(for sample: HistorySample) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(sample.timestamp, format: .dateTime
+                .hour(.defaultDigits(amPM: .omitted))
+                .minute(.twoDigits)
+                .second(.twoDigits))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Text(BatteryFormatters.percent(sample.percent))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(DesignTokens.dataBlue)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+}
+
 /// 电池健康度历史趋势：取自每日汇总的最小健康度，展示长期损耗曲线（近 90 天）。
 struct HealthTrendChart: View {
     let summaries: [DailySummary]
@@ -891,6 +1114,71 @@ struct PowerChartData {
         self.chartSamples = (0..<maximumDisplayedSamples).map { index in
             energySamples[Int((Double(index) * step).rounded())]
         }
+    }
+}
+
+/// 今日电量曲线数据：不做 `consumptionPowerW` 过滤（那会丢掉合法电量点），
+/// 只按 `percent` 有效性做防御过滤，并预计算 Y 轴域供 2Hz 渲染直接取用。
+struct BatteryLevelChartData {
+    /// 今日全量样本，供悬停吸附使用。
+    let samples: [HistorySample]
+    /// 抽样后的渲染样本，最多 `maximumDisplayedSamples` 条。
+    let displayedSamples: [HistorySample]
+    /// 由全量样本预计算的 Y 轴域（抽样可能丢极值，故不能用抽样集计算）。
+    let percentDomain: ClosedRange<Double>
+
+    init(samples: [HistorySample], maximumDisplayedSamples: Int) {
+        let valid = samples.filter { $0.percent.isFinite }
+        self.samples = valid
+        self.percentDomain = BatteryLevelAxis.yDomain(for: valid.map(\.percent))
+
+        guard maximumDisplayedSamples > 1,
+              valid.count > maximumDisplayedSamples else {
+            self.displayedSamples = valid
+            return
+        }
+
+        let step = Double(valid.count - 1) / Double(maximumDisplayedSamples - 1)
+        self.displayedSamples = (0..<maximumDisplayedSamples).map { index in
+            valid[Int((Double(index) * step).rounded())]
+        }
+    }
+}
+
+/// 电量曲线坐标轴：纯函数，便于单元测试。
+enum BatteryLevelAxis {
+    /// X 轴域：当天 00:00 → now，至少 60s 宽，避免刚过午夜时域退化。
+    static func xDomain(now: Date = Date(), calendar: Calendar = .current) -> ClosedRange<Date> {
+        let start = calendar.startOfDay(for: now)
+        return start...max(now, start.addingTimeInterval(60))
+    }
+
+    /// Y 轴域：在 0…100 内加边距并保证最小跨度，避免近似平线被纵向放大成剧烈波动。
+    static func yDomain(
+        for percents: [Double],
+        minimumSpan: Double = 10,
+        padding: Double = 6
+    ) -> ClosedRange<Double> {
+        let values = percents.filter { $0.isFinite }.map { min(max($0, 0), 100) }
+        guard let lowest = values.min(), let highest = values.max() else {
+            return 0...100
+        }
+
+        let desiredSpan = min(max(highest - lowest + padding * 2, minimumSpan), 100)
+        let center = (lowest + highest) / 2
+        var lower = center - desiredSpan / 2
+        var upper = center + desiredSpan / 2
+
+        // 贴边时平移（而非压缩）窗口，保持最小跨度不被破坏。
+        if lower < 0 {
+            upper = min(100, upper - lower)
+            lower = 0
+        }
+        if upper > 100 {
+            lower = max(0, lower - (upper - 100))
+            upper = 100
+        }
+        return lower...upper
     }
 }
 
