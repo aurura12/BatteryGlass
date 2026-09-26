@@ -924,6 +924,9 @@ struct TodayBatteryLevelChart: View {
                     }
                 }
                 .frame(height: 138)
+                // Y 轴顶端刻度（如 100%）以刻度线为中心绘制，贴着绘图区上沿会被 .clipped()
+                // 裁掉上半个字并压到标题上；在图表外包一层顶部内边距给标签留出空间。
+                .padding(.top, 14)
                 .clipped()
                 .accessibilityLabel("今日电量曲线")
                 .accessibilityValue(levelAccessibilitySummary)
