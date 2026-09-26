@@ -3,73 +3,67 @@ import XCTest
 @testable import BatteryGlass
 
 final class PowerChartDataTests: XCTestCase {
-    func testInitialScrollDateShowsLatestTwoHoursWhenMoreDataExists() {
+    func testScrollBoundsUseChartCoordinates() {
         let first = Date(timeIntervalSince1970: 1_000)
         let samples = [
             historySample(at: first),
-            historySample(at: first.addingTimeInterval(7_200)),
-            historySample(at: first.addingTimeInterval(14_400))
+            historySample(at: first.addingTimeInterval(10_000))
         ]
+        let timeline = PowerChartTimeline(segments: [samples])
 
+        let bounds = PowerChartWindow.scrollBounds(timeline: timeline, samples: samples)
+
+        // 无断点时曲线坐标等于真实秒数，末端留出一屏。
+        XCTAssertEqual(bounds?.lowerBound, timeline.position(for: first))
         XCTAssertEqual(
-            PowerChartWindow.initialScrollDate(for: samples),
-            first.addingTimeInterval(7_200)
+            bounds?.upperBound,
+            timeline.position(for: first.addingTimeInterval(10_000)) - 7_200
         )
-
-        let bounds = PowerChartWindow.scrollBounds(for: samples)
-        XCTAssertEqual(bounds?.start, first)
-        XCTAssertEqual(bounds?.end, first.addingTimeInterval(7_200))
     }
 
-    func testInitialScrollDateShowsAllDataWhenLessThanTwoHoursExists() {
+    func testScrollBoundsAbsentWhenDataFitsOneScreen() {
         let first = Date(timeIntervalSince1970: 1_000)
         let samples = [
             historySample(at: first),
             historySample(at: first.addingTimeInterval(3_600))
         ]
 
-        XCTAssertEqual(PowerChartWindow.initialScrollDate(for: samples), first)
+        XCTAssertNil(
+            PowerChartWindow.scrollBounds(
+                timeline: PowerChartTimeline(segments: [samples]),
+                samples: samples
+            )
+        )
+    }
 
-        let bounds = PowerChartWindow.scrollBounds(for: samples)
-        XCTAssertEqual(bounds?.start, first)
-        XCTAssertEqual(bounds?.end, first)
+    func testVisibleChartDomainKeepsConstantWidthWhileScrolling() {
+        let end = 100_000.0
+
+        let first = PowerChartWindow.visibleChartDomain(startingAt: 0, end: end)
+        let later = PowerChartWindow.visibleChartDomain(startingAt: 3_600, end: end)
+
+        // 滑动时窗口等宽平移，横向比例不变（修复「左右滑动有拉伸感」）。
+        XCTAssertEqual(first.upperBound - first.lowerBound, 7_200, accuracy: 0.001)
+        XCTAssertEqual(later.upperBound - later.lowerBound, 7_200, accuracy: 0.001)
+    }
+
+    func testVisibleChartDomainClampsToLatestData() {
+        let domain = PowerChartWindow.visibleChartDomain(startingAt: 1_000, end: 5_000)
+
+        XCTAssertEqual(domain.lowerBound, 1_000)
+        XCTAssertEqual(domain.upperBound, 5_000)
     }
 
     func testScrollFollowsLatestWhenUserIsAtPreviousEnd() {
-        let previousEnd = Date(timeIntervalSince1970: 7_200)
-
         XCTAssertTrue(
-            PowerChartWindow.shouldFollowLatest(
-                currentPosition: previousEnd,
-                previousEnd: previousEnd
-            )
+            PowerChartWindow.shouldFollowLatest(currentPosition: 7_200, previousEnd: 7_200)
         )
     }
 
     func testScrollDoesNotFollowLatestAfterUserMovesToHistory() {
-        let previousEnd = Date(timeIntervalSince1970: 7_200)
-        let historyPosition = previousEnd.addingTimeInterval(-3_600)
-
         XCTAssertFalse(
-            PowerChartWindow.shouldFollowLatest(
-                currentPosition: historyPosition,
-                previousEnd: previousEnd
-            )
+            PowerChartWindow.shouldFollowLatest(currentPosition: 3_600, previousEnd: 7_200)
         )
-    }
-
-    func testVisibleDomainUsesCustomScrollPosition() {
-        let start = date("2026-08-27 08:00:00")
-        let position = start.addingTimeInterval(3_600)
-        let latest = start.addingTimeInterval(14_400)
-
-        let domain = PowerChartWindow.visibleDomain(
-            startingAt: position,
-            latest: latest
-        )
-
-        XCTAssertEqual(domain.lowerBound, position)
-        XCTAssertEqual(domain.upperBound, position.addingTimeInterval(7_200))
     }
 
     func testChartDataFiltersMissingPowerAndDownsamplesToLimit() {
@@ -133,6 +127,71 @@ final class PowerChartDataTests: XCTestCase {
         )
     }
 
+    func testTimelineCollapsesBreakToZeroWidth() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let timeline = PowerChartTimeline(segments: twoSegmentsSplitByOneHour(from: first))
+
+        XCTAssertEqual(timeline.breaks.count, 1)
+        XCTAssertEqual(timeline.breaks[0].duration, 3_600)
+
+        // 断点不占宽度：前段末与后段首落在同一个图表坐标上。
+        let jump = timeline.position(for: first.addingTimeInterval(60))
+        XCTAssertEqual(
+            timeline.position(for: first.addingTimeInterval(3_660)),
+            jump,
+            accuracy: 0.001
+        )
+
+        // 断点内部任意时刻都塌缩到跳变点。
+        XCTAssertEqual(
+            timeline.position(for: first.addingTimeInterval(1_800)),
+            jump,
+            accuracy: 0.001
+        )
+
+        // 跳变点之后仍按真实秒数推进，只是整体前移了被跳过的时长。
+        XCTAssertEqual(
+            timeline.position(for: first.addingTimeInterval(3_720)),
+            jump + 60,
+            accuracy: 0.001
+        )
+    }
+
+    func testTimelineDateForPositionResumesAtBreakEnd() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let timeline = PowerChartTimeline(segments: twoSegmentsSplitByOneHour(from: first))
+        let jump = timeline.position(for: first.addingTimeInterval(60))
+
+        XCTAssertEqual(timeline.date(for: jump), first.addingTimeInterval(3_660))
+        XCTAssertEqual(timeline.date(for: jump + 30), first.addingTimeInterval(3_690))
+        XCTAssertEqual(
+            timeline.date(for: timeline.position(for: first.addingTimeInterval(30))),
+            first.addingTimeInterval(30)
+        )
+    }
+
+    func testTimelineBreakDetectionUsesRealTime() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let timeline = PowerChartTimeline(segments: twoSegmentsSplitByOneHour(from: first))
+
+        XCTAssertTrue(timeline.isInsideBreak(first.addingTimeInterval(1_800)))
+        XCTAssertFalse(timeline.isInsideBreak(first.addingTimeInterval(30)))
+        XCTAssertFalse(timeline.isInsideBreak(first.addingTimeInterval(3_660)))
+    }
+
+    private func twoSegmentsSplitByOneHour(from first: Date) -> [[HistorySample]] {
+        [
+            [
+                historySample(at: first),
+                historySample(at: first.addingTimeInterval(60))
+            ],
+            [
+                historySample(at: first.addingTimeInterval(3_660)),
+                historySample(at: first.addingTimeInterval(3_720))
+            ]
+        ]
+    }
+
     private func historySample(at timestamp: Date) -> HistorySample {
         HistorySample(
             timestamp: timestamp,
@@ -142,13 +201,5 @@ final class PowerChartDataTests: XCTestCase {
             cycleCount: 1,
             healthPercent: 100
         )
-    }
-
-    private func date(_ string: String) -> Date {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.date(from: string)!
     }
 }

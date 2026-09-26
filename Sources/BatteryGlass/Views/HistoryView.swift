@@ -15,7 +15,7 @@ struct HistoryView: View {
     }
 
     private var chartData: PowerChartData {
-        chartCache.data(for: todaySamples)
+        chartCache.data(for: todaySamples, sleepIntervals: history.sleepIntervals)
     }
 
     private var levelChartData: BatteryLevelChartData {
@@ -32,7 +32,7 @@ struct HistoryView: View {
 
                 TodayPowerChart(
                     chartData: chartData,
-                    sleepSegments: history.sleepSegments
+                    sleepIntervals: history.sleepIntervals
                 )
                 // 跨天后以新的一天重建视图，重置时间滑块位置，
                 // 避免 @State scrollPosition 停留在昨天的滚动位置导致曲线窗口错乱。
@@ -88,16 +88,26 @@ final class PowerChartDataCache {
     private var lastCount = -1
     private var lastID: UUID?
 
-    func data(for samples: [HistorySample]) -> PowerChartData {
-        if let cached, lastCount == samples.count, lastID == samples.last?.id {
+    func data(for samples: [HistorySample], sleepIntervals: [SleepInterval]) -> PowerChartData {
+        if let cached,
+           lastCount == samples.count,
+           lastID == samples.last?.id,
+           cachedSleepIntervals == sleepIntervals {
             return cached
         }
-        let data = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
+        let data = PowerChartData(
+            samples: samples,
+            sleepIntervals: sleepIntervals,
+            maximumDisplayedSamples: 800
+        )
         cached = data
         lastCount = samples.count
         lastID = samples.last?.id
+        cachedSleepIntervals = sleepIntervals
         return data
     }
+
+    private var cachedSleepIntervals: [SleepInterval] = []
 }
 
 /// 电量曲线数据记忆化：仅在样本集合变化时重建（抽样到 800 点是 O(n) 开销）。
@@ -476,27 +486,29 @@ struct DailyEnergyComparisonChart: View {
 
 struct TodayPowerChart: View {
     let chartData: PowerChartData
-    let sleepSegments: [SleepSegment]
-    let scrollStartDate: Date
-    let scrollEndDate: Date
-    @State private var scrollPosition: Date
+    let sleepIntervals: [SleepInterval]
+    /// 曲线坐标（秒，已跳过断点）下的可滚动范围；数据不足一屏时为 nil。
+    let scrollRange: ClosedRange<Double>?
+    @State private var scrollPosition: Double
     @State private var hoveredSample: HistorySample?
     @State private var hoverLocation: CGPoint?
     /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
     private let hoverMaximumGap: TimeInterval = 180
 
-    private var energySamples: [HistorySample] { chartData.energySamples }
-    private var chartSamples: [HistorySample] { chartData.chartSamples }
+    private var energySamples: [HistorySample] { chartData.plotSamples }
 
-    init(chartData: PowerChartData, sleepSegments: [SleepSegment]) {
+    init(chartData: PowerChartData, sleepIntervals: [SleepInterval]) {
         self.chartData = chartData
-        self.sleepSegments = sleepSegments
-        let bounds = PowerChartWindow.scrollBounds(for: chartData.energySamples)
-        let start = bounds?.start ?? Date()
-        let end = bounds?.end ?? start
-        self.scrollStartDate = start
-        self.scrollEndDate = end
-        self._scrollPosition = State(initialValue: end)
+        self.sleepIntervals = sleepIntervals
+        let range = PowerChartWindow.scrollBounds(
+            timeline: chartData.timeline,
+            samples: chartData.plotSamples
+        )
+        self.scrollRange = range
+        self._scrollPosition = State(
+            initialValue: range?.upperBound
+                ?? chartData.timeline.position(for: chartData.plotSamples.last?.timestamp ?? Date())
+        )
     }
 
     var body: some View {
@@ -506,31 +518,23 @@ struct TodayPowerChart: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if chartSamples.count > 1 {
+                if scrollRange != nil {
                     Text("横向滚动查看")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                 }
             }
 
-            if energySamples.isEmpty {
-                ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
+            if chartData.plotSegments.isEmpty {
+                ChartEmptyPlaceholder("暂无有效功率曲线")
                     .frame(height: 120)
             } else {
                 VStack(spacing: 4) {
                     Chart {
-                        ForEach(sleepSegments) { segment in
-                            RectangleMark(
-                                xStart: .value("待机开始", segment.start),
-                                xEnd: .value("待机结束", segment.end)
-                            )
-                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.07))
-                        }
-
                         ForEach(Array(displaySegments.enumerated()), id: \.offset) { _, segment in
                             ForEach(segment) { sample in
                                 AreaMark(
-                                    x: .value("时间", sample.timestamp),
+                                    x: .value("时间", chartData.timeline.position(for: sample.timestamp)),
                                     y: .value("功率", sample.consumptionPowerW ?? 0)
                                 )
                                 .interpolationMethod(.linear)
@@ -543,7 +547,7 @@ struct TodayPowerChart: View {
                                 )
 
                                 LineMark(
-                                    x: .value("时间", sample.timestamp),
+                                    x: .value("时间", chartData.timeline.position(for: sample.timestamp)),
                                     y: .value("功率", sample.consumptionPowerW ?? 0)
                                 )
                                 .interpolationMethod(.linear)
@@ -552,18 +556,22 @@ struct TodayPowerChart: View {
                             }
                         }
 
-                        RuleMark(y: .value("零线", 0))
-                            .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3]))
-                            .foregroundStyle(.secondary.opacity(0.5))
-
                         if let hoveredSample,
                            let power = hoveredSample.consumptionPowerW {
-                            RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
+                            RuleMark(
+                                x: .value(
+                                    "悬停时间",
+                                    chartData.timeline.position(for: hoveredSample.timestamp)
+                                )
+                            )
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
                                 .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
 
                             PointMark(
-                                x: .value("时间", hoveredSample.timestamp),
+                                x: .value(
+                                    "时间",
+                                    chartData.timeline.position(for: hoveredSample.timestamp)
+                                ),
                                 y: .value("功率", power)
                             )
                             .foregroundStyle(DesignTokens.dataBlue)
@@ -574,10 +582,22 @@ struct TodayPowerChart: View {
                         AxisMarks(position: .leading)
                     }
                     .chartXAxis {
-                        AxisMarks(values: .stride(by: .hour)) { _ in
-                            AxisGridLine().foregroundStyle(.clear)
-                            AxisTick()
-                            AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                        AxisMarks(values: axisMarks.map(\.position)) { value in
+                            if let position = value.as(Double.self),
+                               let mark = axisMarks.min(by: {
+                                   abs($0.position - position) < abs($1.position - position)
+                               }) {
+                                AxisGridLine().foregroundStyle(.clear)
+                                AxisTick()
+                                AxisValueLabel {
+                                    if let date = mark.date {
+                                        Text(date, format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                                    } else {
+                                        Text("//")
+                                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    }
+                                }
+                            }
                         }
                     }
                     .chartXScale(domain: visibleChartDomain)
@@ -606,9 +626,9 @@ struct TodayPowerChart: View {
                     .accessibilityLabel("今日功率曲线")
                     .accessibilityValue(powerAccessibilitySummary)
 
-                    if scrollEndDate > scrollStartDate {
+                    if let scrollRange {
                         Slider(
-                            value: scrollPositionBinding,
+                            value: $scrollPosition,
                             in: scrollRange
                         )
                         .controlSize(.small)
@@ -621,8 +641,8 @@ struct TodayPowerChart: View {
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
-        .onChange(of: scrollEndDate) { previousEnd, newEnd in
-            guard previousEnd != newEnd,
+        .onChange(of: scrollRange?.upperBound) { previousEnd, newEnd in
+            guard let previousEnd, let newEnd, previousEnd != newEnd,
                   PowerChartWindow.shouldFollowLatest(
                       currentPosition: scrollPosition,
                       previousEnd: previousEnd
@@ -633,27 +653,86 @@ struct TodayPowerChart: View {
         }
     }
 
-    private var scrollRange: ClosedRange<Double> {
-        scrollStartDate.timeIntervalSinceReferenceDate...scrollEndDate.timeIntervalSinceReferenceDate
+    /// 曲线坐标下的可见窗口：宽度固定（默认 2 小时），随滚动位置平移，
+    /// 因此拖动时间滑块时横向比例不变（不会出现拉伸/回缩）。
+    private var visibleChartDomain: ClosedRange<Double> {
+        let start = scrollRangeStart
+        guard let scrollRange else {
+            let end = chartData.plotSamples.isEmpty ? start + 1 : chartEnd
+            return start...max(start + 1, end)
+        }
+        let lower = min(max(scrollPosition, scrollRange.lowerBound), scrollRange.upperBound)
+        return PowerChartWindow.visibleChartDomain(startingAt: lower, end: chartEnd)
     }
 
-    private var visibleChartDomain: ClosedRange<Date> {
-        guard let latest = energySamples.last?.timestamp else {
-            let fallback = Date()
-            return fallback...fallback.addingTimeInterval(1)
+    /// 曲线坐标下今日首条有效样本的位置。
+    private var scrollRangeStart: Double {
+        chartData.plotSamples.first.map { chartData.timeline.position(for: $0.timestamp) }
+            ?? chartData.timeline.position(for: Date())
+    }
+
+    /// 曲线坐标下今日最后一条有效样本的位置。
+    private var chartEnd: Double {
+        chartData.plotSamples.last.map { chartData.timeline.position(for: $0.timestamp) }
+            ?? chartData.timeline.position(for: Date())
+    }
+
+    /// 可见窗口对应的真实时间范围，用于筛选要绘制的样本。
+    private var visibleDateDomain: ClosedRange<Date> {
+        let domain = visibleChartDomain
+        let lower = chartData.timeline.date(for: domain.lowerBound)
+        return lower...max(lower, chartData.timeline.date(for: domain.upperBound))
+    }
+
+    private var axisMarks: [PowerChartAxisMark] {
+        let domain = visibleDateDomain
+        var marks: [PowerChartAxisMark] = []
+        let calendar = Calendar.current
+        var date = calendar.dateInterval(of: .hour, for: domain.lowerBound)?.start
+
+        while let tick = date, tick <= domain.upperBound {
+            if tick >= domain.lowerBound, !chartData.timeline.isInsideBreak(tick) {
+                marks.append(
+                    PowerChartAxisMark(
+                        position: chartData.timeline.position(for: tick),
+                        date: tick
+                    )
+                )
+            }
+            date = calendar.date(byAdding: .hour, value: 1, to: tick)
         }
 
-        return PowerChartWindow.visibleDomain(
-            startingAt: scrollPosition,
-            latest: latest
-        )
+        let visibleBreaks = chartData.timeline.breaks.filter {
+            $0.duration > 5
+                && $0.end > domain.lowerBound
+                && $0.start < domain.upperBound
+        }
+        let markerStride = max(1, Int(ceil(Double(visibleBreaks.count) / 8)))
+        for (index, interval) in visibleBreaks.enumerated() where index.isMultiple(of: markerStride) {
+            // 断点不占宽度，标记直接画在跳变点上；断点起点在窗口左侧时钳到可见域左边缘。
+            let position = min(
+                max(chartData.timeline.position(for: interval.start), visibleChartDomain.lowerBound),
+                visibleChartDomain.upperBound
+            )
+            marks.append(PowerChartAxisMark(position: position, date: nil))
+        }
+
+        return marks.sorted { $0.position < $1.position }
     }
 
-    /// 可见样本按待机区间过滤并按缺口断开后的连续段，缺口处不再连线。
+    /// 只画正功率样本；无读数点、长缺口和系统睡眠都会切成独立曲线段。
     private var displaySegments: [[HistorySample]] {
-        let visible = PowerChartWindow.samples(in: visibleChartDomain, from: chartSamples)
-        let filtered = PowerChartSegmentation.excludingSleepSegments(visible, sleepSegments: sleepSegments)
-        return PowerChartSegmentation.splitByGaps(filtered)
+        chartData.plotSegments.flatMap { segment in
+            let visible = PowerChartWindow.samples(in: visibleDateDomain, from: segment)
+            let filtered = PowerChartSegmentation.excludingSleepIntervals(
+                visible,
+                sleepIntervals: sleepIntervals
+            )
+            return PowerChartSegmentation.splitByGaps(
+                filtered,
+                breakingAt: sleepIntervals
+            )
+        }
     }
 
     /// VoiceOver 概要：最新一条可见功率样本。
@@ -661,13 +740,6 @@ struct TodayPowerChart: View {
         guard let latest = energySamples.last,
               let power = latest.consumptionPowerW else { return "暂无数据" }
         return String(format: "最新 %.1f 瓦", power)
-    }
-
-    private var scrollPositionBinding: Binding<Double> {
-        Binding(
-            get: { scrollPosition.timeIntervalSinceReferenceDate },
-            set: { scrollPosition = Date(timeIntervalSinceReferenceDate: $0) }
-        )
     }
 
     private func updateHover(
@@ -694,11 +766,12 @@ struct TodayPowerChart: View {
             }
 
             let xPosition = location.x - frame.minX
-            guard let timestamp: Date = proxy.value(atX: xPosition) else {
+            guard let coordinate: Double = proxy.value(atX: xPosition) else {
                 hoveredSample = nil
                 hoverLocation = nil
                 return
             }
+            let timestamp = chartData.timeline.date(for: coordinate)
 
             hoverLocation = location
             guard let nearest = PowerChartInteraction.nearestSample(
@@ -1097,12 +1170,43 @@ struct HealthTrendChart: View {
 }
 
 struct PowerChartData {
+    let timeline: PowerChartTimeline
+    /// Positive, finite readings used for chart bounds and hover snapping.
+    let plotSamples: [HistorySample]
+    /// Renderable runs split at no-power samples before downsampling.
+    let plotSegments: [[HistorySample]]
+
     let energySamples: [HistorySample]
     let chartSamples: [HistorySample]
 
     init(samples: [HistorySample], maximumDisplayedSamples: Int) {
+        self.init(
+            samples: samples,
+            sleepIntervals: [],
+            maximumDisplayedSamples: maximumDisplayedSamples
+        )
+    }
+
+    init(
+        samples: [HistorySample],
+        sleepIntervals: [SleepInterval],
+        maximumDisplayedSamples: Int
+    ) {
         let energySamples = samples.filter { $0.consumptionPowerW != nil }
         self.energySamples = energySamples
+
+        let validSegments = PowerChartSegmentation.splitForPowerTimeline(
+            samples,
+            sleepIntervals: sleepIntervals
+        )
+        self.timeline = PowerChartTimeline(segments: validSegments)
+        let plotSegments = Self.downsampleSegments(
+            validSegments,
+            maximumDisplayedSamples: maximumDisplayedSamples
+        )
+        let plotSamples = validSegments.flatMap { $0 }
+        self.plotSegments = plotSegments
+        self.plotSamples = plotSamples
 
         guard maximumDisplayedSamples > 1,
               energySamples.count > maximumDisplayedSamples else {
@@ -1114,6 +1218,128 @@ struct PowerChartData {
         self.chartSamples = (0..<maximumDisplayedSamples).map { index in
             energySamples[Int((Double(index) * step).rounded())]
         }
+    }
+
+    private static func downsampleSegments(
+        _ segments: [[HistorySample]],
+        maximumDisplayedSamples: Int
+    ) -> [[HistorySample]] {
+        let drawable = segments.filter { $0.count > 1 }
+        guard maximumDisplayedSamples > 1, !drawable.isEmpty else { return [] }
+
+        let totalCount = drawable.reduce(0) { $0 + $1.count }
+        guard totalCount > maximumDisplayedSamples else { return drawable }
+
+        // Keep both endpoints of each run so downsampling never joins across a no-power gap.
+        if drawable.count * 2 >= maximumDisplayedSamples {
+            let runBudget = maximumDisplayedSamples / 2
+            guard runBudget > 0 else { return [] }
+            return (0..<runBudget).map { index in
+                let sourceIndex = runBudget == 1
+                    ? 0
+                    : Int((Double(index) * Double(drawable.count - 1) / Double(runBudget - 1)).rounded())
+                let segment = drawable[sourceIndex]
+                return [segment[0], segment[segment.count - 1]]
+            }
+        }
+
+        let extraBudget = maximumDisplayedSamples - drawable.count * 2
+        let totalExtraCapacity = drawable.reduce(0) { $0 + $1.count - 2 }
+        guard extraBudget > 0, totalExtraCapacity > 0 else {
+            return drawable.map { [$0[0], $0[$0.count - 1]] }
+        }
+
+        var targets = Array(repeating: 2, count: drawable.count)
+        var remainders: [(index: Int, value: Double)] = []
+        for (index, segment) in drawable.enumerated() {
+            let capacity = segment.count - 2
+            let share = Double(extraBudget) * Double(capacity) / Double(totalExtraCapacity)
+            let whole = min(capacity, Int(share.rounded(.down)))
+            targets[index] += whole
+            remainders.append((index, share - Double(whole)))
+        }
+
+        var unallocated = maximumDisplayedSamples - targets.reduce(0, +)
+        for remainder in remainders.sorted(by: { $0.value > $1.value }) where unallocated > 0 {
+            guard targets[remainder.index] < drawable[remainder.index].count else { continue }
+            targets[remainder.index] += 1
+            unallocated -= 1
+        }
+
+        return drawable.enumerated().map { index, segment in
+            Self.evenlySampled(segment, count: targets[index])
+        }
+    }
+
+    private static func evenlySampled(_ samples: [HistorySample], count: Int) -> [HistorySample] {
+        guard count > 1, samples.count > count else { return samples }
+        return (0..<count).map { index in
+            let sourceIndex = Int(
+                (Double(index) * Double(samples.count - 1) / Double(count - 1)).rounded()
+            )
+            return samples[sourceIndex]
+        }
+    }
+}
+
+struct PowerChartBreak: Equatable {
+    var start: Date
+    var end: Date
+
+    var duration: TimeInterval { end.timeIntervalSince(start) }
+}
+
+struct PowerChartAxisMark: Identifiable {
+    var position: Double
+    var date: Date?
+
+    var id: Double { position }
+}
+
+struct PowerChartTimeline {
+    let breaks: [PowerChartBreak]
+
+    init(segments: [[HistorySample]]) {
+        self.breaks = zip(segments, segments.dropFirst()).compactMap { previous, next in
+            guard let last = previous.last,
+                  let first = next.first,
+                  first.timestamp > last.timestamp else {
+                return nil
+            }
+            return PowerChartBreak(start: last.timestamp, end: first.timestamp)
+        }
+    }
+
+    /// Maps wall-clock time onto a chart axis where no-power intervals take no width.
+    /// 断点（待机 / 无读数缺口）不占横向空间：落在断点内的时刻全部映射到断点起点，
+    /// 曲线在断点处直接跳到下一段，断点位置由轴上的 `//` 标记提示。
+    func position(for date: Date) -> Double {
+        var removedDuration: TimeInterval = 0
+        for interval in breaks {
+            if date < interval.start { break }
+            if date <= interval.end {
+                return interval.start.timeIntervalSinceReferenceDate - removedDuration
+            }
+            removedDuration += interval.duration
+        }
+        return date.timeIntervalSinceReferenceDate - removedDuration
+    }
+
+    /// Converts a chart coordinate back to its corresponding wall-clock time.
+    /// 落在被跳过的断点上时返回断点结束时刻（曲线在该处恢复）。
+    func date(for position: Double) -> Date {
+        var removedDuration: TimeInterval = 0
+        for interval in breaks {
+            let startPosition = interval.start.timeIntervalSinceReferenceDate - removedDuration
+            if position < startPosition { break }
+            removedDuration += interval.duration
+        }
+        return Date(timeIntervalSinceReferenceDate: position + removedDuration)
+    }
+
+    /// 真实时间是否落在断点内部（用于跳过断点里的整点刻度）。
+    func isInsideBreak(_ date: Date) -> Bool {
+        breaks.contains { $0.start < date && date < $0.end }
     }
 }
 
@@ -1184,10 +1410,80 @@ enum BatteryLevelAxis {
 
 /// 把样本按时间缺口切分为连续段，供功率曲线缺口处断开渲染。
 enum PowerChartSegmentation {
+    /// Split the source timeline at missing/zero readings, sleeps, and long observation gaps.
+    static func splitForPowerTimeline(
+        _ samples: [HistorySample],
+        sleepIntervals: [SleepInterval],
+        maximumGap: TimeInterval = 300
+    ) -> [[HistorySample]] {
+        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        var segments: [[HistorySample]] = []
+        var current: [HistorySample] = []
+
+        for sample in sorted {
+            let isSleeping = sleepIntervals.contains { interval in
+                interval.end > interval.start
+                    && interval.start <= sample.timestamp
+                    && sample.timestamp < interval.end
+            }
+            guard !isSleeping,
+                  let power = sample.consumptionPowerW,
+                  power.isFinite,
+                  power > 0 else {
+                if !current.isEmpty {
+                    segments.append(current)
+                    current = []
+                }
+                continue
+            }
+
+            if let previous = current.last {
+                let gap = sample.timestamp.timeIntervalSince(previous.timestamp)
+                let crossesSleep = sleepIntervals.contains {
+                    $0.overlaps(previous.timestamp, sample.timestamp)
+                }
+                if gap > maximumGap || crossesSleep {
+                    segments.append(current)
+                    current = []
+                }
+            }
+            current.append(sample)
+        }
+
+        if !current.isEmpty {
+            segments.append(current)
+        }
+        return segments
+    }
+
+    /// Split whenever a sample has no usable positive power reading.
+    static func splitByUnavailablePower(_ samples: [HistorySample]) -> [[HistorySample]] {
+        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        var segments: [[HistorySample]] = []
+        var current: [HistorySample] = []
+
+        for sample in sorted {
+            guard let power = sample.consumptionPowerW, power.isFinite, power > 0 else {
+                if !current.isEmpty {
+                    segments.append(current)
+                    current = []
+                }
+                continue
+            }
+            current.append(sample)
+        }
+
+        if !current.isEmpty {
+            segments.append(current)
+        }
+        return segments
+    }
+
     /// 相邻样本间隔超过 `maximumGap` 秒处断开，返回连续子段数组。
     static func splitByGaps(
         _ samples: [HistorySample],
-        maximumGap: TimeInterval = 300
+        maximumGap: TimeInterval = 300,
+        breakingAt sleepIntervals: [SleepInterval] = []
     ) -> [[HistorySample]] {
         let sorted = samples.sorted { $0.timestamp < $1.timestamp }
         guard let first = sorted.first else { return [] }
@@ -1195,13 +1491,31 @@ enum PowerChartSegmentation {
         var segments: [[HistorySample]] = [[first]]
         for sample in sorted.dropFirst() {
             guard let last = segments[segments.count - 1].last else { continue }
-            if sample.timestamp.timeIntervalSince(last.timestamp) > maximumGap {
+            let crossesSleepInterval = sleepIntervals.contains {
+                $0.overlaps(last.timestamp, sample.timestamp)
+            }
+            if sample.timestamp.timeIntervalSince(last.timestamp) > maximumGap || crossesSleepInterval {
                 segments.append([sample])
             } else {
                 segments[segments.count - 1].append(sample)
             }
         }
         return segments
+    }
+
+    /// Remove any readings captured during system sleep before splitting at sleep boundaries.
+    static func excludingSleepIntervals(
+        _ samples: [HistorySample],
+        sleepIntervals: [SleepInterval]
+    ) -> [HistorySample] {
+        guard !sleepIntervals.isEmpty else { return samples }
+        return samples.filter { sample in
+            !sleepIntervals.contains { interval in
+                interval.end > interval.start
+                    && interval.start <= sample.timestamp
+                    && sample.timestamp < interval.end
+            }
+        }
     }
 
     /// 过滤掉落在任一待机区间时间范围内的样本。
@@ -1226,43 +1540,41 @@ enum PowerChartWindow {
         samples.filter { domain.contains($0.timestamp) }
     }
 
-    static func visibleDomain(
-        startingAt start: Date,
-        latest: Date,
-        visibleDuration: TimeInterval = defaultVisibleDuration
-    ) -> ClosedRange<Date> {
-        let upper = min(latest, start.addingTimeInterval(visibleDuration))
-        return start...max(start.addingTimeInterval(1), upper)
-    }
-
+    /// 曲线坐标（秒，已跳过断点）下的可滚动范围：数据不足一屏时返回 nil（不显示滑块）。
+    /// 滑块以曲线坐标为单位，拖动时可见窗口等宽平移，横向比例保持不变。
     static func scrollBounds(
-        for samples: [HistorySample],
+        timeline: PowerChartTimeline,
+        samples: [HistorySample],
         visibleDuration: TimeInterval = defaultVisibleDuration
-    ) -> (start: Date, end: Date)? {
+    ) -> ClosedRange<Double>? {
         guard let first = samples.first?.timestamp,
               let latest = samples.last?.timestamp else {
             return nil
         }
 
-        return (
-            start: first,
-            end: max(first, latest.addingTimeInterval(-visibleDuration))
-        )
+        let start = timeline.position(for: first)
+        let end = timeline.position(for: latest)
+        guard end - start > visibleDuration else { return nil }
+        return start...(end - visibleDuration)
     }
 
-    static func initialScrollDate(
-        for samples: [HistorySample],
+    /// 曲线坐标下的可见窗口：以 `position` 为起点、固定 `visibleDuration` 宽（末端不超过 `end`）。
+    /// 宽度与窗口内容无关，因此滑动时横向比例恒定。
+    static func visibleChartDomain(
+        startingAt position: Double,
+        end: Double,
         visibleDuration: TimeInterval = defaultVisibleDuration
-    ) -> Date? {
-        scrollBounds(for: samples, visibleDuration: visibleDuration)?.end
+    ) -> ClosedRange<Double> {
+        let upper = min(end, position + visibleDuration)
+        return position...max(position + 1, upper)
     }
 
     static func shouldFollowLatest(
-        currentPosition: Date,
-        previousEnd: Date,
+        currentPosition: Double,
+        previousEnd: Double,
         tolerance: TimeInterval = 10
     ) -> Bool {
-        currentPosition >= previousEnd.addingTimeInterval(-tolerance)
+        currentPosition >= previousEnd - tolerance
     }
 }
 
