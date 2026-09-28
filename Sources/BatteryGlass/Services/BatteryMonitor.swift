@@ -2,6 +2,7 @@ import AppKit
 import IOKit
 import IOKit.ps
 import Observation
+import OSLog
 
 @MainActor
 @Observable
@@ -16,6 +17,10 @@ final class BatteryMonitor {
     private var lastAdapterConnected: Bool?
     private var pluggedDischargeConfirmation = BatteryDischargeConfirmation()
     private let recentSampleLimit = 420
+
+    /// 睡眠/唤醒补测的诊断通道。睡眠窗口没有实时采样，只能靠这几个端点值人工核对
+    /// （用 `./script/build_and_run.sh --telemetry` 跟随）。
+    private static let sleepLogger = Logger(subsystem: "com.batteryglass.app", category: "Sleep")
 
     // MARK: - 「充满还需 / 剩余时间」估算状态
 
@@ -268,6 +273,14 @@ final class BatteryMonitor {
             object: self,
             userInfo: ["start": snapshot.timestamp]
         )
+        let state = Self.describeSleepState(
+            adapterConnected: snapshot.adapterConnected,
+            batteryDischarging: snapshot.batteryDischargingWhilePlugged,
+            capacityMAh: snapshot.currentCapacityMAh,
+            voltageV: snapshot.voltage,
+            wallCounter: latestTelemetryCounters.accumulatedWallEnergyEstimate
+        )
+        Self.sleepLogger.notice("睡眠开始 \(state, privacy: .public)")
     }
 
     private func handleDidWake() {
@@ -288,6 +301,22 @@ final class BatteryMonitor {
                 "end": snapshot.timestamp
             ]
         )
+        let boundaryChange = baseline.adapterConnected == snapshot.adapterConnected
+            ? "无"
+            : (baseline.adapterConnected ? "adapterToBattery" : "batteryToAdapter")
+        let wakeState = Self.describeSleepState(
+            adapterConnected: snapshot.adapterConnected,
+            batteryDischarging: snapshot.batteryDischargingWhilePlugged,
+            capacityMAh: snapshot.currentCapacityMAh,
+            voltageV: snapshot.voltage,
+            wallCounter: latestTelemetryCounters.accumulatedWallEnergyEstimate
+        )
+        let beforeCounter = baseline.telemetryCounters.accumulatedWallEnergyEstimate
+            .map(String.init) ?? "无"
+        let summary = "睡眠结束 \(wakeState)"
+            + " 睡前插电=\(baseline.adapterConnected) 睡前容量=\(Int(baseline.capacityMAh.rounded()))mAh"
+            + " 睡前计数=\(beforeCounter) 边界变化=\(boundaryChange)"
+        Self.sleepLogger.notice("\(summary, privacy: .public)")
         startMaintenanceSampling()
     }
 
@@ -387,6 +416,20 @@ final class BatteryMonitor {
             .filter { $0.isFinite && $0 > 0 }
             .min()
         return (minimumDirect, minimumAdapterInput)
+    }
+
+    /// 睡眠端点状态的一行摘要，仅用于诊断日志（非 UI）。
+    nonisolated static func describeSleepState(
+        adapterConnected: Bool,
+        batteryDischarging: Bool,
+        capacityMAh: Double,
+        voltageV: Double,
+        wallCounter: UInt64?
+    ) -> String {
+        let counter = wallCounter.map(String.init) ?? "无"
+        return "插电=\(adapterConnected) 插电放电=\(batteryDischarging)"
+            + " 容量=\(Int(capacityMAh.rounded()))mAh 电压=\(String(format: "%.2f", voltageV))V"
+            + " 墙上计数=\(counter)"
     }
 
     // MARK: - 状态解析

@@ -87,7 +87,9 @@ final class HistoryExporterTests: XCTestCase {
                 end: Date(timeIntervalSince1970: 1_700_003_600),
                 energyKWh: 0.002,
                 averagePowerW: 2.0,
-                mode: .discharging
+                mode: .discharging,
+                hasUnobservedSource: true,
+                boundaryPowerChange: .batteryToAdapter
             )
         ]
         let sleepIntervals = [
@@ -107,14 +109,16 @@ final class HistoryExporterTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try? decoder.decode(ExportPayloadFixture.self, from: data)
-        XCTAssertEqual(decoded?.version, 4)
+        XCTAssertEqual(decoded?.version, 5)
         XCTAssertEqual(decoded?.samples.count, 1)
         XCTAssertEqual(decoded?.samples.first?.cycleCount, 42)
         XCTAssertEqual(decoded?.dailySummaries.count, 1)
         XCTAssertEqual(decoded?.dailySummaries.first?.dayKey, "2026-08-30")
-        // v3 起导出包含待机区间，v4 起包含睡眠边界，往返不丢失。
+        // v3 起导出包含待机区间，v4 起包含睡眠边界，v5 起包含低估值与边界电源变化，往返不丢失。
         XCTAssertEqual(decoded?.sleepSegments?.count, 1)
         XCTAssertEqual(decoded?.sleepSegments?.first?.mode, .discharging)
+        XCTAssertEqual(decoded?.sleepSegments?.first?.hasUnobservedSource, true)
+        XCTAssertEqual(decoded?.sleepSegments?.first?.boundaryPowerChange, .batteryToAdapter)
         XCTAssertEqual(decoded?.sleepIntervals?.count, 1)
     }
 }

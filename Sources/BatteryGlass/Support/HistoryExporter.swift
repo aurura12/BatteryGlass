@@ -44,7 +44,7 @@ enum HistoryExporter {
         return ([Self.extendedHeader] + sampleRows + summaryRows).joined(separator: "\n")
     }
 
-    /// 生成 JSON（与 history.json 相同结构，版本 4，含每日汇总、待机区间与睡眠边界）。
+    /// 生成 JSON（与 history.json 相同结构，版本 5，含每日汇总、待机区间与睡眠边界）。
     static func jsonString(
         samples: [HistorySample],
         dailySummaries: [DailySummary],
@@ -55,7 +55,7 @@ enum HistoryExporter {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let payload = ExportPayload(
-            version: 4,
+            version: 5,
             samples: samples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,

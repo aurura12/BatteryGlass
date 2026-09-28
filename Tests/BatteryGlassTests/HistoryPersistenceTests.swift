@@ -218,6 +218,54 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(store.allSummaries().first?.energyKWh ?? 0, 0.02, accuracy: 0.0000001)
     }
 
+    func testLowerBoundSleepSegmentEnergyIsCountedExactlyOnce() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = BatteryHistoryStore(
+            settings: AppSettings(defaults: defaults),
+            fileURL: fileURL
+        )
+        let start = Date()
+        let end = start.addingTimeInterval(3600)
+        store.record(snapshot(at: start, cycleCount: 1))
+        NotificationCenter.default.post(
+            name: .sleepIntervalStarted,
+            object: nil,
+            userInfo: ["start": start]
+        )
+        store.record(snapshot(at: end, cycleCount: 2))
+        NotificationCenter.default.post(
+            name: .sleepIntervalEnded,
+            object: nil,
+            userInfo: ["start": start, "end": end]
+        )
+
+        // 睡前未插电、醒时已插电：能量只是下界，并带边界电源变化方向。
+        let segment = SleepSegment(
+            id: UUID(),
+            start: start,
+            end: end,
+            energyKWh: 0.0142,
+            averagePowerW: 14.2,
+            mode: .charging,
+            hasUnobservedSource: true,
+            boundaryPowerChange: .batteryToAdapter
+        )
+        store.recordSleepSegment(segment)
+        store.recordSleepSegment(segment)
+
+        // 低估值标记不改变去重与累加：只记一次区间、只加一次能量。
+        XCTAssertEqual(store.sleepSegments.count, 1)
+        XCTAssertEqual(store.allSummaries().first?.energyKWh ?? 0, 0.0142, accuracy: 0.0000001)
+    }
+
     func testSleepIntervalsRoundTripAndRejectInvalidDuplicates() throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
@@ -311,6 +359,44 @@ final class HistoryPersistenceTests: XCTestCase {
         )
 
         XCTAssertEqual(store.sleepSegments.first?.measurementMethod, .fallbackEstimate)
+        // v3 fixture 里没有 v5 新增的键：低估值默认 false，边界电源变化默认 nil。
+        XCTAssertEqual(store.sleepSegments.first?.hasUnobservedSource, false)
+        XCTAssertNil(store.sleepSegments.first?.boundaryPowerChange)
+    }
+
+    func testSleepSegmentWithSourceChangeRoundTripsThroughV5Payload() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let store = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+
+        // 睡前未插电、醒时已插电：能量只是下界，边界电源变化方向为电池→插座。
+        let segment = SleepSegment(
+            id: UUID(),
+            start: date("2026-08-27 23:00:00"),
+            end: date("2026-08-28 01:00:00"),
+            energyKWh: 0.0122,
+            averagePowerW: 6.1,
+            mode: .charging,
+            measurementMethod: .fallbackEstimate,
+            isCalibrated: false,
+            hasUnobservedSource: true,
+            boundaryPowerChange: .batteryToAdapter
+        )
+        store.recordSleepSegment(segment)
+        store.flush()
+
+        let reloaded = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        XCTAssertEqual(reloaded.sleepSegments, [segment])
+        XCTAssertEqual(reloaded.sleepSegments.first?.boundaryPowerChange, .batteryToAdapter)
+        XCTAssertTrue(reloaded.sleepSegments.first?.hasUnobservedSource == true)
     }
 
     func testDuplicateSleepSegmentIsCountedOnlyOnce() {

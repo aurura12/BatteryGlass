@@ -2,6 +2,25 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-09-28]
+
+### 修改
+- 完善 `CODEBUDDY.md`：修正登录项回写位置的行号引用（`BatteryGlassApp.swift:60-62` → `:68-69`）；补齐遗漏的 `BatteryLevelChartDataTests` 及 `BatteryLevelChartData` / `BatteryLevelChartDataCache`；按名点出 `Stores/HistorySampleRecovery.swift` 的回填实现；在可测试纯函数清单补 `minimumMaintenancePowers`；新增「无 lint/格式化配置」与 `swift-tools-version` 说明、`script/install_app.sh` 的 source 关系、`Views/HistoryView.swift` 为最大单文件（含内联图表数据类型）的提示，以及 `docs/superpowers/` 能耗设计与计划的参考指引。
+
+### 修复
+- 修复「睡前未插电、睡眠中（或醒来时）插上充电」这一段待机能量被整段丢弃的问题：`SleepEnergyCalculator` 原先只用睡前供电状态选分支，睡前未插电会走放电分支，而睡眠中充电使电量净增、放电量钳为 0，最终 `guard energyKWh > 0` 失败、整段静默丢弃，那段真实的插座消耗（充电 + 电脑维持 + 转换损耗）从日耗电量里消失。现在新增 `sourceChanged` 对称分支，覆盖该情形及其镜像（睡前插电、睡眠中或醒来时拔电，此前同样会丢段），按可观测来源保守计入。
+- 修复中遵循「只取积分量」：插电占睡眠的比例因睡眠期间无采样而未知，因此**不使用**「唤醒后瞬时功率 × 整段时长」外推（那会把只插了几分钟的睡眠高估成全程插电，误差无上界）。有墙上累计计数器时取 `计数器差值 + 电池净释放量`，无计数器时取充入量（电量升）或电池净放电量（电量降），三者皆无则不生成区间。
+- 计数器分支刻意不用 `batteryDischargingBefore` 门控：该标志要求睡前已插电，睡前未插电时恒为 false，沿用会把「记放电量」错误退化成「只记墙侧」，反而少记。边界两侧供电状态不同时容量下降本身就是放电证据，不是噪声。
+
+### 新增
+- `SleepSegment` 新增 `hasUnobservedSource: Bool`（默认 false）：为 true 表示该段 `energyKWh` 只覆盖可观测部分、真实电源侧能量被低估（下界）。
+- 新增枚举 `SleepBoundaryPowerChange`（`batteryToAdapter` / `adapterToBattery`）与 `SleepSegment.boundaryPowerChange: SleepBoundaryPowerChange?`：记录睡眠边界两侧的供电状态变化方向。因睡眠期间进程被挂起、无中途采样，只断言「边界发生变化」，不声称变化发生在睡眠期间。
+- 历史 payload 版本 v4 → v5。两个新字段均带默认值解码（`decodeIfPresent`），v2–v5 旧文件照常读取，`load()` 无需新增迁移分支；JSON 导出随 Codable 自动带上新字段。
+- `BatteryMonitor` 新增 `Logger`（subsystem `com.batteryglass.app`，category `Sleep`），在 `willSleep`/`didWake` 各记录一行端点状态（供电状态、容量、电压、墙上计数器、推导出的变化方向），供睡眠窗口无实时采样时人工核对，可用 `./script/build_and_run.sh --telemetry` 跟随。
+
+### 已知问题
+- 唤醒后约 30 秒的维持功耗采样窗口内若再次睡眠，`handleWillSleep()` 会先 `cancelMaintenanceSampling()` 再覆盖基线，上一段尚未 finalize 的能量段被丢弃。与本次修复的丢段同类，触发条件是「开盖后又马上合盖」，尚未处理。
+
 ## [2026-09-26]
 
 ### 修复

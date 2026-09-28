@@ -23,6 +23,10 @@ swift scripts/generate_icon.swift                # 重新生成 AppIcon.icns
 ./script/menu_bar_only_test.sh                   # 断言应用保持“纯菜单栏”（不得出现主窗口入口/通知路径）
 ```
 
+`script/install_app.sh` 只被 `build_and_run.sh` source（提供 `install_app` 函数），通常不单独运行。
+
+仓库**没有** SwiftLint / SwiftFormat / Makefile / pre-commit 等 lint 或格式化配置：质量闸门只有 `swift build` 与 `swift test`。`Package.swift` 为 `swift-tools-version: 5.10`（本机开发基准为 Swift 6.4 / macOS 27 SDK，见 README）。
+
 测试目标依赖可执行目标，`swift test` 会同时编译 app 二进制。访问 `@MainActor` 类型（如 `BatteryMonitor`）的测试类需标注 `@MainActor`。
 
 应用带单实例保护（`AppInstanceGuard.enforceSingleInstance`，在 `BatteryGlassApp.init` 构造核心对象**之前**调用）：新实例会先终止同 bundle 的旧实例并等其 flush 落盘再接管，无法接管则 `exit(0)`；检查必须早于对象构造，否则旧实例未退出时新实例已启动定时器并写盘，会造成双进程并发写 history.json / power-diagnostics.jsonl。
@@ -38,7 +42,7 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
              └─→ BatteryHistoryStore
 ```
 
-核心对象之外：`NotificationService` 是单例（低电量/插拔本地通知，由 `BatteryMonitor` 在阈值/状态跃迁时触发）；`LoginItemService` 封装 `SMAppService.mainApp` 的登录项状态查询与注册/注销，App 启动时用系统登录项实际状态回写 `AppSettings.launchAtLoginEnabled`（BatteryGlassApp.swift:60-62）。注意 `SMAppService.mainApp.status` 在首次注册前可能返回 `.notFound`，该状态独立保留（不等于 `.notRegistered`）：允许用户发起注册，但 `systemLaunchAtLoginEnabled()` 返回 nil，**不得**据此禁用开关或用 false 覆盖已保存值。纯决策函数 `desiredAction(current:desiredEnabled:)` 对应测试 `LoginItemServiceTests`。
+核心对象之外：`NotificationService` 是单例（低电量/插拔本地通知，由 `BatteryMonitor` 在阈值/状态跃迁时触发）；`LoginItemService` 封装 `SMAppService.mainApp` 的登录项状态查询与注册/注销，App 启动时用系统登录项实际状态回写 `AppSettings.launchAtLoginEnabled`（BatteryGlassApp.swift:68-69，在 `AppInstanceGuard` 接管之后）。注意 `SMAppService.mainApp.status` 在首次注册前可能返回 `.notFound`，该状态独立保留（不等于 `.notRegistered`）：允许用户发起注册，但 `systemLaunchAtLoginEnabled()` 返回 nil，**不得**据此禁用开关或用 false 覆盖已保存值。纯决策函数 `desiredAction(current:desiredEnabled:)` 对应测试 `LoginItemServiceTests`。
 
 全部核心类型都是 `@MainActor @Observable`（Swift Observation 框架），视图用 `@Environment(Type.self)` 读取。
 
@@ -73,15 +77,15 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 ### 可测试性设计（重要）
 
 - `BatterySnapshot` 是纯值类型，功率语义全部是只读计算属性（`power`、`chargingPowerW`、`directSupplyPowerW`、`adapterOutputPowerW`、`consumptionPowerW`、`displayPower`）。这些语义是多个测试的核心断言对象，修改前必须先看 `Tests/BatteryGlassTests/EnergyConsumptionTests.swift`。
-- `BatteryMonitor` 的解析逻辑提取为 `static` 纯函数以支持单元测试：`parsePowerSourceDescription(_:initial:)`、`applyAdapterDetails(_:to:)`、`resolvedPowerState`、`resolvedCapacityMAh`、`resolvedDesignCapacityMAh`、`resolvedFullChargeCapacityMAh`、`resolvedCurrentCapacityMAh`、`resolvedSystemPowerW`、`dischargingSystemPowerW`、`parsePowerTelemetryCounters`，以及 `IOPSPowerSourceState` 枚举。测试直接构造 `[String: Any]` 字典调用它们，不 mock IOKit（对应测试类：`BatteryMonitorIOPSParsingTests`、`BatteryMonitorSmartBatteryTests`、`BatteryMonitorStateTests`、`EnergyConsumptionTests`）。新增可验证的决策逻辑时沿用此模式（纯函数提取 + 先写失败测试）。
+- `BatteryMonitor` 的解析逻辑提取为 `static` 纯函数以支持单元测试：`parsePowerSourceDescription(_:initial:)`、`applyAdapterDetails(_:to:)`、`resolvedPowerState`、`resolvedCapacityMAh`、`resolvedDesignCapacityMAh`、`resolvedFullChargeCapacityMAh`、`resolvedCurrentCapacityMAh`、`resolvedSystemPowerW`、`dischargingSystemPowerW`、`minimumMaintenancePowers`、`parsePowerTelemetryCounters`，以及 `IOPSPowerSourceState` 枚举。测试直接构造 `[String: Any]` 字典调用它们，不 mock IOKit（对应测试类：`BatteryMonitorIOPSParsingTests`、`BatteryMonitorSmartBatteryTests`、`BatteryMonitorStateTests`、`EnergyConsumptionTests`）。新增可验证的决策逻辑时沿用此模式（纯函数提取 + 先写失败测试）。
 - 容量语义：Apple Silicon 上 IOPS 的 Current/Max Capacity 是 0-100 归一化值而非 mAh，快照容量字段经 `resolvedCapacityMAh`（SmartBattery 真 mAh 优先、IOPS 仅量级 >500 时兜底）过滤后恒为真 mAh。
 - 单位约定：电压 mV→V、电流 mA→A（IOPS 与 SmartBattery 两条路径必须一致）；`PowerTelemetryData` 功率为带符号 64 位整数 mW，须经 `signedMW` 按位转换。
-- 测试类地图（`Tests/BatteryGlassTests/`）：解析/状态 `BatteryMonitorIOPSParsingTests`、`BatteryMonitorSmartBatteryTests`、`BatteryMonitorStateTests`；能耗 `EnergyConsumptionTests`、`SleepEnergyCalculatorTests`、`PowerTelemetryEnergyTests`、`PowerTelemetryCalibrationTests`、`EnergyAggregatorTests`、`DailyEnergySummaryPolicyTests`；时间估算 `TimeRemainingEstimatorTests`、`ChargeRateTrackerTests`、`TimeRemainingSmootherTests`；持久化 `HistoryPersistenceTests`、`HistoryRecoveryTests`、`HistoryRetentionTests`、`HistoryExporterTests`；图表 `PowerChartDataTests`、`PowerChartSegmentationTests`、`PowerChartInteractionTests`；其余 `AppSettingsTests`、`LoginItemServiceTests`、`MenuBarLabelTests`、`BatteryFormattersTests`、`PowerDiagnosticsTests`。
+- 测试类地图（`Tests/BatteryGlassTests/`）：解析/状态 `BatteryMonitorIOPSParsingTests`、`BatteryMonitorSmartBatteryTests`、`BatteryMonitorStateTests`；能耗 `EnergyConsumptionTests`、`SleepEnergyCalculatorTests`、`PowerTelemetryEnergyTests`、`PowerTelemetryCalibrationTests`、`EnergyAggregatorTests`、`DailyEnergySummaryPolicyTests`；时间估算 `TimeRemainingEstimatorTests`、`ChargeRateTrackerTests`、`TimeRemainingSmootherTests`；持久化 `HistoryPersistenceTests`、`HistoryRecoveryTests`、`HistoryRetentionTests`、`HistoryExporterTests`；图表 `PowerChartDataTests`、`PowerChartSegmentationTests`、`PowerChartInteractionTests`、`BatteryLevelChartDataTests`（后者覆盖 `HistoryView.swift` 内的 `BatteryLevelChartData` / `BatteryLevelChartDataCache`）；其余 `AppSettingsTests`、`LoginItemServiceTests`、`MenuBarLabelTests`、`BatteryFormattersTests`、`PowerDiagnosticsTests`。
 
 ### Stores / 持久化
 
 - `AppSettings`：UserDefaults 持久化，key 见文件内 static 常量。
-- `BatteryHistoryStore`：`~/Library/Application Support/BatteryGlass/history.json`。payload 版本化（当前 v4：samples + dailySummaries + sleepSegments + sleepIntervals），每 15 秒异步写盘（串行 `persistenceQueue`），退出时 `flush()` 同步写盘（`willTerminateNotification`）。样本 ≥5 秒记一条，cycleCount/health 显著变化立即记。加载时按 `payload.version` 逐级迁移（v2 起含 dailySummaries，v3 起含 sleepSegments，v4 起含 sleepIntervals，后两者缺失按默认值处理），并含"用 power-diagnostics.jsonl 回填 `consumptionPowerW`"的恢复逻辑。
+- `BatteryHistoryStore`：`~/Library/Application Support/BatteryGlass/history.json`。payload 版本化（当前 v4：samples + dailySummaries + sleepSegments + sleepIntervals），每 15 秒异步写盘（串行 `persistenceQueue`），退出时 `flush()` 同步写盘（`willTerminateNotification`）。样本 ≥5 秒记一条，cycleCount/health 显著变化立即记。加载时按 `payload.version` 逐级迁移（v2 起含 dailySummaries，v3 起含 sleepSegments，v4 起含 sleepIntervals，后两者缺失按默认值处理），并含"用 power-diagnostics.jsonl 回填 `consumptionPowerW`"的恢复逻辑（实现于 `Stores/HistorySampleRecovery.swift` 的 `backfillConsumptionPower`，同样经 `BoundedFileReader` / `HistoryLoadLimits` 限幅）。
 - `PowerDiagnosticsLogger`（单例）：JSONL 追加写 `power-diagnostics.jsonl`，5 MB 自动轮换为 `.1.jsonl`。
 - `BoundedFileReader` / `HistoryLoadLimits`：所有本地文件读取必须走这里（历史上限 20 MB/10 万样本，诊断 50 MB/10 万样本），防止异常本地文件拖慢启动。
 - `HistoryExporter`（`Support/HistoryExporter.swift`）：把历史样本与每日汇总序列化为 CSV、JSON（JSON 另含睡眠区间），设置页导出按钮调用，纯函数。
@@ -90,9 +94,11 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 ### Views / UI
 
 - `DashboardView` 是 `MenuBarExtra` window 的面板根视图；`PanelTab` 分段控件切换 `LiveDashboardView` / `HistoryView`（HistoryView 用 Swift Charts）。
+- `Views/HistoryView.swift` 是仓库最大的单文件（约 1,690 行，占源码约 1/4），除图表视图外还内联了纯数据类型 `BatteryLevelChartData` / `BatteryLevelChartDataCache`（`HistoryView.swift:1351`、`:114`）。改图表相关逻辑优先看这里，并注意数据/缓存部分有独立测试，改动时不要破坏其纯函数边界。
 - 动效集中在 `Views/FluidGlassBackground.swift`（流体光斑）、`Views/AnimatedSegmentedControl.swift`（胶囊滑动）与 `Support/PageTransition.swift`（页面切换过渡）；设计令牌（8pt 间距栅格、交通灯状态色、数据蓝）见 `Support/DesignTokens.swift`，配色见 `Support/BatteryStyling.swift`。动效参数调节说明见 README「流体玻璃动画参数调节」。
 - 桌面小组件是应用内 NSWindow（`DesktopWidgetController`），非 WidgetKit。
 - UI 规范以 `design-system/batteryglass/MASTER.md` 为基准。
+- 能耗口径的设计动机与边界见 `docs/superpowers/specs/`（尤其 `2026-09-06-precision-energy-accounting-design.md` 定义"从电源侧消耗了多少电"这一指标口径），配套实施计划在 `docs/superpowers/plans/`。修改能耗相关决策前先读这两处。
 
 ## 约定
 

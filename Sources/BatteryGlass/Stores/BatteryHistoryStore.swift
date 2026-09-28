@@ -284,7 +284,7 @@ final class BatteryHistoryStore {
 
     private func makePayload() -> HistoryPayload {
         HistoryPayload(
-            version: 4,
+            version: 5,
             samples: samples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,

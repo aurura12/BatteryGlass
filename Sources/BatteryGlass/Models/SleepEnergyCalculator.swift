@@ -7,20 +7,22 @@ import Foundation
 /// - 插电待机：优先使用累计墙上输入能量；若同时发生电池放电，则把可观测的
 ///   电池放电能量一并计入；计数器不可用时回退到电量差和唤醒后功率估算。
 ///
-/// 待机模式以**睡眠前（即睡眠期间）的供电状态**为准：睡眠中无法操作电源，
-/// `adapterConnectedBefore` 才是睡眠期间的实际供电状态；唤醒瞬间的插拔变化
-/// （如睡前插电、早上拔电带走，或睡前未插电、唤醒后插上充电）不应改变归属。
+/// 供电状态在睡眠边界两侧不同时（睡前未插电、醒时已插电，或反之），无法区分变化
+/// 发生在睡眠途中还是唤醒瞬间，因此插电占睡眠的比例未知：此时**只累计可观测的
+/// 积分量**（计数器差值、容量差），不使用"唤醒后瞬时功率 × 整段时长"外推
+/// （那会把只插了几分钟的睡眠高估成全程插电），结果系统性偏低并把
+/// `hasUnobservedSource` 置为 true。睡眠边界没有变化时，由睡眠前的供电状态决定模式。
 enum SleepEnergyCalculator {
     struct Input {
         var sleepStart: Date
         var capacityBeforeMAh: Double
         var voltageBeforeV: Double
-        /// 睡眠前的供电状态，即睡眠期间的实际供电状态（决定待机模式）。
+        /// 睡眠前的供电状态。
         var adapterConnectedBefore: Bool
         var wakeTime: Date
         var capacityAfterMAh: Double
         var voltageAfterV: Double
-        /// 唤醒瞬间的供电状态，仅用于参考；模式判断以 `adapterConnectedBefore` 为准。
+        /// 唤醒瞬间的供电状态；与 `adapterConnectedBefore` 不同即表示边界电源变化。
         var adapterConnectedAfter: Bool
         /// 唤醒后延迟采样得到的系统维持直供功率最小值（W）
         var maintenanceDirectPowerW: Double?
@@ -69,32 +71,70 @@ enum SleepEnergyCalculator {
         let batteryChargeGainKWh = max(0, capacityDeltaMAh)
             * averageVoltage / 1_000_000
 
-        // 用睡眠前的供电来源决定模式：睡眠期间插电时优先采用墙上输入累计值；
-        // 计数器不可用时，按电量净变化选择不重复的电源侧回退。
-        if input.adapterConnectedBefore, let wallCounterEnergy {
-            // 混合供电时，累计墙上输入与电池下降量都属于 B 口径的能源贡献。
-            energyKWh = wallCounterEnergy
-                + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
-            mode = input.batteryDischargingBefore ? .discharging :
-                (capacityDeltaMAh > 0 ? .charging : .pluggedIdle)
-            measurementMethod = .telemetryCounter
-        } else if input.adapterConnectedBefore {
-            if capacityDeltaMAh > 0 {
-                energyKWh = batteryChargeGainKWh
-                    + powerEnergyKWh(input.maintenanceDirectPowerW, duration: duration)
-                mode = .charging
+        // 睡眠边界两侧供电状态不同：无法区分变化发生在睡眠途中还是唤醒瞬间，
+        // 因此只能保留可观测的积分量（计数器差值 / 容量差），另一时段无法从两个端点恢复。
+        let sourceChanged = input.adapterConnectedBefore != input.adapterConnectedAfter
+        let hasUnobservedSource = sourceChanged
+        let boundaryPowerChange: SleepBoundaryPowerChange? = sourceChanged
+            ? (input.adapterConnectedBefore ? .adapterToBattery : .batteryToAdapter)
+            : nil
+
+        if !sourceChanged {
+            // 用睡眠前的供电来源决定模式：睡眠期间插电时优先采用墙上输入累计值；
+            // 计数器不可用时，按电量净变化选择不重复的电源侧回退。
+            if input.adapterConnectedBefore, let wallCounterEnergy {
+                // 混合供电时，累计墙上输入与电池下降量都属于 B 口径的能源贡献。
+                energyKWh = wallCounterEnergy
+                    + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
+                mode = input.batteryDischargingBefore ? .discharging :
+                    (capacityDeltaMAh > 0 ? .charging : .pluggedIdle)
+                measurementMethod = .telemetryCounter
+            } else if input.adapterConnectedBefore {
+                if capacityDeltaMAh > 0 {
+                    energyKWh = batteryChargeGainKWh
+                        + powerEnergyKWh(input.maintenanceDirectPowerW, duration: duration)
+                    mode = .charging
+                } else {
+                    energyKWh = powerEnergyKWh(
+                        input.maintenanceAdapterInputPowerW,
+                        duration: duration
+                    ) + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
+                    mode = input.batteryDischargingBefore ? .discharging : .pluggedIdle
+                }
+                measurementMethod = .fallbackEstimate
             } else {
-                energyKWh = powerEnergyKWh(
-                    input.maintenanceAdapterInputPowerW,
-                    duration: duration
-                ) + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
-                mode = input.batteryDischargingBefore ? .discharging : .pluggedIdle
+                energyKWh = batteryDischargeKWh
+                mode = .discharging
+                measurementMethod = .fallbackEstimate
             }
-            measurementMethod = .fallbackEstimate
         } else {
-            energyKWh = batteryDischargeKWh
-            mode = .discharging
-            measurementMethod = .fallbackEstimate
+            // 电源在睡眠边界发生变化（睡前未插电→醒时插电，或反之）。
+            //
+            // 插电占睡眠的比例未知，所以不使用"唤醒后功率 × 整段时长"：那会把只插了
+            // 几分钟的睡眠高估成全程插电，误差无上界。只取积分量，结果一律是下界。
+            if let wallCounterEnergy {
+                // 计数器直接测到墙侧输入；电池净释放量是另一个独立来源，无条件累加。
+                // 注意不能用 batteryDischargingBefore 门控：它要求睡前已插电，
+                // 睡前未插电时恒为 false，会把"记放电量"错误退化成"只记墙侧"。
+                energyKWh = wallCounterEnergy + batteryDischargeKWh
+                if capacityDeltaMAh > 0 {
+                    mode = .charging
+                } else if capacityDeltaMAh < 0 {
+                    mode = .discharging
+                } else {
+                    mode = input.batteryDischargingBefore ? .discharging : .pluggedIdle
+                }
+                measurementMethod = .telemetryCounter
+            } else if capacityDeltaMAh > 0 {
+                // 充入电池的能量是墙侧输入的下界（不含转换损耗与系统自身功耗）。
+                energyKWh = batteryChargeGainKWh
+                mode = .charging
+                measurementMethod = .fallbackEstimate
+            } else {
+                energyKWh = batteryDischargeKWh
+                mode = .discharging
+                measurementMethod = .fallbackEstimate
+            }
         }
 
         guard energyKWh.isFinite, energyKWh > 0 else { return nil }
@@ -107,7 +147,9 @@ enum SleepEnergyCalculator {
             averagePowerW: energyKWh * 3_600_000 / duration,
             mode: mode,
             measurementMethod: measurementMethod,
-            isCalibrated: measurementMethod == .telemetryCounter && input.wallEnergyIsCalibrated
+            isCalibrated: measurementMethod == .telemetryCounter && input.wallEnergyIsCalibrated,
+            hasUnobservedSource: hasUnobservedSource,
+            boundaryPowerChange: boundaryPowerChange
         )
     }
 
