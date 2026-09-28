@@ -113,7 +113,7 @@ struct BatterySnapshot: Equatable, Sendable {
     }
 
     /// 展示功率取值：与主面板"实时功率"卡保持一致——适配器供电（充电/已接通电源）时
-    /// 优先显示系统功率（适配器输入 → 系统功率 → 电池功率），否则显示电池充放电功率。
+    /// 优先显示适配器输出功率（适配器输入 → 系统功耗 → 电池功率 逐级回退），否则显示电池充放电功率。
     var displayPower: Double {
         switch state {
         case .charging, .pluggedIn:
@@ -123,7 +123,7 @@ struct BatterySnapshot: Equatable, Sendable {
         }
     }
 
-    /// 展示功率文本：适配器供电时显示无符号系统功率，电池供电时保留正负号；
+    /// 展示功率文本：适配器供电时显示无符号适配器输出功率，电池供电时保留正负号；
     /// 未检测到电池（unknown）时无数据，显示 "--"。
     var displayPowerText: String {
         switch state {

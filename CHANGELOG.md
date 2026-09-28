@@ -5,6 +5,7 @@
 ## [2026-09-28]
 
 ### 修改
+- 统一「实时功率」卡副标题：适配器供电时由「系统功率」改为「适配器输出功率」。该卡数值取 `BatterySnapshot.displayPower`（适配器供电时即 `adapterInputPowerW` = `SystemPowerIn`），与「电源分配」卡第三格「适配器输出」同源，原副标题却写成「系统功率」，与指标行「系统功耗」（`systemPowerW`，另一个量，充电时可相差数倍）撞名。现只改文案，取值逻辑不变；同步修正 `BatterySnapshot.displayPower`/`displayPowerText` 与 `PowerKpiCard.valueText` 注释中的「系统功率」措辞（BatterySnapshot.swift、LiveDashboardView.swift）。
 - 完善 `CODEBUDDY.md`：修正登录项回写位置的行号引用（`BatteryGlassApp.swift:60-62` → `:68-69`）；补齐遗漏的 `BatteryLevelChartDataTests` 及 `BatteryLevelChartData` / `BatteryLevelChartDataCache`；按名点出 `Stores/HistorySampleRecovery.swift` 的回填实现；在可测试纯函数清单补 `minimumMaintenancePowers`；新增「无 lint/格式化配置」与 `swift-tools-version` 说明、`script/install_app.sh` 的 source 关系、`Views/HistoryView.swift` 为最大单文件（含内联图表数据类型）的提示，以及 `docs/superpowers/` 能耗设计与计划的参考指引。
 
 ### 修复

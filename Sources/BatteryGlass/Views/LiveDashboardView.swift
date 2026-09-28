@@ -245,14 +245,14 @@ struct PowerKpiCard: View {
 
     private var directionText: String {
         switch snapshot.state {
-        case .charging, .pluggedIn: return "适配器供电 · 系统功率"
+        case .charging, .pluggedIn: return "适配器供电 · 适配器输出功率"
         case .discharging: return "电池供电 · 能量流出电池"
         default: return "暂无数据"
         }
     }
 
     private var valueText: String {
-        // 适配器供电时显示无符号系统功率；电池供电时保留正负号（充电+/放电-）。
+        // 适配器供电时显示无符号适配器输出功率；电池供电时保留正负号（充电+/放电-）。
         // 未检测到电池时无数据，显示 "--"。
         guard snapshot.state != .unknown else { return "--" }
         return isOnAdapter
