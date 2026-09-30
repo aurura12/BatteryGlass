@@ -9,7 +9,7 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// 与天数无关的曲线名；窗口标题用 `title(range:)` 组合。
+    /// 与日期无关的曲线名。
     var baseTitle: String {
         switch self {
         case .power: "功率曲线"
@@ -17,11 +17,6 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
         case .temperature: "温度曲线"
         case .voltage: "电压曲线"
         }
-    }
-
-    /// 窗口标题：范围 + 曲线名。
-    func title(range: HistoryRange) -> String {
-        "\(range.title) · \(baseTitle)"
     }
 
     /// 分段切换器用的短标签。
@@ -32,6 +27,11 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
         case .temperature: "温度"
         case .voltage: "电压"
         }
+    }
+
+    /// 窗口标题：日期 + 曲线名。
+    func title(day: Date, now: Date = Date()) -> String {
+        "\(BatteryFormatters.historyDayLabel(day, now: now)) · \(baseTitle)"
     }
 
     /// 该标签对应的温压指标；非温压标签为 nil。
@@ -49,51 +49,50 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
     }
 }
 
-/// 放大窗口的共享状态：切换曲线/范围只改这里的值，不重建窗口，位置与大小得以保留。
+/// 放大窗口的共享状态：切换曲线/日期只改这里的值，不重建窗口，位置与大小得以保留。
 @MainActor
 @Observable
 final class ChartDetailModel {
     var kind: ExpandedChart = .power
-    var range: HistoryRange = .today
+    /// 当前查看的日期（当天 00:00）。
+    var selectedDay: Date = Calendar.current.startOfDay(for: Date())
 }
 
 /// 放大窗口内的曲线视图。
 ///
 /// 自行从 `BatteryHistoryStore` 取样本并记忆化曲线数据（与面板内各自一份），
-/// 因此窗口开着时会随新样本实时刷新。窗口内可直接切换曲线与显示范围。
+/// 因此窗口开着时会随新样本实时刷新。窗口内可切换曲线，并用左右箭头逐天回看。
 struct ChartDetailView: View {
     @Environment(BatteryHistoryStore.self) private var history
     let model: ChartDetailModel
     /// 选择变化回调，供窗口同步标题。
-    let onSelectionChange: (ExpandedChart, HistoryRange) -> Void
+    let onSelectionChange: (ExpandedChart, Date) -> Void
 
     @State private var todayCache = TodaySamplesCache()
     @State private var chartCache = PowerChartDataCache()
     @State private var levelChartCache = BatteryLevelChartDataCache()
+
+    /// 可选日期与前后一天导航。
+    private var daySelection: HistoryDaySelection {
+        HistoryDaySelection(
+            days: HistoryRetention.availableDays(from: history.samples),
+            selected: model.selectedDay
+        )
+    }
 
     private var kindSelection: Binding<ExpandedChart> {
         Binding(
             get: { model.kind },
             set: { newValue in
                 model.kind = newValue
-                onSelectionChange(newValue, model.range)
-            }
-        )
-    }
-
-    private var rangeSelection: Binding<HistoryRange> {
-        Binding(
-            get: { model.range },
-            set: { newValue in
-                model.range = newValue
-                onSelectionChange(model.kind, newValue)
+                onSelectionChange(newValue, model.selectedDay)
             }
         )
     }
 
     var body: some View {
-        let samples = todayCache.samples(from: history.samples, days: model.range.days)
-        let dayKey = BatteryFormatters.dayKey(for: Date())
+        let days = daySelection
+        let samples = todayCache.samples(from: history.samples, day: days.selected)
 
         return VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
             HStack(spacing: DesignTokens.spacingM) {
@@ -106,14 +105,7 @@ struct ChartDetailView: View {
                 .labelsHidden()
                 .fixedSize()
 
-                Picker("范围", selection: rangeSelection) {
-                    ForEach(HistoryRange.allCases) { range in
-                        Text(range.title).tag(range)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
+                dayNavigator(days)
 
                 Spacer(minLength: DesignTokens.spacingS)
 
@@ -123,42 +115,103 @@ struct ChartDetailView: View {
                     .lineLimit(1)
             }
 
-            chart(kind: model.kind, range: model.range, samples: samples, dayKey: dayKey)
+            chart(kind: model.kind, day: days.selected, samples: samples)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(DesignTokens.spacingL)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// 日期导航：`◀  8/25  ▶`，点中间日期弹出菜单直接跳到某天。
     @ViewBuilder
-    private func chart(
-        kind: ExpandedChart,
-        range: HistoryRange,
-        samples: [HistorySample],
-        dayKey: String
+    private func dayNavigator(_ days: HistoryDaySelection) -> some View {
+        HStack(spacing: 2) {
+            dayStepButton(
+                systemName: "chevron.left",
+                help: "前一天",
+                isEnabled: days.canGoOlder
+            ) {
+                guard let day = days.olderDay else { return }
+                model.selectedDay = day
+                onSelectionChange(model.kind, day)
+            }
+
+            Menu {
+                ForEach(days.days.reversed(), id: \.self) { day in
+                    Button(days.label(for: day)) {
+                        model.selectedDay = day
+                        onSelectionChange(model.kind, day)
+                    }
+                }
+            } label: {
+                Text(days.label)
+                    .font(.system(size: 12, weight: .medium))
+                    .monospacedDigit()
+                    .frame(minWidth: 56)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("选择日期")
+
+            dayStepButton(
+                systemName: "chevron.right",
+                help: "后一天",
+                isEnabled: days.canGoNewer
+            ) {
+                guard let day = days.newerDay else { return }
+                model.selectedDay = day
+                onSelectionChange(model.kind, day)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusSmall)
+                .fill(.quaternary)
+        )
+    }
+
+    @ViewBuilder
+    private func dayStepButton(
+        systemName: String,
+        help: String,
+        isEnabled: Bool,
+        action: @escaping () -> Void
     ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isEnabled ? .secondary : .tertiary)
+        .disabled(!isEnabled)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    @ViewBuilder
+    private func chart(kind: ExpandedChart, day: Date, samples: [HistorySample]) -> some View {
         switch kind {
         case .power:
             TodayPowerChart(
                 chartData: chartCache.data(for: samples, sleepIntervals: history.sleepIntervals),
                 sleepIntervals: history.sleepIntervals,
-                dayKey: dayKey,
-                range: range,
+                day: day,
                 plotHeight: nil
             )
         case .level:
             TodayBatteryLevelChart(
                 chartData: levelChartCache.data(for: samples),
-                dayKey: dayKey,
-                range: range,
+                day: day,
                 plotHeight: nil
             )
         case .temperature, .voltage:
             // 指标由标签页决定，内置切换器在这里隐藏，避免出现两层重复控件。
             TodayMetricChart(
                 samples: samples,
-                dayKey: dayKey,
-                range: range,
+                day: day,
                 plotHeight: nil,
                 fixedMetric: kind.metric
             )

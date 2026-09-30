@@ -138,37 +138,40 @@ final class HistoryRetentionTests: XCTestCase {
         XCTAssertEqual(kept.map(\.timestamp), [yesterday, yesterday.addingTimeInterval(20)])
     }
 
-    // MARK: - samples(lastDays:)
+    // MARK: - availableDays
 
-    func testSamplesLastDaysFiltersToInclusiveStart() {
+    func testAvailableDaysListsDaysWithSamplesAscending() {
         let calendar = utcCalendar()
         let now = date("2026-08-27 12:00:00")
-        let startOfWindow = date("2026-08-21 00:00:00")   // 恰好 7 天窗口的第一刻
-        let outsideWindow = date("2026-08-20 23:59:59")
+        let samples = [
+            historySample(at: date("2026-08-26 23:59:59")),
+            historySample(at: date("2026-08-25 10:00:00")),
+            historySample(at: date("2026-08-25 10:00:30")),
+            historySample(at: now)
+        ]
 
-        let kept = HistoryRetention.samples(
-            lastDays: 7,
-            from: [historySample(at: outsideWindow), historySample(at: startOfWindow)],
-            now: now,
-            calendar: calendar
-        )
+        let days = HistoryRetention.availableDays(from: samples, calendar: calendar)
 
-        XCTAssertEqual(kept.map(\.timestamp), [startOfWindow])
+        XCTAssertEqual(days, [
+            date("2026-08-25 00:00:00"),
+            date("2026-08-26 00:00:00"),
+            date("2026-08-27 00:00:00")
+        ])
     }
 
-    func testSamplesLastDaysOneKeepsOnlyToday() {
+    func testAvailableDaysAlwaysIncludesToday() {
+        // 今天一条样本都还没有时，也应能选中今天（看到空态）。
         let calendar = utcCalendar()
-        let now = date("2026-08-27 12:00:00")
-        let yesterday = date("2026-08-26 23:59:59")
+        let now = date("2026-08-27 00:00:00")
+        let todayStart = calendar.startOfDay(for: now)
 
-        let kept = HistoryRetention.samples(
-            lastDays: 1,
-            from: [historySample(at: yesterday), historySample(at: now)],
-            now: now,
-            calendar: calendar
+        let days = HistoryRetention.availableDays(from: [], calendar: calendar)
+
+        XCTAssertTrue(days.isEmpty)
+        XCTAssertEqual(
+            HistoryDaySelection(days: days, selected: nil, now: now, calendar: calendar).selected,
+            todayStart
         )
-
-        XCTAssertEqual(kept.map(\.timestamp), [now])
     }
 
     // MARK: - samples(forDay:)

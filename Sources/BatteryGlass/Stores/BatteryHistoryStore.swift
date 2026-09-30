@@ -663,18 +663,17 @@ enum HistoryRetention {
         return kept
     }
 
-    /// 显示用过滤：近 `lastDays` 天（含今天）。故意不含范围之前的那条边界样本。
-    static func samples(
-        lastDays: Int,
+    /// 有样本的本地日期（升序，各为当天 00:00），供放大窗口按天切换。
+    static func availableDays(
         from samples: [HistorySample],
-        now: Date = Date(),
         calendar: Calendar = .current
-    ) -> [HistorySample] {
-        let todayStart = calendar.startOfDay(for: now)
-        guard let start = calendar.date(byAdding: .day, value: -(max(lastDays, 1) - 1), to: todayStart) else {
-            return samples
+    ) -> [Date] {
+        var days: Set<Date> = []
+        days.reserveCapacity(8)
+        for sample in samples {
+            days.insert(calendar.startOfDay(for: sample.timestamp))
         }
-        return samples.filter { $0.timestamp >= start }
+        return days.sorted()
     }
 
     static func samples(

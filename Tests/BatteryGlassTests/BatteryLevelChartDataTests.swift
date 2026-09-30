@@ -200,41 +200,65 @@ final class BatteryLevelChartDataTests: XCTestCase {
         XCTAssertEqual(domain.upperBound, now)
     }
 
-    func testXDomainSevenDaysStartsSixDaysBack() {
+    func testXDomainPastDaySpansFullDayWithoutSamples() {
         let calendar = gmtCalendar()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let expected = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now))!
-
-        let domain = BatteryLevelAxis.xDomain(now: now, days: 7, calendar: calendar)
-
-        XCTAssertEqual(domain.lowerBound, expected)
-        XCTAssertEqual(domain.upperBound, now)
-    }
-
-    func testXDomainClampsToEarliestSample() {
-        let calendar = gmtCalendar()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        // 只保留了一天多的数据：视口应从最早样本那天起，而不是空出 6 天。
-        let earliest = calendar.date(byAdding: .day, value: -1, to: now)!
+        let today = date("2026-08-27 12:00:00")
+        let pastDay = date("2026-08-26 00:00:00")
 
         let domain = BatteryLevelAxis.xDomain(
-            now: now,
-            days: 7,
-            earliestSample: earliest,
+            day: pastDay,
+            now: today,
+            lastSample: nil,
             calendar: calendar
         )
 
-        XCTAssertEqual(domain.lowerBound, calendar.startOfDay(for: earliest))
+        XCTAssertEqual(domain.lowerBound, pastDay)
+        XCTAssertEqual(domain.upperBound, date("2026-08-27 00:00:00"))
     }
 
-    func testXDomainKeepsMinimumWidthWhenClampedAtMidnight() {
+    func testXDomainPastDayEndsAtLastSample() {
+        let calendar = gmtCalendar()
+        let today = date("2026-08-27 12:00:00")
+        let pastDay = date("2026-08-26 00:00:00")
+        let lastSample = date("2026-08-26 23:30:00")
+
+        let domain = BatteryLevelAxis.xDomain(
+            day: pastDay,
+            now: today,
+            lastSample: lastSample,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(domain.upperBound, lastSample)
+    }
+
+    func testXDomainPastDayKeepsMinimumWidth() {
+        let calendar = gmtCalendar()
+        let today = date("2026-08-27 12:00:00")
+        let pastDay = date("2026-08-26 00:00:00")
+        let lastSample = date("2026-08-26 00:00:00")
+
+        let domain = BatteryLevelAxis.xDomain(
+            day: pastDay,
+            now: today,
+            lastSample: lastSample,
+            calendar: calendar
+        )
+
+        XCTAssertGreaterThanOrEqual(
+            domain.upperBound.timeIntervalSince(domain.lowerBound),
+            60
+        )
+    }
+
+    func testXDomainTodayKeepsMinimumWidthAtMidnight() {
         let calendar = gmtCalendar()
         let midnight = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
 
         let domain = BatteryLevelAxis.xDomain(
+            day: midnight,
             now: midnight,
-            days: 7,
-            earliestSample: midnight,
+            lastSample: midnight,
             calendar: calendar
         )
 
@@ -261,5 +285,13 @@ final class BatteryLevelChartDataTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         return calendar
+    }
+
+    private func date(_ string: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: string)!
     }
 }

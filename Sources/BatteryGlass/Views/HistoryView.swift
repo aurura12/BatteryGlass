@@ -10,8 +10,11 @@ struct HistoryView: View {
     @State private var chartCache = PowerChartDataCache()
     @State private var levelChartCache = BatteryLevelChartDataCache()
 
+    /// 面板历史页固定展示今天；按天切换只在放大窗口里提供。
+    private var today: Date { Calendar.current.startOfDay(for: Date()) }
+
     private var todaySamples: [HistorySample] {
-        todayCache.samples(from: history.samples)
+        todayCache.samples(from: history.samples, day: today)
     }
 
     private var chartData: PowerChartData {
@@ -21,9 +24,6 @@ struct HistoryView: View {
     private var levelChartData: BatteryLevelChartData {
         levelChartCache.data(for: todaySamples)
     }
-
-    /// 跨天标识：变化时重置各图的缩放窗口。
-    private var dayKey: String { BatteryFormatters.dayKey(for: Date()) }
 
     var body: some View {
         ScrollView {
@@ -36,22 +36,21 @@ struct HistoryView: View {
                 TodayPowerChart(
                     chartData: chartData,
                     sleepIntervals: history.sleepIntervals,
-                    dayKey: dayKey,
+                    day: today,
                     onExpand: { chartWindow.show(.power) }
                 )
-                // 跨天后以新的一天重建视图，重置时间滑块位置，
-                // 避免 @State 停留在昨天的滚动位置导致曲线窗口错乱。
-                .id(dayKey)
+                // 跨天后以新的一天重建视图，重置缩放窗口。
+                .id(today)
 
                 TodayBatteryLevelChart(
                     chartData: levelChartData,
-                    dayKey: dayKey,
+                    day: today,
                     onExpand: { chartWindow.show(.level) }
                 )
 
                 TodayMetricChart(
                     samples: todaySamples,
-                    dayKey: dayKey,
+                    day: today,
                     onExpand: { metric in chartWindow.show(ExpandedChart(metric: metric)) }
                 )
             }
@@ -61,27 +60,22 @@ struct HistoryView: View {
     }
 }
 
-/// 今日样本记忆化：仅在样本数量、最后一条 id、日期或范围变化时重新过滤。
+/// 指定日期的样本记忆化：仅在样本数量、最后一条 id 或日期变化时重新过滤。
 final class TodaySamplesCache {
     private var cached: [HistorySample] = []
     private var lastCount = -1
     private var lastID: UUID?
     private var dayKey = ""
-    private var lastDays = -1
 
-    func samples(from all: [HistorySample], now: Date = Date(), days: Int = 1) -> [HistorySample] {
-        let key = BatteryFormatters.dayKey(for: now)
-        if lastCount == all.count, lastID == all.last?.id, dayKey == key, lastDays == days {
+    func samples(from all: [HistorySample], day: Date) -> [HistorySample] {
+        let key = BatteryFormatters.dayKey(for: day)
+        if lastCount == all.count, lastID == all.last?.id, dayKey == key {
             return cached
         }
-        // 单日走 samples(forDay:) 保持面板行为逐值不变；多日走范围过滤。
-        cached = days > 1
-            ? HistoryRetention.samples(lastDays: days, from: all, now: now)
-            : HistoryRetention.samples(forDay: now, from: all)
+        cached = HistoryRetention.samples(forDay: day, from: all)
         lastCount = all.count
         lastID = all.last?.id
         dayKey = key
-        lastDays = days
         return cached
     }
 }
@@ -553,11 +547,9 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let chartData: PowerChartData
     let sleepIntervals: [SleepInterval]
-    /// 跨天标识：变化时重置缩放窗口。
-    let dayKey: String
-    /// 显示范围；多天时默认展示整段（面板固定为「今日」）。
-    let range: HistoryRange
-    /// 绘图区高度；nil 表示撑满剩余空间（放大浮层内使用）。
+    /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
+    let day: Date
+    /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
     let plotHeight: CGFloat?
     /// 非 nil 时在标题栏提供「放大查看」入口。
     let onExpand: (() -> Void)?
@@ -576,22 +568,25 @@ struct TodayPowerChart: View {
     init(
         chartData: PowerChartData,
         sleepIntervals: [SleepInterval],
-        dayKey: String = "",
-        range: HistoryRange = .today,
+        day: Date = Date(),
         plotHeight: CGFloat? = 138,
         onExpand: (() -> Void)? = nil
     ) {
         self.chartData = chartData
         self.sleepIntervals = sleepIntervals
-        self.dayKey = dayKey
-        self.range = range
+        self.day = day
         self.plotHeight = plotHeight
         self.onExpand = onExpand
     }
 
-    /// 多天范围时 tooltip 带上日期，否则跨天数据无法区分。
-    private var tooltipFormat: Date.FormatStyle {
-        ChartTimeAxis.tooltipFormat(includesDate: range.days > 1)
+    /// 当前日期是否是今天（今日默认贴最新一屏，往日默认展示整天）。
+    private var isToday: Bool {
+        Calendar.current.isDate(day, inSameDayAs: Date())
+    }
+
+    /// 日期标签：今日 / 昨天 / M/d。
+    private var dayLabel: String {
+        BatteryFormatters.historyDayLabel(day)
     }
 
     var body: some View {
@@ -612,7 +607,7 @@ struct TodayPowerChart: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("\(range.title)功率曲线")
+                Text("\(dayLabel)功率曲线")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -704,9 +699,7 @@ struct TodayPowerChart: View {
                                 AxisGridLine().foregroundStyle(.clear)
                                 AxisTick()
                                 AxisValueLabel {
-                                    if let label = mark.label {
-                                        Text(label)
-                                    } else if let date = mark.date {
+                                    if let date = mark.date {
                                         Text(date, format: tickFormat)
                                     } else {
                                         Text("//")
@@ -760,7 +753,7 @@ struct TodayPowerChart: View {
                         }
                     }
                     .chartPlotHeight(plotHeight)
-                    .accessibilityLabel("\(range.title)功率曲线")
+                    .accessibilityLabel("\(dayLabel)功率曲线")
                     .accessibilityValue(powerAccessibilitySummary)
 
                     if activeWindow.canPan {
@@ -781,10 +774,7 @@ struct TodayPowerChart: View {
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
-        .onChange(of: dayKey) { _, _ in
-            window = nil
-        }
-        .onChange(of: range) { _, _ in
+        .onChange(of: day) { _, _ in
             window = nil
         }
         .onChange(of: bounds.upperBound) { _, _ in
@@ -807,16 +797,16 @@ struct TodayPowerChart: View {
         return first...last
     }
 
-    /// 当前生效的窗口：未交互时贴最新的默认窗口（宽度 2 小时），交互后为用户的窗口。
-    /// 多天范围下默认展示整段，否则「近 7 天」只会露出一小截，与范围选择器的语义不符。
+    /// 当前生效的窗口：今日贴最新的默认窗口（宽度 2 小时），往日默认展示整天。
+    /// `stored` 为用户设定的窗口，nil 表示跟随默认。
     private func effectiveWindow(for stored: ChartZoomWindow?) -> ChartZoomWindow {
-        let base: ChartZoomWindow = range.days > 1
-            ? ChartZoomWindow.fullRange(bounds: bounds, minimumSpan: Self.minimumVisibleDuration)
-            : ChartZoomWindow.latest(
+        let base: ChartZoomWindow = isToday
+            ? ChartZoomWindow.latest(
                 bounds: bounds,
                 defaultSpan: PowerChartWindow.defaultVisibleDuration,
                 minimumSpan: Self.minimumVisibleDuration
             )
+            : ChartZoomWindow.fullRange(bounds: bounds, minimumSpan: Self.minimumVisibleDuration)
         return (stored ?? base).rebased(to: bounds)
     }
 
@@ -837,21 +827,31 @@ struct TodayPowerChart: View {
         unit: ChartTickUnit,
         chartDomain: ClosedRange<Double>
     ) -> [PowerChartAxisMark] {
-        PowerChartAxis.marks(
-            timeline: chartData.timeline,
-            samples: chartData.plotSamples,
-            dateDomain: dateDomain,
-            chartDomain: chartDomain,
-            unit: unit,
-            showsDayLabels: Self.showsDayLabels(for: dateDomain)
-        )
-    }
+        var marks = ChartTimeAxis.marks(in: dateDomain, unit: unit).map { tick in
+            PowerChartAxisMark(position: chartData.timeline.position(for: tick), date: tick)
+        }
+        // 断点内的整点刻度会塌缩到跳变点、与断点标记重叠，直接剔除。
+        marks.removeAll { mark in
+            guard let date = mark.date else { return false }
+            return chartData.timeline.isInsideBreak(date)
+        }
 
-    /// 跨天视图改为日期刻度：紧凑轴下整点刻度大多塌缩进待机断点会被剔掉。
-    /// 判据用**可见真实跨度**而非 `range.days`，这样在 7 天范围内缩放到几小时
-    /// 仍会回到正常的时间刻度。
-    private static func showsDayLabels(for dateDomain: ClosedRange<Date>) -> Bool {
-        dateDomain.upperBound.timeIntervalSince(dateDomain.lowerBound) > 26 * 3_600
+        let visibleBreaks = chartData.timeline.breaks.filter {
+            $0.duration > 5
+                && $0.end > dateDomain.lowerBound
+                && $0.start < dateDomain.upperBound
+        }
+        let markerStride = max(1, Int(ceil(Double(visibleBreaks.count) / 8)))
+        for (index, interval) in visibleBreaks.enumerated() where index.isMultiple(of: markerStride) {
+            // 断点不占宽度，标记直接画在跳变点上；断点起点在窗口左侧时钳到可见域左边缘。
+            let position = min(
+                max(chartData.timeline.position(for: interval.start), chartDomain.lowerBound),
+                chartDomain.upperBound
+            )
+            marks.append(PowerChartAxisMark(position: position, date: nil))
+        }
+
+        return marks.sorted { $0.position < $1.position }
     }
 
     /// 只画正功率样本；无读数点、长缺口和系统睡眠都会切成独立曲线段。
@@ -929,7 +929,10 @@ struct TodayPowerChart: View {
 
     private func hoverTooltip(for sample: HistorySample) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(sample.timestamp, format: tooltipFormat)
+            Text(sample.timestamp, format: .dateTime
+                .hour(.defaultDigits(amPM: .omitted))
+                .minute(.twoDigits)
+                .second(.twoDigits))
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
@@ -949,11 +952,9 @@ struct TodayPowerChart: View {
 /// 电量曲线：支持缩放 / 拖动平移与悬停查看时间与电量。
 struct TodayBatteryLevelChart: View {
     let chartData: BatteryLevelChartData
-    /// 跨天标识：变化时重置缩放窗口。
-    let dayKey: String
-    /// 显示范围（面板固定为「今日」）。
-    let range: HistoryRange
-    /// 绘图区高度；nil 表示撑满剩余空间（放大浮层内使用）。
+    /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
+    let day: Date
+    /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
     let plotHeight: CGFloat?
     /// 非 nil 时在标题栏提供「放大查看」入口。
     let onExpand: (() -> Void)?
@@ -971,25 +972,28 @@ struct TodayBatteryLevelChart: View {
 
     init(
         chartData: BatteryLevelChartData,
-        dayKey: String = "",
-        range: HistoryRange = .today,
+        day: Date = Date(),
         plotHeight: CGFloat? = 138,
         onExpand: (() -> Void)? = nil
     ) {
         self.chartData = chartData
-        self.dayKey = dayKey
-        self.range = range
+        self.day = day
         self.plotHeight = plotHeight
         self.onExpand = onExpand
     }
 
-    /// 以最后一条样本时间结尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
-    /// 数据不足 `range.days` 天时夹到最早样本，避免视口里大片空白。
+    /// 日期标签：今日 / 昨天 / M/d。
+    private var dayLabel: String {
+        BatteryFormatters.historyDayLabel(day)
+    }
+
+    /// 以最后一条样本时间收尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
+    /// 往日展示整天并收在当天最后一条样本处。
     private var fullDomain: ClosedRange<Date> {
         BatteryLevelAxis.xDomain(
+            day: day,
             now: samples.last?.timestamp ?? Date(),
-            days: range.days,
-            earliestSample: samples.first?.timestamp
+            lastSample: samples.last?.timestamp
         )
     }
 
@@ -1037,11 +1041,6 @@ struct TodayBatteryLevelChart: View {
         return PowerChartSegmentation.splitByGaps(source)
     }
 
-    /// 多天范围时 tooltip 带上日期，否则跨天数据无法区分。
-    private var tooltipFormat: Date.FormatStyle {
-        ChartTimeAxis.tooltipFormat(includesDate: range.days > 1)
-    }
-
     var body: some View {
         // 帧内只算一次：若把 `yDomain` 这类计算属性直接写进逐样本的 ForEach，
         // 每个样本都会重跑一遍 O(样本数) 的筛选，整体退化成 O(n²)（卡顿主因）。
@@ -1052,11 +1051,13 @@ struct TodayBatteryLevelChart: View {
         let tickUnit = ChartTimeAxis.unit(
             forSpan: plotDomain.upperBound.timeIntervalSince(plotDomain.lowerBound)
         )
-        let tickFormat = ChartTimeAxis.labelFormat(for: tickUnit)
+        let tickFormat: Date.FormatStyle = tickUnit.includesMinutes
+            ? Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
+            : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("\(range.title)电量曲线")
+                Text("\(dayLabel)电量曲线")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1080,7 +1081,7 @@ struct TodayBatteryLevelChart: View {
             }
 
             if samples.isEmpty {
-                ChartEmptyPlaceholder("暂无\(range.title)数据，应用运行后每 5 秒记录一次")
+                ChartEmptyPlaceholder("暂无\(dayLabel)数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
                 Chart {
@@ -1190,16 +1191,13 @@ struct TodayBatteryLevelChart: View {
                 // 裁掉上半个字并压到标题上；在图表外包一层顶部内边距给标签留出空间。
                 .padding(.top, 14)
                 .clipped()
-                .accessibilityLabel("\(range.title)电量曲线")
+                .accessibilityLabel("\(dayLabel)电量曲线")
                 .accessibilityValue(levelAccessibilitySummary)
             }
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
-        .onChange(of: dayKey) { _, _ in
-            window = nil
-        }
-        .onChange(of: range) { _, _ in
+        .onChange(of: day) { _, _ in
             window = nil
         }
     }
@@ -1257,7 +1255,10 @@ struct TodayBatteryLevelChart: View {
 
     private func hoverTooltip(for sample: HistorySample) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(sample.timestamp, format: tooltipFormat)
+            Text(sample.timestamp, format: .dateTime
+                .hour(.defaultDigits(amPM: .omitted))
+                .minute(.twoDigits)
+                .second(.twoDigits))
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
@@ -1475,10 +1476,8 @@ enum TodayTemperatureStats {
 /// 温度 / 电压分时曲线：分段切换，含最高温与高温累计时长等概览。
 struct TodayMetricChart: View {
     let samples: [HistorySample]
-    /// 跨天标识：变化时重置缩放窗口。
-    let dayKey: String
-    /// 显示范围（面板固定为「今日」）。
-    let range: HistoryRange
+    /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
+    let day: Date
     /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
     let plotHeight: CGFloat?
     /// 由外部固定指标并隐藏内置切换器（放大窗口按标签页驱动）；nil 时用内置状态。
@@ -1502,18 +1501,21 @@ struct TodayMetricChart: View {
 
     init(
         samples: [HistorySample],
-        dayKey: String = "",
-        range: HistoryRange = .today,
+        day: Date = Date(),
         plotHeight: CGFloat? = 138,
         fixedMetric: TodayMetric? = nil,
         onExpand: ((TodayMetric) -> Void)? = nil
     ) {
         self.samples = samples
-        self.dayKey = dayKey
-        self.range = range
+        self.day = day
         self.plotHeight = plotHeight
         self.fixedMetric = fixedMetric
         self.onExpand = onExpand
+    }
+
+    /// 日期标签：今日 / 昨天 / M/d。
+    private var dayLabel: String {
+        BatteryFormatters.historyDayLabel(day)
     }
 
     /// 当前实际展示的指标：外部指定优先，否则用内置切换器的状态。
@@ -1525,13 +1527,13 @@ struct TodayMetricChart: View {
         cache.data(for: samples, metric: activeMetric)
     }
 
-    /// 以最后一条样本时间结尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
-    /// 数据不足 `range.days` 天时夹到最早样本，避免视口里大片空白。
+    /// 以最后一条样本时间收尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
+    /// 往日展示整天并收在当天最后一条样本处。
     private var fullDomain: ClosedRange<Date> {
         BatteryLevelAxis.xDomain(
+            day: day,
             now: samples.last?.timestamp ?? Date(),
-            days: range.days,
-            earliestSample: samples.first?.timestamp
+            lastSample: samples.last?.timestamp
         )
     }
 
@@ -1582,11 +1584,6 @@ struct TodayMetricChart: View {
         return PowerChartSegmentation.splitByGaps(source)
     }
 
-    /// 多天范围时 tooltip 带上日期，否则跨天数据无法区分。
-    private var tooltipFormat: Date.FormatStyle {
-        ChartTimeAxis.tooltipFormat(includesDate: range.days > 1)
-    }
-
     var body: some View {
         // 帧内只算一次：若把 `yAxis` 直接写进逐样本的 ForEach，每个样本都会重跑
         // 一遍 O(样本数) 的筛选 + 刻度字符串格式化（卡顿主因）。
@@ -1597,7 +1594,9 @@ struct TodayMetricChart: View {
         let tickUnit = ChartTimeAxis.unit(
             forSpan: plotDomain.upperBound.timeIntervalSince(plotDomain.lowerBound)
         )
-        let tickFormat = ChartTimeAxis.labelFormat(for: tickUnit)
+        let tickFormat: Date.FormatStyle = tickUnit.includesMinutes
+            ? Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
+            : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
         let metricKind = activeMetric
         let metricTitle = metricKind.title
 
@@ -1642,7 +1641,7 @@ struct TodayMetricChart: View {
             .frame(minHeight: 14)
 
             if chartData.samples.isEmpty {
-                ChartEmptyPlaceholder("暂无\(range.title)\(metricTitle)数据，应用运行后每 5 秒记录一次")
+                ChartEmptyPlaceholder("暂无\(dayLabel)\(metricTitle)数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
                 Chart {
@@ -1755,16 +1754,13 @@ struct TodayMetricChart: View {
                 // Y 轴顶端刻度以刻度线为中心绘制，贴着绘图区上沿会被 .clipped() 裁掉半行字。
                 .padding(.top, 14)
                 .clipped()
-                .accessibilityLabel("\(range.title)\(metricTitle)曲线")
+                .accessibilityLabel("\(dayLabel)\(metricTitle)曲线")
                 .accessibilityValue(accessibilitySummary)
             }
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
-        .onChange(of: dayKey) { _, _ in
-            window = nil
-        }
-        .onChange(of: range) { _, _ in
+        .onChange(of: day) { _, _ in
             window = nil
         }
     }
@@ -1778,12 +1774,12 @@ struct TodayMetricChart: View {
                 Self.highTemperatureThreshold,
                 in: chartData.samples
             )
-            return "\(range.title)最高 \(String(format: "%.1f", maximum)) °C · "
+            return "\(dayLabel)最高 \(String(format: "%.1f", maximum)) °C · "
                 + "≥\(Int(Self.highTemperatureThreshold))°C 累计 \(Self.durationText(duration))"
         case .voltage:
             let values = chartData.samples.compactMap(\.voltage)
             guard let minimum = values.min(), let maximum = values.max() else { return nil }
-            return "\(range.title) " + String(format: "%.2f – %.2f V", minimum, maximum)
+            return "\(dayLabel) " + String(format: "%.2f – %.2f V", minimum, maximum)
         }
     }
 
@@ -1836,7 +1832,10 @@ struct TodayMetricChart: View {
 
     private func hoverTooltip(for sample: HistorySample, value: Double) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(sample.timestamp, format: tooltipFormat)
+            Text(sample.timestamp, format: .dateTime
+                .hour(.defaultDigits(amPM: .omitted))
+                .minute(.twoDigits)
+                .second(.twoDigits))
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
@@ -1976,6 +1975,13 @@ struct PowerChartBreak: Equatable {
     var duration: TimeInterval { end.timeIntervalSince(start) }
 }
 
+struct PowerChartAxisMark: Identifiable {
+    var position: Double
+    var date: Date?
+
+    var id: Double { position }
+}
+
 struct PowerChartTimeline {
     let breaks: [PowerChartBreak]
 
@@ -2053,23 +2059,34 @@ struct BatteryLevelChartData {
 
 /// 电量曲线坐标轴：纯函数，便于单元测试。
 enum BatteryLevelAxis {
-    /// X 轴域：`days` 天的本地 00:00 → now，至少 60s 宽（避免刚过午夜时域退化）。
-    /// 数据不足时用 `earliestSample` 夹取，避免视口里大片空白。
+    /// X 轴域：`day` 当天 00:00 起，至少 60s 宽（避免刚过午夜时域退化）。
+    ///
+    /// - 今天：到 `now`（调用方传最后一条样本时间，数据驱动以避免 2Hz 重渲染抖动）。
+    /// - 往日：到当天最后一刻；有样本时收在当天最后一条样本处，不留大片空白。
     static func xDomain(
+        day: Date,
         now: Date = Date(),
-        days: Int = 1,
-        earliestSample: Date? = nil,
+        lastSample: Date? = nil,
         calendar: Calendar = .current
     ) -> ClosedRange<Date> {
-        let todayStart = calendar.startOfDay(for: now)
-        let requestedStart = calendar.date(
-            byAdding: .day,
-            value: -(max(days, 1) - 1),
-            to: todayStart
-        ) ?? todayStart
-        let lower = earliestSample.map { max(requestedStart, calendar.startOfDay(for: $0)) }
-            ?? requestedStart
-        return lower...max(now, lower.addingTimeInterval(60))
+        let start = calendar.startOfDay(for: day)
+        let nextDayStart = calendar.date(byAdding: .day, value: 1, to: start)
+            ?? start.addingTimeInterval(86_400)
+
+        let end: Date
+        if calendar.isDate(day, inSameDayAs: now) {
+            end = max(now, start.addingTimeInterval(60))
+        } else if let lastSample {
+            end = min(nextDayStart, max(lastSample, start.addingTimeInterval(60)))
+        } else {
+            end = nextDayStart
+        }
+        return start...max(start.addingTimeInterval(60), end)
+    }
+
+    /// 便捷重载：取 `now` 所在的那一天（`now` 同时作为当天的结束时刻）。
+    static func xDomain(now: Date = Date(), calendar: Calendar = .current) -> ClosedRange<Date> {
+        xDomain(day: now, now: now, lastSample: nil, calendar: calendar)
     }
 
     /// Y 轴域：在 0…100 内加边距并保证最小跨度，避免近似平线被纵向放大成剧烈波动。
