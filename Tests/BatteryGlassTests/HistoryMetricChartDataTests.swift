@@ -111,4 +111,94 @@ final class HistoryMetricChartDataTests: XCTestCase {
         let duration = TodayTemperatureStats.durationAbove(35, in: samples)
         XCTAssertEqual(duration, 15, accuracy: 0.0001)
     }
+
+    // MARK: - AxisTickScale
+
+    func testChartDataAxisTicksMatchValueDomain() {
+        let data = TodayMetricChartData(
+            samples: [sample(offset: 0, temperature: 30.5), sample(offset: 5, temperature: 30.8)],
+            metric: .temperature
+        )
+
+        XCTAssertEqual(data.axisTicks.domain, data.valueDomain)
+        XCTAssertFalse(data.axisTicks.labels.isEmpty)
+    }
+
+    /// 当日温度跨度很小时，固定取整会让刻度全变成 "31"。
+    func testNarrowTemperatureDomainKeepsLabelsDistinct() {
+        let scale = MetricValueAxis.ticks(in: 30.47...30.83)
+
+        XCTAssertEqual(scale.fractionDigits, 1)
+        XCTAssertEqual(scale.labels, ["30.5", "30.6", "30.7", "30.8"])
+    }
+
+    /// 当日电压跨度很小时，固定 1 位小数会让刻度全变成 "12.7"。
+    func testNarrowVoltageDomainKeepsLabelsDistinct() {
+        let scale = MetricValueAxis.ticks(in: 12.667...12.703)
+
+        XCTAssertEqual(scale.fractionDigits, 2)
+        XCTAssertEqual(scale.labels, ["12.67", "12.68", "12.69", "12.70"])
+    }
+
+    func testWideDomainUsesNiceStep() {
+        let scale = MetricValueAxis.ticks(in: 18...42)
+
+        XCTAssertEqual(scale.fractionDigits, 0)
+        XCTAssertEqual(scale.labels, ["20", "25", "30", "35", "40"])
+    }
+
+    /// 平线温度经 `yDomain` 扩到 29.26…32.34 后仍需得到整数刻度。
+    func testFlatTemperatureDomainUsesIntegerTicks() {
+        let scale = MetricValueAxis.ticks(in: MetricValueAxis.yDomain(for: [30.8]))
+
+        XCTAssertEqual(scale.fractionDigits, 0)
+        XCTAssertEqual(scale.labels, ["30", "31", "32"])
+    }
+
+    /// 耗电量柱图：0.0x kWh 量级的刻度也必须互不重复（原先固定 %.1f 会全显示 "0.0"）。
+    func testEnergyScaleLabelsAreDistinct() {
+        let scale = MetricValueAxis.ticks(in: 0...0.088)
+
+        XCTAssertEqual(scale.fractionDigits, 2)
+        XCTAssertEqual(scale.labels, ["0.00", "0.02", "0.04", "0.06", "0.08"])
+    }
+
+    func testTicksStayInsideDomainAndAscending() {
+        let domains: [ClosedRange<Double>] = [
+            0...1, 18...42, 30.47...30.83, 12.667...12.703, 95...105,
+            0...0.088, 0...3.7, 29.26...32.34, (-20)...(-5)
+        ]
+
+        for domain in domains {
+            let scale = MetricValueAxis.ticks(in: domain)
+            XCTAssertTrue((3...5).contains(scale.values.count), "域 \(domain) 刻度数量异常")
+            XCTAssertEqual(scale.values, scale.values.sorted(), "域 \(domain) 刻度未升序")
+            for value in scale.values {
+                XCTAssertTrue(domain.contains(value), "域 \(domain) 的刻度 \(value) 越界")
+            }
+            XCTAssertEqual(
+                Set(scale.labels).count,
+                scale.values.count,
+                "域 \(domain) 出现重复刻度标签 \(scale.labels)"
+            )
+        }
+    }
+
+    func testFractionDigitsFollowsStep() {
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 0.005), 3)
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 0.01), 2)
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 0.05), 2)
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 0.2), 1)
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 0.5), 1)
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 1), 0)
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 5), 0)
+        XCTAssertEqual(MetricValueAxis.fractionDigits(forStep: 10), 0)
+    }
+
+    func testDegenerateDomainDoesNotCrash() {
+        // 零宽值域（`ClosedRange` 不允许 nan 边界，故只覆盖宽度为 0 的退化情形）。
+        let empty = MetricValueAxis.ticks(in: 5...5)
+        XCTAssertTrue(empty.values.isEmpty)
+        XCTAssertEqual(empty.domain, 5...5)
+    }
 }

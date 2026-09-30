@@ -182,6 +182,13 @@ struct DailyEnergyComparisonChart: View {
         aggregateCache.aggregates(summaries: energySummaries, grouping: grouping)
     }
 
+    /// 柱图从 0 起算：Y 域取 0…峰值×1.1（至少 0.1 kWh），刻度走整齐步长 + 自适应小数位
+    /// （固定 %.1f 会让 0.0x kWh 量级的刻度全塌成 "0.0"）。
+    private var energyAxis: AxisTickScale {
+        let peak = aggregates.map(\.energyKWh).max() ?? 0
+        return MetricValueAxis.ticks(in: 0...max(peak * 1.1, 0.1))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
             HStack {
@@ -219,13 +226,14 @@ struct DailyEnergyComparisonChart: View {
                     .foregroundStyle(DesignTokens.dataBlue.gradient)
                     .cornerRadius(4)
                 }
+                .chartYScale(domain: energyAxis.domain)
                 .chartYAxis {
-                    AxisMarks(position: .leading) { value in
+                    AxisMarks(position: .leading, values: energyAxis.values) { value in
                         AxisGridLine()
                         AxisTick()
                         AxisValueLabel {
-                            if let energy = value.as(Double.self) {
-                                Text(String(format: "%.1f", energy))
+                            if let raw = value.as(Double.self) {
+                                Text(energyAxis.label(for: raw))
                             }
                         }
                     }
@@ -1074,13 +1082,6 @@ enum TodayMetric: String, CaseIterable, Identifiable {
         }
     }
 
-    func axisLabel(for value: Double) -> String {
-        switch self {
-        case .temperature: "\(Int(value.rounded()))"
-        case .voltage: String(format: "%.1f", value)
-        }
-    }
-
     func valueLabel(for value: Double) -> String {
         switch self {
         case .temperature: String(format: "%.1f °C", value)
@@ -1089,7 +1090,7 @@ enum TodayMetric: String, CaseIterable, Identifiable {
     }
 }
 
-/// 某指标的今日分时绘图数据：过滤空值、抽样到上限、预算 Y 域。
+/// 某指标的今日分时绘图数据：过滤空值、抽样到上限、预算 Y 域与轴刻度。
 struct TodayMetricChartData {
     let metric: TodayMetric
     /// 今日有该指标值的全量样本，供悬停吸附使用。
@@ -1098,6 +1099,8 @@ struct TodayMetricChartData {
     let displayedSamples: [HistorySample]
     /// 由全量样本预计算的 Y 轴域（抽样可能丢极值，故不能用抽样集计算）。
     let valueDomain: ClosedRange<Double>
+    /// Y 轴域内的整齐刻度与标签小数位。
+    let axisTicks: AxisTickScale
 
     init(samples: [HistorySample], metric: TodayMetric, maximumDisplayedSamples: Int = 800) {
         self.metric = metric
@@ -1106,7 +1109,9 @@ struct TodayMetricChartData {
             return value.isFinite
         }
         self.samples = valid
-        self.valueDomain = MetricValueAxis.yDomain(for: valid.compactMap { metric.value(from: $0) })
+        let domain = MetricValueAxis.yDomain(for: valid.compactMap { metric.value(from: $0) })
+        self.valueDomain = domain
+        self.axisTicks = MetricValueAxis.ticks(in: domain)
 
         guard maximumDisplayedSamples > 1, valid.count > maximumDisplayedSamples else {
             self.displayedSamples = valid
@@ -1139,8 +1144,33 @@ final class TodayMetricChartDataCache {
     }
 }
 
+/// Y 轴刻度：整齐步长刻度值 + 标签小数位，保证窄值域下相邻标签不会塌成同一个数字。
+struct AxisTickScale: Equatable {
+    /// 原样回传的值域，供 `.chartYScale(domain:)` 使用。
+    let domain: ClosedRange<Double>
+    /// 升序刻度值，均落在 `domain` 内（域非法时为空）。
+    let values: [Double]
+    /// 标签小数位。
+    let fractionDigits: Int
+
+    var labels: [String] { values.map(label(for:)) }
+
+    func label(for value: Double) -> String {
+        String(format: "%.\(fractionDigits)f", value)
+    }
+}
+
 /// 通用趋势 Y 轴域：空数据回退 0...1；平线时上下各留 max(|值|×5%, 1)；否则在跨度上留 10% 余量。
 enum MetricValueAxis {
+    /// 整齐步长候选（升序）。刻意不含 0.25 / 2.5：它们无法用对应位数的小数精确表达。
+    private static let stepCandidates: [Double] = [
+        0.001, 0.002, 0.005, 0.01, 0.02, 0.05,
+        0.1, 0.2, 0.5, 1, 2, 5,
+        10, 20, 50, 100, 200, 500, 1000
+    ]
+    /// 刻度数量区间：太少失去参考价值，太多在 138pt 高的图里会挤在一起。
+    private static let tickCountRange = 3...5
+
     static func yDomain(for values: [Double]) -> ClosedRange<Double> {
         let finite = values.filter { $0.isFinite }
         guard let minimum = finite.min(), let maximum = finite.max() else { return 0...1 }
@@ -1151,6 +1181,53 @@ enum MetricValueAxis {
         }
         let padding = span * 0.1
         return (minimum - padding)...(maximum + padding)
+    }
+
+    /// 在值域内挑「整齐」步长生成刻度，并按步长决定标签小数位。
+    /// 刻度值经 `Double(index) * step` 生成（不做累加，避免浮点漂移），标签兜底去重。
+    static func ticks(in domain: ClosedRange<Double>) -> AxisTickScale {
+        let lower = domain.lowerBound
+        let upper = domain.upperBound
+        guard lower.isFinite, upper.isFinite, upper > lower else {
+            return AxisTickScale(domain: domain, values: [], fractionDigits: 2)
+        }
+
+        let width = upper - lower
+        for step in stepCandidates {
+            let lowerRatio = lower / step
+            let upperRatio = upper / step
+            // 比值超出 Int 安全范围说明步长相对量级过小，转 Int 会溢出。
+            guard lowerRatio.isFinite, upperRatio.isFinite,
+                  abs(lowerRatio) < 1e15, abs(upperRatio) < 1e15 else { continue }
+            let firstIndex = Int(ceil(lowerRatio - 1e-9))
+            let lastIndex = Int(floor(upperRatio + 1e-9))
+            let count = lastIndex - firstIndex + 1
+            guard tickCountRange.contains(count) else { continue }
+
+            let values = (firstIndex...lastIndex).map { Double($0) * step }
+            var digits = fractionDigits(forStep: step)
+            // 浮点噪声可能让两个刻度格式化后相同（曾是「31 / 31 / 31」的直接原因），加位兜底。
+            while digits < 6, Set(values.map { String(format: "%.\(digits)f", $0) }).count != values.count {
+                digits += 1
+            }
+            return AxisTickScale(domain: domain, values: values, fractionDigits: digits)
+        }
+
+        // 极端跨度：退化为下界 / 中点 / 上界三点。
+        var digits = fractionDigits(forStep: max(width / 2, 0.001))
+        while digits < 6, Set([lower, (lower + upper) / 2, upper]
+            .map { String(format: "%.\(digits)f", $0) }).count != 3 {
+            digits += 1
+        }
+        return AxisTickScale(domain: domain, values: [lower, (lower + upper) / 2, upper], fractionDigits: digits)
+    }
+
+    /// 步长对应的小数位：0.2 → 1、0.01 → 2、5 → 0。减去 1e-9 抵消 log10 的浮点噪声。
+    static func fractionDigits(forStep step: Double) -> Int {
+        guard step.isFinite, step > 0 else { return 0 }
+        let exponent = -log10(step)
+        guard exponent > 0 else { return 0 }
+        return min(max(Int(ceil(exponent - 1e-9)), 0), 6)
     }
 }
 
@@ -1274,12 +1351,12 @@ struct TodayMetricChart: View {
                 .chartXScale(domain: xDomain)
                 .chartYScale(domain: chartData.valueDomain)
                 .chartYAxis {
-                    AxisMarks(position: .leading) { value in
+                    AxisMarks(position: .leading, values: chartData.axisTicks.values) { value in
                         AxisGridLine()
                         AxisTick()
                         AxisValueLabel {
                             if let raw = value.as(Double.self) {
-                                Text(metric.axisLabel(for: raw))
+                                Text(chartData.axisTicks.label(for: raw))
                             }
                         }
                     }
