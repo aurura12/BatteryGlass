@@ -7,11 +7,23 @@ struct PowerTelemetryCounters: Equatable, Sendable {
 }
 
 enum PowerTelemetryEnergy {
-    /// Provisional normalization for the private raw counter. This conversion
-    /// alone is not trusted; SleepEnergyCalculator only accepts it after a
-    /// physical wattmeter calibration for the active hardware/OS context.
-    private static let rawUnitsPerKWh = 1_000_000.0
+    /// Provisional normalization for the private raw counter (counter units per kWh).
+    /// This conversion alone is not trusted; SleepEnergyCalculator only accepts it
+    /// after a physical wattmeter calibration for the active hardware/OS context.
+    ///
+    /// Empirically derived on MacBookPro18,1 from `power-diagnostics.jsonl`:
+    /// the counter's true scale is ~1e9 units/kWh — 1000× finer than the earlier
+    /// `1e6` placeholder. Still only a starting point; the wattmeter calibration
+    /// remains authoritative.
+    static let rawUnitsPerKWh = 1_000_000_000.0
     private static let maximumPlausiblePowerW = 500.0
+
+    /// Converts a raw counter delta with the default unit assumption only.
+    /// Used when recording a calibration session, so the stored
+    /// `uncalibratedEnergyKWh` stays consistent with `wallEnergyKWh`.
+    static func uncalibratedEnergyKWh(rawDelta: UInt64) -> Double {
+        Double(rawDelta) / rawUnitsPerKWh
+    }
 
     /// Converts a counter delta to kWh, rejecting resets and implausible jumps.
     static func wallEnergyKWh(

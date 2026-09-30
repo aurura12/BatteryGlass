@@ -131,6 +131,8 @@ struct SettingsView: View {
                 }
             }
 
+            PowerCalibrationSection()
+
             Section("关于") {
                 LabeledContent("版本", value: appVersion)
                 Text("BatteryGlass 通过 IOKit 实时读取电池数据，菜单栏常驻，无需任何网络权限。macOS 26+ 使用系统 Liquid Glass 材质，macOS 14/15 自动降级为原生毛玻璃。")

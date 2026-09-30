@@ -4,6 +4,14 @@
 
 ## [2026-09-30]
 
+### 新增
+- 新增设置页「电源校准」录入 UI：采用**引导式校准会话**——点击「开始校准」后应用自动记录当前墙上能量计数器与时间，用户保持接通电源并用外接电表记录同期用电量，之后点击「完成校准」输入实测 kWh 即自动结算系数；支持查看/删除单条记录与清空全部记录。`PowerTelemetryCalibrationStore` 由 `struct` 改为 `@MainActor @Observable` 共享引用类型，在 `BatteryGlassApp` 中创建唯一实例并同时注入 `BatteryMonitor` 与设置页，**校准保存后睡眠能耗计量立即采用新系数，无需重启**；payload 升至 `v2`（新增可选 `session` 字段，旧文件解码为 nil、无需迁移分支）；新增 `PowerTelemetryEnergy.uncalibratedEnergyKWh(rawDelta:)` 作为未校准换算的唯一来源；`BatteryMonitor` 新增只读 `currentWallEnergyCounter`。当结算系数明显偏离常见范围（`0.05...20`）时二次确认，以防把 Wh 误当 kWh 输入。（`PowerTelemetryCalibration.swift`、`PowerTelemetryEnergy.swift`、`BatteryMonitor.swift`、`BatteryGlassApp.swift`、`Views/PowerCalibrationSection.swift`、`SettingsView.swift`）
+- 校准相关测试扩展：`PowerTelemetryCalibrationTests` 覆盖记录增删清空与落盘、按 context 选取最新生效记录、会话开始/结算成功、计数器重置/上下文变化/输入非法分支、会话跨实例持久化；`PowerTelemetryEnergyTests` 覆盖 `uncalibratedEnergyKWh`。测试类更新为 `@MainActor`。
+
+### 修复
+- 修复唤醒后 30 秒维持功耗采样窗口内再次睡眠导致的待机能量丢段：`handleWillSleep()` 原先无条件 `cancelMaintenanceSampling()`，会连同上一段尚未结算的 `wakeBaseline` 一起丢弃（`finalizeSleepSegment()` 仅在 30 秒窗口跑满时才触发），典型场景「开盖后又马上合盖」会永久少记一整段睡眠能耗。现改为再次睡眠前判断 `wakeBaseline != nil`，先用已采集样本调用 `finalizeSleepSegment()` 结算上一段，再写入新的睡眠基线。（BatteryMonitor.swift）
+- 修复墙上能量计数器默认单位偏差 1000 倍：`PowerTelemetryEnergy.rawUnitsPerKWh` 由占位值 `1e6` 改为经实测反推的 `1e9`。依据：解析 `power-diagnostics.jsonl`（09:54–12:03，2 小时 9 分）得到适配器输出积分 0.0631 kWh，而计数器差值按 `1e6` 换算为 ~62.5 kWh，比值 ≈ 0.00101，即 MacBookPro18,1 上真实量级约为 **1e9 单位/kWh**。此前未校准读数被高估 1000 倍（会话 2 分钟即显示 0.74 kWh ≈ 22 kW），校准系数也会落在 0.001 量级并误触「系数偏离常见范围」告警；改后未校准读数接近真值、校准系数回到 ~1.1，该常量仍为暂定起点、以电表校准记录为准。同步更新 `PowerTelemetryEnergyTests`、`SleepEnergyCalculatorTests`、`PowerTelemetryCalibrationTests` 的期望值。（`PowerTelemetryEnergy.swift` 及三个测试文件）
+
 ### 修改
 - 更新 `CODEBUDDY.md`，修正与补齐近期变更：历史 payload 版本 `v4` → `v5`（`BatteryHistoryStore.swift:307` 实际为 v5），并补充 v5 迁移说明（`SleepSegment` 增 `hasUnobservedSource`/`boundaryPowerChange`、`DailySummary` 增 `energyQuality`，均带默认值解码、旧文件无需新迁移分支）。
 - `CODEBUDDY.md` 能耗计量段补充睡眠边界语义：`SleepEnergyCalculator.minimumDuration = 60s`、`SleepBoundaryPowerChange` 对称 `sourceChanged` 分支与 `SleepSegment.hasUnobservedSource`（下界）含义。

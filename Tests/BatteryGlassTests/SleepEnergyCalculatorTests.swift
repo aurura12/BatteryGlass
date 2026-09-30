@@ -196,7 +196,7 @@ final class SleepEnergyCalculatorTests: XCTestCase {
 
         let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
 
-        XCTAssertEqual(segment.energyKWh, 0.25, accuracy: 0.0000001)
+        XCTAssertEqual(segment.energyKWh, 0.00025, accuracy: 0.0000001)
         XCTAssertEqual(segment.mode, .charging)
         XCTAssertEqual(segment.measurementMethod, .telemetryCounter)
         XCTAssertTrue(segment.hasUnobservedSource)
@@ -224,8 +224,8 @@ final class SleepEnergyCalculatorTests: XCTestCase {
 
         let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
 
-        // 墙上 0.25 kWh + 电池补充 1000 mAh × 12 V = 0.012 kWh
-        XCTAssertEqual(segment.energyKWh, 0.262, accuracy: 0.0000001)
+        // 墙上 0.00025 kWh + 电池补充 1000 mAh × 12 V = 0.012 kWh
+        XCTAssertEqual(segment.energyKWh, 0.01225, accuracy: 0.0000001)
         XCTAssertEqual(segment.mode, .discharging)
         XCTAssertEqual(segment.measurementMethod, .telemetryCounter)
         XCTAssertTrue(segment.hasUnobservedSource)
@@ -321,8 +321,8 @@ final class SleepEnergyCalculatorTests: XCTestCase {
 
         let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
 
-        // 墙上输入 0.25 kWh + 电池补充 1000 mAh × 12 V = 0.012 kWh。
-        XCTAssertEqual(segment.energyKWh, 0.262, accuracy: 0.0000001)
+        // 墙上输入 0.00025 kWh + 电池补充 1000 mAh × 12 V = 0.012 kWh。
+        XCTAssertEqual(segment.energyKWh, 0.01225, accuracy: 0.0000001)
         XCTAssertEqual(segment.measurementMethod, .telemetryCounter)
     }
 
@@ -404,7 +404,7 @@ final class SleepEnergyCalculatorTests: XCTestCase {
 
         let segment = try XCTUnwrap(SleepEnergyCalculator.segment(from: input))
 
-        XCTAssertEqual(segment.energyKWh, 0.2, accuracy: 0.0000001)
+        XCTAssertEqual(segment.energyKWh, 0.0002, accuracy: 0.0000001)
         XCTAssertTrue(segment.isCalibrated)
         XCTAssertFalse(segment.hasUnobservedSource)
         XCTAssertNil(segment.boundaryPowerChange)

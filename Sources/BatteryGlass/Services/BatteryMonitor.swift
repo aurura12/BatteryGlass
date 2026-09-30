@@ -58,6 +58,12 @@ final class BatteryMonitor {
     private let maintenanceSampleCount = 6
     private var latestTelemetryCounters = PowerTelemetryCounters(accumulatedWallEnergyEstimate: nil)
 
+    /// 当前累计墙上能量计数器原始值，供设置页校准会话读取；机型不提供时为 nil。
+    /// 读取 `latestTelemetryCounters`（`@Observable` 存储属性），随采样自动驱动视图刷新。
+    var currentWallEnergyCounter: UInt64? {
+        latestTelemetryCounters.accumulatedWallEnergyEstimate
+    }
+
     init(
         settings: AppSettings,
         telemetryCalibrationStore: PowerTelemetryCalibrationStore? = nil
@@ -258,7 +264,12 @@ final class BatteryMonitor {
 
     /// 系统即将睡眠：记录当前快照作为基线。回调要轻，系统可能随即挂起。
     private func handleWillSleep() {
-        // 上次唤醒后 30 秒采样窗口内再次睡眠：丢弃未完成采样，避免生成不完整区间。
+        // 上次唤醒后的维持功耗采样窗口尚未结束就再次睡眠（典型：开盖后又马上合盖）：
+        // 此时 wakeBaseline 仍在，说明上一段待机还没结算。先用已采集的样本把它结算掉，
+        // 否则其能量会被下方的 cancelMaintenanceSampling 连同基线一起丢弃。
+        if wakeBaseline != nil {
+            finalizeSleepSegment()
+        }
         cancelMaintenanceSampling()
         sleepBaseline = (
             date: snapshot.timestamp,

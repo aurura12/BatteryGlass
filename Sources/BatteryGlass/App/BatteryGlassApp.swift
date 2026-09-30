@@ -53,6 +53,7 @@ struct BatteryGlassApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     private let settings: AppSettings
+    private let calibrationStore: PowerTelemetryCalibrationStore
     private let monitor: BatteryMonitor
     private let history: BatteryHistoryStore
     private let desktopWidget: DesktopWidgetController
@@ -70,10 +71,14 @@ struct BatteryGlassApp: App {
         if let enabled = LoginItemService.systemLaunchAtLoginEnabled() {
             settings.launchAtLoginEnabled = enabled
         }
-        let monitor = BatteryMonitor(settings: settings)
+        // 校准 store 为共享引用类型：设置页写入后 BatteryMonitor 立即读到新系数，
+        // 因此必须在 monitor 之前创建并注入同一实例。
+        let calibrationStore = PowerTelemetryCalibrationStore()
+        let monitor = BatteryMonitor(settings: settings, telemetryCalibrationStore: calibrationStore)
         let history = BatteryHistoryStore(settings: settings)
         let desktopWidget = DesktopWidgetController(monitor: monitor, settings: settings)
         self.settings = settings
+        self.calibrationStore = calibrationStore
         self.monitor = monitor
         self.history = history
         self.desktopWidget = desktopWidget
@@ -96,6 +101,8 @@ struct BatteryGlassApp: App {
             SettingsView()
                 .environment(history)
                 .environment(settings)
+                .environment(calibrationStore)
+                .environment(monitor)
         }
     }
 }
