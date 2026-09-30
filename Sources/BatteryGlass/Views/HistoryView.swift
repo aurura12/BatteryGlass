@@ -481,13 +481,21 @@ struct DailyEnergyComparisonChart: View {
             .accessibilityValue(dailyDetailsState.isExpanded ? "已展开" : "已收起")
 
             if dailyDetailsState.isExpanded {
-                // 只渲染最近 30 天，避免长期使用后「全部」范围渲染数千行。
+                // 最多渲染最近 30 行以避免长期使用后「全部」范围渲染数千行；
+                // 所选范围内不足 30 天时全部显示，超出部分在下方用一行轻量文案提示。
                 ForEach(summaries.suffix(30).reversed()) { summary in
                     HStack {
                         Text(summary.dayKey)
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
+                        if let reason = energyQualityWarning(for: summary) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .help(reason)
+                                .accessibilityLabel(Text(reason))
+                        }
                         Spacer()
                         Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -496,9 +504,37 @@ struct DailyEnergyComparisonChart: View {
                     }
                     .padding(.vertical, 2)
                 }
+                if summaries.count > 30 {
+                    Text("另有 \(summaries.count - 30) 天未显示")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.top, DesignTokens.spacingXS)
+    }
+
+    /// 生成日能耗质量角标的原因文案；`energyQuality` 缺失或全部标记为 false 时返回 nil。
+    /// 多条原因按标记顺序以「；」拼接。
+    private func energyQualityWarning(for summary: DailySummary) -> String? {
+        guard let quality = summary.energyQuality else { return nil }
+        var reasons: [String] = []
+        if quality.hasSamplingGaps {
+            reasons.append("当天存在超过 60 秒的采样断点，耗电量可能偏低")
+        }
+        if quality.hasEstimatedSleepEnergy {
+            reasons.append("睡眠段为估算值（无可用计数器或未校准）")
+        }
+        if quality.hasUncalibratedCounterEnergy {
+            reasons.append("睡眠段使用未校准的遥测计数器，数值可能有系统性偏差")
+        }
+        if quality.hasLowerBoundSleepEnergy {
+            reasons.append("睡眠边界供电状态变化，仅统计到可观测来源，实际值不低于此")
+        }
+        if quality.hasUnknownHistoricalCoverage {
+            reasons.append("旧版本记录，统计口径未知")
+        }
+        return reasons.isEmpty ? nil : reasons.joined(separator: "；")
     }
 }
 

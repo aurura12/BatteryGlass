@@ -355,8 +355,11 @@ struct PowerTrendCard: View {
         }
     }
 
+    /// 以最新样本时间戳为锚点取最近 120 秒，避免样本稀疏时“最近 N 条”横跨远超 2 分钟。
     private var windowSamples: [PowerSample] {
-        Array(samples.suffix(240))
+        guard let latest = samples.last?.timestamp else { return [] }
+        let cutoff = latest.addingTimeInterval(-120)
+        return samples.filter { $0.timestamp >= cutoff }
     }
 
     private var hasSamples: Bool {

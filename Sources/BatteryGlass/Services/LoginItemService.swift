@@ -52,6 +52,11 @@ enum LoginItemApplyResult: Equatable {
     case unavailable
     /// 系统调用失败。
     case failed
+    /// 系统未报告登录项状态（`.notFound`），既不能确认已启用也不能确认已注销。
+    ///
+    /// 该状态下期望关闭时无从注销，调用方应保留原设置并提示用户手动核对，
+    /// 不得据此断定"已成功关闭"。
+    case cannotConfirm
 }
 
 /// 开机自启动设置：封装 `SMAppService.mainApp` 的状态查询与注册/注销。
@@ -106,6 +111,11 @@ enum LoginItemService {
             // 返回 needsApproval，引导用户去系统设置完成批准（否则开关静默无效）。
             if state == .requiresApproval, desiredEnabled {
                 return .needsApproval
+            }
+            // 系统报告找不到登录项服务且用户期望关闭：无从确认（也未做任何操作），
+            // 不能报告成功，交由调用方提示用户手动核对。
+            if state == .notFound, !desiredEnabled {
+                return .cannotConfirm
             }
             return .applied
         case .register:

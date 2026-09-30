@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var showingClearHistoryConfirmation = false
     @State private var showingNotificationDeniedAlert = false
     @State private var showingLoginItemApprovalAlert = false
+    @State private var showingLoginItemUnconfirmedAlert = false
     @State private var showingLoginItemErrorAlert = false
     @State private var showingExportErrorAlert = false
 
@@ -165,6 +166,16 @@ struct SettingsView: View {
         } message: {
             Text("BatteryGlass 已发起开机自启动注册，需要你在系统中批准后才能生效。请到「系统设置 → 通用 → 登录项」允许 BatteryGlass。")
         }
+        .alert("无法确认开机自启动状态", isPresented: $showingLoginItemUnconfirmedAlert) {
+            Button("打开系统设置") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text("系统当前未报告登录项状态，无法确认开机自启动是否已关闭。请到「系统设置 → 通用 → 登录项」中检查。")
+        }
         .alert("设置开机自启动失败", isPresented: $showingLoginItemErrorAlert) {
             Button("好", role: .cancel) {}
         } message: {
@@ -195,6 +206,9 @@ struct SettingsView: View {
             showingLoginItemApprovalAlert = true
         case .unavailable:
             settings.launchAtLoginEnabled = oldValue
+        case .cannotConfirm:
+            settings.launchAtLoginEnabled = oldValue
+            showingLoginItemUnconfirmedAlert = true
         case .failed:
             settings.launchAtLoginEnabled = oldValue
             showingLoginItemErrorAlert = true

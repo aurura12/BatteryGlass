@@ -14,11 +14,17 @@
 ### 修复
 - 修复本地通知在应用前台（active）时被系统静默丢弃的问题：`NotificationService` 新增私有 `ForegroundNotificationPresenter`（遵循 `UNUserNotificationCenterDelegate`，`willPresent` 返回 `[.banner, .sound]`），并在 `BatteryGlassApp` 的 `AppDelegate.applicationDidFinishLaunching` 中调用 `NotificationService.installForegroundPresenter()` 安装。此前菜单栏面板打开或设置窗口位于前台时，低电量与插拔通知不会弹出横幅（NotificationService.swift、BatteryGlassApp.swift）。
 - 修复插拔适配器时可能多报一次「已接入电源」的问题：`BatteryMonitor.checkAdapterChange` 原用 `defer` 无条件写 `lastAdapterConnected`，会在 `isPresent == false` 的瞬态样本上写坏基准、导致下一个正常样本补发虚假通知；现改为 `!s.isPresent` 时直接返回、不更新基准（BatteryMonitor.swift）。
+- 修复 `.notFound` 状态下关闭「开机自启动」无任何反馈的问题：新增 `LoginItemApplyResult.cannotConfirm`，`LoginItemService.apply` 在 `.notFound + 期望关闭` 时返回它（仍不调用任何系统 API），设置页据此把开关回滚到原值并弹出「无法确认开机自启动状态」提示，引导用户到系统设置核对。`desiredAction` 行为不变（LoginItemService.swift、SettingsView.swift）。
 
 ### 修改
 - 统一「功率趋势」卡副标题口径：适配器供电时由「适配器输入功率」改为「适配器输出功率」，与「实时功率」卡及「电源分配」卡第三格（同为 `adapterInputPowerW`）一致（LiveDashboardView.swift）。
 - 设置页「关于 · 版本」不再硬编码 `1.0.0`，改为读取 `Bundle.main.infoDictionary["CFBundleShortVersionString"]`，取不到时回退 `1.0.0`（SettingsView.swift）。
 - 「退出」按钮增加二次确认：`DashboardView` 底部退出按钮改为先弹 `confirmationDialog`（含破坏性「退出」与「取消」），确认后才 `terminate`，避免误点即退出（DashboardView.swift）。
+- 「功率趋势」卡峰值/平均改为真正的时间窗口：由 `samples.suffix(240)`（按条数）改为以最新样本时间戳为锚点的最近 120 秒窗口，避免样本稀疏时「2 分钟」标签失真（LiveDashboardView.swift）。
+
+### 新增
+- 历史页「每日明细」新增能耗质量角标：`DailySummary.energyQuality` 任一标记为真时，日期旁显示 `exclamationmark.triangle`，hover 与 VoiceOver 给出具体原因（采样断点、睡眠段估算、计数器未校准、能量为下界、旧记录口径未知）（HistoryView.swift）。
+- 「每日明细」跟随所选统计范围：范围内不足 30 行时全部显示，超出时显示最近 30 行并提示「另有 N 天未显示」，不再静默截断（HistoryView.swift）。
 
 ### 重构
 - 可访问性：`AnimatedSegmentedControl` 每个分段补 `accessibilityAddTraits(.isSelected)`，VoiceOver 可播报当前选中项（AnimatedSegmentedControl.swift）。
