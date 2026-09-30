@@ -21,12 +21,12 @@ final class ChartWindowController {
         self.history = history
     }
 
-    /// 打开（或复用）窗口并切到指定曲线。
+    /// 打开（或复用）窗口并切到指定曲线；保留上次选择的范围。
     func show(_ kind: ExpandedChart) {
         model.kind = kind
         let window = window ?? makeWindow()
         self.window = window
-        window.title = kind.title
+        window.title = kind.title(range: model.range)
         // 普通窗口需要 App 处于前台才能正常交互。
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
@@ -39,15 +39,15 @@ final class ChartWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = model.kind.title
+        window.title = model.kind.title(range: model.range)
         window.contentMinSize = Self.minimumSize
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.center()
         window.contentView = NSHostingView(
-            rootView: ChartDetailView(model: model) { [weak window] kind in
-                // 窗口内切换曲线时同步标题。
-                window?.title = kind.title
+            rootView: ChartDetailView(model: model) { [weak window] kind, range in
+                // 窗口内切换曲线或范围时同步标题。
+                window?.title = kind.title(range: range)
             }
             .environment(history)
         )

@@ -5,6 +5,16 @@
 ## [2026-09-30]
 
 ### 新增
+- 放大窗口支持多天范围：顶部新增「今日 / 近 3 天 / 近 7 天」分段选择器，与曲线标签页并列；切换只改共享的 `ChartDetailModel.range`，窗口不重建、位置与大小不变，窗口标题同步为「近 7 天 · 功率曲线」。（`Models/HistoryRange.swift`、`Views/ChartDetailView.swift`、`Services/ChartWindowController.swift`）
+- 原始样本保留策略由「仅当天 + 前一天末条」改为**近 7 天**：今天保持原生 ~5 秒精度，**往日降采样到 1 分钟**（epoch 分桶、每桶留最后一条）。`HistoryRetention.retainedSamples(retentionDays:olderResolution:)` 取代 `samplesForCurrentDay`（一并删除只服务于它的 `appendingIfNeeded`），新增显示用 `samples(lastDays:from:now:)`；`pruneHistory()` 按 7 天 / 60 秒执行。降采样后最坏约 2.59 万条 / 5.3 MB，远低于 `HistoryLoadLimits`（10 万条 / 20 MiB）——**不提高上限、不 bump payload 版本**（字段未变）。跨午夜边界样本由「每桶留最后一条」自然保留，今天的能量插值边界不变。（`Stores/BatteryHistoryStore.swift`）
+- X 轴刻度支持「天」：`ChartTickUnit` 增 `.day(step:)` 与 `includesDate`，`unit(forSpan:)` 在 2 天以上改用按天、`86_400` 仍为 6 小时（既有测试不变），新增 `ChartTimeAxis.labelFormat(for:)`（跨天「月/日」、分钟级带分钟）与 `tooltipFormat(includesDate:)`。`BatteryLevelAxis.xDomain` 增 `days`/`earliestSample` 参数（默认值下与现状逐值相等），数据不足时夹到今天之前的最早样本。（`Models/ChartTimeAxis.swift`、`Views/HistoryView.swift`）
+- 多天功率曲线的 X 轴（**保持紧凑轴**，未改 `PowerChartTimeline`）：把标记生成抽成纯函数 `PowerChartAxis.marks(...)`，`showsDayLabels` 由**可见真实跨度 > 26 小时**决定（在 7 天范围内缩放到几小时会自动回到时间刻度）；跨天时输出「每天数据起点」的 `M/d` 标签（`PowerChartAxisMark` 增 `label` 字段），整点刻度在紧凑轴下大多塌缩进断点会被剔除，故不再重复显示；跨夜断点与次日日期标签塌缩到同一位置时，去重保留信息更多的日期标签。（`Models/PowerChartAxis.swift`、`Views/HistoryView.swift`）
+- 新增测试：`HistoryRangeTests`、`PowerChartAxisTests`（日期标签/断点标记/钳制/排序去重/旧时钟模式等价性）；`HistoryRetentionTests` 按新契约重写（降采样、保留窗口、升序不变、单日、无降采样、`samples(lastDays:)`、**最坏情况条数与体积仍低于加载上限**）；`ChartTimeAxisTests` 补跨天单位与午夜刻度；`BatteryLevelChartDataTests` 补 `xDomain` 的 `days`/夹取/默认值不变。
+
+### 修复
+- 修复多天保留会误标采样断点：`markKnownSamplingGaps` 原先把**所有**间隔 > 60 秒（`EnergyCalculator.maximumGap`）且不在睡眠区间的相邻样本对都判为「采样断点」，而往日降到 1 分钟后相邻样本最长可差约 119 秒，会让每个旧日期都被标上 `hasSamplingGaps`、历史页日明细出现一片警告角标。现只判定「以今天结尾」的间隔（`end >= startOfDay(now)`）：今天的原生精度与当天真实断点仍照常标记，跨午夜那一对仍按原逻辑判定。（`Stores/BatteryHistoryStore.swift`）
+
+### 新增
 - 放大窗口内可直接切换曲线，且拆成**四个标签页**：顶部为「功率 / 电量 / 温度 / 电压」分段切换器，切换时只改共享的 `ChartDetailModel.kind`，窗口不重建、位置与大小不变，窗口标题同步更新。原「温度·电压」合并标签拆开后，窗口内不再出现重复的二级切换器——`TodayMetricChart` 新增 `fixedMetric`（非 nil 时以它为准并隐藏内置切换器），面板上的该卡片仍保留自带切换器；`onExpand` 改为回传当前指标 `(TodayMetric) -> Void`，面板点波压卡片的 ⤢ 会直接打开对应标签页。`ExpandedChart` 改为 4 个 case 并补 `metric` 映射、`init(metric:)`、`CaseIterable` 与 `shortTitle`，`ChartDetailView` 新增 `onKindChange` 回调供窗口控制器同步标题。（`Views/ChartDetailView.swift`、`Views/HistoryView.swift`、`Services/ChartWindowController.swift`）
 
 ### 修改

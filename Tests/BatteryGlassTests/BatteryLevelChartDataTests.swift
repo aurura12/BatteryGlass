@@ -190,6 +190,60 @@ final class BatteryLevelChartDataTests: XCTestCase {
         )
     }
 
+    func testXDomainDefaultUnchanged() {
+        let calendar = gmtCalendar()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let domain = BatteryLevelAxis.xDomain(now: now, calendar: calendar)
+
+        XCTAssertEqual(domain.lowerBound, calendar.startOfDay(for: now))
+        XCTAssertEqual(domain.upperBound, now)
+    }
+
+    func testXDomainSevenDaysStartsSixDaysBack() {
+        let calendar = gmtCalendar()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let expected = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now))!
+
+        let domain = BatteryLevelAxis.xDomain(now: now, days: 7, calendar: calendar)
+
+        XCTAssertEqual(domain.lowerBound, expected)
+        XCTAssertEqual(domain.upperBound, now)
+    }
+
+    func testXDomainClampsToEarliestSample() {
+        let calendar = gmtCalendar()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // 只保留了一天多的数据：视口应从最早样本那天起，而不是空出 6 天。
+        let earliest = calendar.date(byAdding: .day, value: -1, to: now)!
+
+        let domain = BatteryLevelAxis.xDomain(
+            now: now,
+            days: 7,
+            earliestSample: earliest,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(domain.lowerBound, calendar.startOfDay(for: earliest))
+    }
+
+    func testXDomainKeepsMinimumWidthWhenClampedAtMidnight() {
+        let calendar = gmtCalendar()
+        let midnight = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+
+        let domain = BatteryLevelAxis.xDomain(
+            now: midnight,
+            days: 7,
+            earliestSample: midnight,
+            calendar: calendar
+        )
+
+        XCTAssertGreaterThanOrEqual(
+            domain.upperBound.timeIntervalSince(domain.lowerBound),
+            60
+        )
+    }
+
     // MARK: - Helpers
 
     private func sample(at timestamp: Date, percent: Double) -> HistorySample {

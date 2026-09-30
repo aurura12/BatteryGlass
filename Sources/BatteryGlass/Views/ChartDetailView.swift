@@ -9,14 +9,19 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// 窗口标题使用的全称。
-    var title: String {
+    /// 与天数无关的曲线名；窗口标题用 `title(range:)` 组合。
+    var baseTitle: String {
         switch self {
-        case .power: "今日功率曲线"
-        case .level: "今日电量曲线"
-        case .temperature: "今日温度曲线"
-        case .voltage: "今日电压曲线"
+        case .power: "功率曲线"
+        case .level: "电量曲线"
+        case .temperature: "温度曲线"
+        case .voltage: "电压曲线"
         }
+    }
+
+    /// 窗口标题：范围 + 曲线名。
+    func title(range: HistoryRange) -> String {
+        "\(range.title) · \(baseTitle)"
     }
 
     /// 分段切换器用的短标签。
@@ -44,22 +49,23 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
     }
 }
 
-/// 放大窗口的共享状态：切换曲线只改这里的值，不重建窗口，位置与大小得以保留。
+/// 放大窗口的共享状态：切换曲线/范围只改这里的值，不重建窗口，位置与大小得以保留。
 @MainActor
 @Observable
 final class ChartDetailModel {
     var kind: ExpandedChart = .power
+    var range: HistoryRange = .today
 }
 
 /// 放大窗口内的曲线视图。
 ///
-/// 自行从 `BatteryHistoryStore` 取当天样本并记忆化曲线数据（与面板内各自一份），
-/// 因此窗口开着时会随新样本实时刷新。窗口内可直接切换要看的曲线。
+/// 自行从 `BatteryHistoryStore` 取样本并记忆化曲线数据（与面板内各自一份），
+/// 因此窗口开着时会随新样本实时刷新。窗口内可直接切换曲线与显示范围。
 struct ChartDetailView: View {
     @Environment(BatteryHistoryStore.self) private var history
     let model: ChartDetailModel
-    /// 曲线切换回调，供窗口同步标题。
-    let onKindChange: (ExpandedChart) -> Void
+    /// 选择变化回调，供窗口同步标题。
+    let onSelectionChange: (ExpandedChart, HistoryRange) -> Void
 
     @State private var todayCache = TodaySamplesCache()
     @State private var chartCache = PowerChartDataCache()
@@ -70,13 +76,23 @@ struct ChartDetailView: View {
             get: { model.kind },
             set: { newValue in
                 model.kind = newValue
-                onKindChange(newValue)
+                onSelectionChange(newValue, model.range)
+            }
+        )
+    }
+
+    private var rangeSelection: Binding<HistoryRange> {
+        Binding(
+            get: { model.range },
+            set: { newValue in
+                model.range = newValue
+                onSelectionChange(model.kind, newValue)
             }
         )
     }
 
     var body: some View {
-        let samples = todayCache.samples(from: history.samples)
+        let samples = todayCache.samples(from: history.samples, days: model.range.days)
         let dayKey = BatteryFormatters.dayKey(for: Date())
 
         return VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
@@ -84,6 +100,15 @@ struct ChartDetailView: View {
                 Picker("曲线", selection: kindSelection) {
                     ForEach(ExpandedChart.allCases) { kind in
                         Text(kind.shortTitle).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+
+                Picker("范围", selection: rangeSelection) {
+                    ForEach(HistoryRange.allCases) { range in
+                        Text(range.title).tag(range)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -98,7 +123,7 @@ struct ChartDetailView: View {
                     .lineLimit(1)
             }
 
-            chart(kind: model.kind, samples: samples, dayKey: dayKey)
+            chart(kind: model.kind, range: model.range, samples: samples, dayKey: dayKey)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(DesignTokens.spacingL)
@@ -106,19 +131,26 @@ struct ChartDetailView: View {
     }
 
     @ViewBuilder
-    private func chart(kind: ExpandedChart, samples: [HistorySample], dayKey: String) -> some View {
+    private func chart(
+        kind: ExpandedChart,
+        range: HistoryRange,
+        samples: [HistorySample],
+        dayKey: String
+    ) -> some View {
         switch kind {
         case .power:
             TodayPowerChart(
                 chartData: chartCache.data(for: samples, sleepIntervals: history.sleepIntervals),
                 sleepIntervals: history.sleepIntervals,
                 dayKey: dayKey,
+                range: range,
                 plotHeight: nil
             )
         case .level:
             TodayBatteryLevelChart(
                 chartData: levelChartCache.data(for: samples),
                 dayKey: dayKey,
+                range: range,
                 plotHeight: nil
             )
         case .temperature, .voltage:
@@ -126,6 +158,7 @@ struct ChartDetailView: View {
             TodayMetricChart(
                 samples: samples,
                 dayKey: dayKey,
+                range: range,
                 plotHeight: nil,
                 fixedMetric: kind.metric
             )

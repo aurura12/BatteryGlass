@@ -4,17 +4,19 @@ import Foundation
 enum ChartTickUnit: Equatable {
     case minute(step: Int)
     case hour(step: Int)
+    case day(step: Int)
 
     var component: Calendar.Component {
         switch self {
         case .minute: .minute
         case .hour: .hour
+        case .day: .day
         }
     }
 
     var step: Int {
         switch self {
-        case .minute(let step), .hour(let step): step
+        case .minute(let step), .hour(let step), .day(let step): step
         }
     }
 
@@ -23,12 +25,40 @@ enum ChartTickUnit: Equatable {
         if case .minute = self { return true }
         return false
     }
+
+    /// 标签是否需要显示日期（跨天视图下只显示时间会在多天里重复）。
+    var includesDate: Bool {
+        if case .day = self { return true }
+        return false
+    }
+}
+
+extension ChartTimeAxis {
+    /// X 轴标签格式：跨天用「月/日」，分钟级补上分钟，否则只显示小时。
+    static func labelFormat(for unit: ChartTickUnit) -> Date.FormatStyle {
+        if unit.includesDate {
+            return Date.FormatStyle.dateTime.month(.defaultDigits).day(.defaultDigits)
+        }
+        if unit.includesMinutes {
+            return Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
+        }
+        return Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
+    }
+
+    /// 悬停 tooltip 的时间戳格式：多天范围时带上日期，否则只显示时分秒。
+    static func tooltipFormat(includesDate: Bool) -> Date.FormatStyle {
+        let base = Date.FormatStyle.dateTime
+            .hour(.defaultDigits(amPM: .omitted))
+            .minute(.twoDigits)
+            .second(.twoDigits)
+        return includesDate ? base.month(.defaultDigits).day(.defaultDigits) : base
+    }
 }
 
 /// 今日曲线 X 轴的动态时间刻度：按可见跨度挑选步长并生成刻度时刻。
 /// 纯函数，便于单元测试。
 enum ChartTimeAxis {
-    /// 可见跨度（秒）→ 刻度单位。整日保持既有的 6 小时步长。
+    /// 可见跨度（秒）→ 刻度单位。整日保持既有的 6 小时步长，跨多天改为按天。
     static func unit(forSpan seconds: TimeInterval) -> ChartTickUnit {
         guard seconds.isFinite, seconds > 0 else { return .hour(step: 6) }
         switch seconds {
@@ -36,7 +66,8 @@ enum ChartTimeAxis {
         case ..<7_200: return .minute(step: 30)
         case ..<21_600: return .hour(step: 1)
         case ..<43_200: return .hour(step: 3)
-        default: return .hour(step: 6)
+        case ..<172_800: return .hour(step: 6)
+        default: return .day(step: 1)
         }
     }
 
@@ -79,6 +110,8 @@ enum ChartTimeAxis {
         switch unit {
         case .minute: unitSeconds = 60
         case .hour: unitSeconds = 3_600
+        // 天不能用固定秒数（DST 日不是 86400 秒），直接对齐到当天起点。
+        case .day: return dayStart
         }
         let grid = unitSeconds * Double(unit.step)
         guard grid > 0 else { return nil }

@@ -88,6 +88,43 @@ final class ChartTimeAxisTests: XCTestCase {
         XCTAssertLessThanOrEqual(marks.count, 1)
     }
 
+    func testTwoDaySpanStillUsesSixHourStep() {
+        XCTAssertEqual(ChartTimeAxis.unit(forSpan: 172_799), .hour(step: 6))
+        XCTAssertEqual(ChartTimeAxis.unit(forSpan: 172_800), .day(step: 1))
+    }
+
+    func testMultiDaySpanUsesDailyStep() {
+        XCTAssertEqual(ChartTimeAxis.unit(forSpan: 259_200), .day(step: 1))
+        XCTAssertEqual(ChartTimeAxis.unit(forSpan: 604_800), .day(step: 1))
+    }
+
+    func testIncludesDateOnlyForDayUnits() {
+        XCTAssertTrue(ChartTickUnit.day(step: 1).includesDate)
+        XCTAssertFalse(ChartTickUnit.hour(step: 6).includesDate)
+        XCTAssertFalse(ChartTickUnit.minute(step: 10).includesDate)
+    }
+
+    func testDailyMarksLandOnLocalMidnights() {
+        let calendar = gmtCalendar()
+        let start = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let domain = start...start.addingTimeInterval(2.5 * 86_400)
+
+        let marks = ChartTimeAxis.marks(in: domain, unit: .day(step: 1), calendar: calendar)
+
+        XCTAssertEqual(marks.count, 3)
+        XCTAssertEqual(marks.map { $0.timeIntervalSince(start) }, [0, 86_400, 2 * 86_400].map(Double.init))
+        XCTAssertTrue(marks.allSatisfy { calendar.startOfDay(for: $0) == $0 })
+    }
+
+    func testDailyLabelFormatShowsMonthAndDay() {
+        let format = ChartTimeAxis.labelFormat(for: .day(step: 1))
+        let label = format.format(Date(timeIntervalSince1970: 1_700_000_000))
+
+        // 至少包含日期分隔符，且不含秒钟（跨天视图只需要「月/日」）。
+        XCTAssertTrue(label.contains("/") || label.contains("-"), label)
+        XCTAssertFalse(label.contains(":"), label)
+    }
+
     // MARK: - Helpers
 
     private func gmtCalendar() -> Calendar {

@@ -30,6 +30,11 @@ final class BatteryHistoryStore {
     private var lastPersistenceScheduledAt = Date.distantPast
     private let persistenceInterval: TimeInterval = 15
 
+    /// 保留的原始样本天数（含今天）；配合 `olderSampleResolution` 使条数与体积远低于加载上限。
+    private static let retentionDays = 7
+    /// 往日样本的降采样间隔：今天保持原生 ~5 秒精度，往日 1 分钟一条。
+    private static let olderSampleResolution: TimeInterval = 60
+
     init(settings: AppSettings, fileURL: URL? = nil) {
         self.settings = settings
         if let fileURL {
@@ -337,7 +342,13 @@ final class BatteryHistoryStore {
 
         let today = Calendar.current.startOfDay(for: Date())
         guard lastSamplesPrunedDay != today else { return }
-        samples = HistoryRetention.samplesForCurrentDay(samples, now: Date())
+        // 保留近 7 天：今天原生精度，往日降到 1 分钟（详见 HistoryRetention.retainedSamples）。
+        samples = HistoryRetention.retainedSamples(
+            samples,
+            now: Date(),
+            retentionDays: Self.retentionDays,
+            olderResolution: Self.olderSampleResolution
+        )
         lastSamplesPrunedDay = today
     }
 
@@ -487,11 +498,15 @@ final class BatteryHistoryStore {
 
     private func markKnownSamplingGaps(in samples: [HistorySample]) -> Bool {
         let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        // 往日样本已降到 1 分钟一条，相邻间隔最长可达约 119 秒，会被误判成「采样断点」。
+        // 只有以今天结尾的间隔才做判定；今天的原生精度不变，当天真实断点仍会被标记。
+        let todayStart = Calendar.current.startOfDay(for: Date())
         var changed = false
         for pair in zip(sorted, sorted.dropFirst()) {
             let start = pair.0.timestamp
             let end = pair.1.timestamp
-            guard end.timeIntervalSince(start) > EnergyCalculator.maximumGap,
+            guard end >= todayStart,
+                  end.timeIntervalSince(start) > EnergyCalculator.maximumGap,
                   !sleepIntervals.contains(where: { $0.overlaps(start, end) }) else {
                 continue
             }
@@ -599,6 +614,69 @@ final class BatteryHistoryStore {
 }
 
 enum HistoryRetention {
+    /// 保留近 `retentionDays` 天：今天原样保留，往日降采样到 `olderResolution` 秒一条。
+    ///
+    /// - 往日按 epoch 桶（`floor(timestamp / olderResolution)`）分组、**每桶保留最后一条**：
+    ///   单次遍历即可完成，输出保持升序、条数只减不增；用 epoch 桶而非日历分钟可避免
+    ///   DST 与分钟对齐问题。
+    /// - 「每桶留最后一条」天然保留了跨午夜的那条边界样本，因此今天的能量插值边界不变。
+    /// - 降采样只影响展示密度；已落盘的日聚合能量在 5 秒精度下算好，不会因此改变
+    ///   （`load()` 的 `allowedDayKeys` 只含今天，不会用降采样后的样本重算旧日期）。
+    static func retainedSamples(
+        _ samples: [HistorySample],
+        now: Date = Date(),
+        retentionDays: Int = 7,
+        olderResolution: TimeInterval = 60,
+        calendar: Calendar = .current
+    ) -> [HistorySample] {
+        let todayStart = calendar.startOfDay(for: now)
+        let days = max(retentionDays, 1)
+        guard let cutoffStart = calendar.date(byAdding: .day, value: -(days - 1), to: todayStart) else {
+            return samples
+        }
+        guard olderResolution > 0 else {
+            return samples.filter { $0.timestamp >= cutoffStart }
+        }
+
+        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        var kept: [HistorySample] = []
+        kept.reserveCapacity(sorted.count)
+        var lastBucket: Double?
+
+        for sample in sorted {
+            if sample.timestamp >= todayStart {
+                kept.append(sample)
+                continue
+            }
+            guard sample.timestamp >= cutoffStart else { continue }
+
+            let bucket = (sample.timestamp.timeIntervalSinceReferenceDate / olderResolution)
+                .rounded(.down)
+            if bucket == lastBucket {
+                // 同一桶内后来者替换前一条 → 每桶保留最后一条。
+                kept[kept.count - 1] = sample
+            } else {
+                kept.append(sample)
+                lastBucket = bucket
+            }
+        }
+        return kept
+    }
+
+    /// 显示用过滤：近 `lastDays` 天（含今天）。故意不含范围之前的那条边界样本。
+    static func samples(
+        lastDays: Int,
+        from samples: [HistorySample],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [HistorySample] {
+        let todayStart = calendar.startOfDay(for: now)
+        guard let start = calendar.date(byAdding: .day, value: -(max(lastDays, 1) - 1), to: todayStart) else {
+            return samples
+        }
+        return samples.filter { $0.timestamp >= start }
+    }
+
     static func samples(
         forDay date: Date,
         from samples: [HistorySample],
@@ -612,32 +690,5 @@ enum HistoryRetention {
         return samples.filter { sample in
             sample.timestamp >= dayStart && sample.timestamp < nextDayStart
         }
-    }
-
-    static func samplesForCurrentDay(
-        _ samples: [HistorySample],
-        now: Date = Date(),
-        calendar: Calendar = .current
-    ) -> [HistorySample] {
-        let todayStart = calendar.startOfDay(for: now)
-        guard let tomorrowStart = calendar.date(byAdding: .day, value: 1, to: todayStart),
-              let previousDayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) else {
-            return samples
-        }
-        let previousDaySample = samples
-            .filter { $0.timestamp >= previousDayStart && $0.timestamp < todayStart }
-            .max { $0.timestamp < $1.timestamp }
-
-        return samples
-            .filter { $0.timestamp >= todayStart && $0.timestamp < tomorrowStart }
-            .appendingIfNeeded(previousDaySample)
-            .sorted { $0.timestamp < $1.timestamp }
-    }
-}
-
-private extension Array where Element == HistorySample {
-    func appendingIfNeeded(_ sample: HistorySample?) -> [HistorySample] {
-        guard let sample, !contains(where: { $0.id == sample.id }) else { return self }
-        return self + [sample]
     }
 }
