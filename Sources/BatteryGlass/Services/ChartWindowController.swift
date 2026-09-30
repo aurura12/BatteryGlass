@@ -45,7 +45,11 @@ final class ChartWindowController {
         window.tabbingMode = .disallowed
         window.center()
         window.contentView = NSHostingView(
-            rootView: ChartDetailView(model: model).environment(history)
+            rootView: ChartDetailView(model: model) { [weak window] kind in
+                // 窗口内切换曲线时同步标题。
+                window?.title = kind.title
+            }
+            .environment(history)
         )
 
         // 有历史记录时按上次的位置与大小恢复；没有记录则保持默认尺寸与居中位置。

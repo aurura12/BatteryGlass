@@ -4,6 +4,9 @@
 
 ## [2026-09-30]
 
+### 新增
+- 放大窗口内可直接切换曲线：顶部加分段切换器（功率 / 电量 / 温度·电压），切换时只改共享的 `ChartDetailModel.kind`，窗口不重建、位置与大小不变，窗口标题同步更新（温度/电压的二级切换仍由曲线自身那个分段控件承担）。`ExpandedChart` 补 `CaseIterable` 与 `shortTitle`，`ChartDetailView` 新增 `onKindChange` 回调供窗口控制器同步标题。（`Views/ChartDetailView.swift`、`Services/ChartWindowController.swift`）
+
 ### 修改
 - 「放大查看」由面板内浮层改为**独立窗口**：菜单栏面板固定 392×672，绘图区约 304×407，长宽比对时间序列并不合适。新增 `Services/ChartWindowController`（普通可缩放窗口，默认 1000×600、最小 480×320，`setFrameAutosaveName` 记住位置与大小、显示配置变化后拉回主屏，只维护一个实例、切换曲线不重建窗口）与 `Views/ChartDetailView`（自行从 `BatteryHistoryStore` 取当天样本并记忆化曲线数据，窗口开着时随新样本实时刷新）；删除 `Views/ExpandedChartOverlay.swift` 及 `HistoryView` 里承载它的 `ZStack`/过渡动画，`ExpandedChart` 枚举随之迁到 `ChartDetailView.swift`。（`Views/ChartDetailView.swift`、`Services/ChartWindowController.swift`、`Views/HistoryView.swift`、`App/BatteryGlassApp.swift`）
 
