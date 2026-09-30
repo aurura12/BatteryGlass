@@ -52,7 +52,7 @@ struct HistoryView: View {
                 TodayMetricChart(
                     samples: todaySamples,
                     dayKey: dayKey,
-                    onExpand: { chartWindow.show(.metric) }
+                    onExpand: { metric in chartWindow.show(ExpandedChart(metric: metric)) }
                 )
             }
             .padding(.bottom, DesignTokens.spacingXS)
@@ -1456,10 +1456,12 @@ struct TodayMetricChart: View {
     let samples: [HistorySample]
     /// 跨天标识：变化时重置缩放窗口。
     let dayKey: String
-    /// 绘图区高度；nil 表示撑满剩余空间（放大浮层内使用）。
+    /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
     let plotHeight: CGFloat?
-    /// 非 nil 时在标题栏提供「放大查看」入口。
-    let onExpand: (() -> Void)?
+    /// 由外部固定指标并隐藏内置切换器（放大窗口按标签页驱动）；nil 时用内置状态。
+    let fixedMetric: TodayMetric?
+    /// 非 nil 时在标题栏提供「放大查看」入口，并回传当前指标。
+    let onExpand: ((TodayMetric) -> Void)?
 
     @State private var metric: TodayMetric = .temperature
     @State private var cache = TodayMetricChartDataCache()
@@ -1479,16 +1481,23 @@ struct TodayMetricChart: View {
         samples: [HistorySample],
         dayKey: String = "",
         plotHeight: CGFloat? = 138,
-        onExpand: (() -> Void)? = nil
+        fixedMetric: TodayMetric? = nil,
+        onExpand: ((TodayMetric) -> Void)? = nil
     ) {
         self.samples = samples
         self.dayKey = dayKey
         self.plotHeight = plotHeight
+        self.fixedMetric = fixedMetric
         self.onExpand = onExpand
     }
 
+    /// 当前实际展示的指标：外部指定优先，否则用内置切换器的状态。
+    private var activeMetric: TodayMetric {
+        fixedMetric ?? metric
+    }
+
     private var chartData: TodayMetricChartData {
-        cache.data(for: samples, metric: metric)
+        cache.data(for: samples, metric: activeMetric)
     }
 
     /// 以最后一条样本时间结尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
@@ -1527,7 +1536,7 @@ struct TodayMetricChart: View {
         guard window.isZoomed else { return chartData.axisTicks }
         let visible = ChartViewport.visibleSamples(chartData.samples, in: domain)
         let valueDomain = MetricValueAxis.yDomain(
-            for: visible.compactMap { metric.value(from: $0) }
+            for: visible.compactMap { activeMetric.value(from: $0) }
         )
         return MetricValueAxis.ticks(in: valueDomain)
     }
@@ -1556,16 +1565,20 @@ struct TodayMetricChart: View {
         let tickFormat: Date.FormatStyle = tickUnit.includesMinutes
             ? Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
             : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
-        let metricTitle = metric.title
+        let metricKind = activeMetric
+        let metricTitle = metricKind.title
 
         return VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
-            Picker("指标", selection: $metric) {
-                ForEach(TodayMetric.allCases) { item in
-                    Text(item.title).tag(item)
+            // 放大窗口按标签页指定指标时隐藏内置切换器，避免两层重复控件。
+            if fixedMetric == nil {
+                Picker("指标", selection: $metric) {
+                    ForEach(TodayMetric.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
 
             HStack(spacing: 6) {
                 if let statsText {
@@ -1590,7 +1603,7 @@ struct TodayMetricChart: View {
                     ChartZoomResetButton { window = nil }
                 }
                 if let onExpand {
-                    ChartExpandButton(action: onExpand)
+                    ChartExpandButton { onExpand(metricKind) }
                 }
             }
             .frame(minHeight: 14)
@@ -1602,7 +1615,7 @@ struct TodayMetricChart: View {
                 Chart {
                     ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                         ForEach(segment) { sample in
-                            if let value = metric.value(from: sample) {
+                            if let value = metricKind.value(from: sample) {
                                 AreaMark(
                                     x: .value("时间", sample.timestamp),
                                     yStart: .value("下界", plotYAxis.domain.lowerBound),
@@ -1628,7 +1641,7 @@ struct TodayMetricChart: View {
                         }
                     }
 
-                    if let hoveredSample, let value = metric.value(from: hoveredSample) {
+                    if let hoveredSample, let value = metricKind.value(from: hoveredSample) {
                         RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
                             .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
@@ -1694,7 +1707,7 @@ struct TodayMetricChart: View {
 
                             if let hoveredSample,
                                let hoverLocation,
-                               let value = metric.value(from: hoveredSample) {
+                               let value = metricKind.value(from: hoveredSample) {
                                 hoverTooltip(for: hoveredSample, value: value)
                                     .position(
                                         x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
@@ -1722,7 +1735,7 @@ struct TodayMetricChart: View {
 
     /// 概览：温度显示今日最高与高温累计时长，电压显示今日范围。
     private var statsText: String? {
-        switch metric {
+        switch activeMetric {
         case .temperature:
             guard let maximum = TodayTemperatureStats.maximum(in: chartData.samples) else { return nil }
             let duration = TodayTemperatureStats.durationAbove(
@@ -1740,10 +1753,10 @@ struct TodayMetricChart: View {
 
     private var accessibilitySummary: String {
         guard let latest = chartData.samples.last,
-              let value = metric.value(from: latest) else {
+              let value = activeMetric.value(from: latest) else {
             return "暂无数据"
         }
-        return "最新 \(metric.valueLabel(for: value))"
+        return "最新 \(activeMetric.valueLabel(for: value))"
     }
 
     /// 手势进行中清掉 tooltip，避免标记跟着手指停留。
@@ -1795,7 +1808,7 @@ struct TodayMetricChart: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
-            Text(metric.valueLabel(for: value))
+            Text(activeMetric.valueLabel(for: value))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(DesignTokens.dataBlue)
