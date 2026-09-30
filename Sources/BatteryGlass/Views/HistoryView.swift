@@ -128,6 +128,23 @@ final class BatteryLevelChartDataCache {
     }
 }
 
+/// 日/周/月聚合记忆化：仅在汇总集合或分组方式变化时重算（内部需建字典并排序）。
+final class DailyAggregateCache {
+    private var cached: [EnergyAggregate] = []
+    private var lastSummaries: [DailySummary] = []
+    private var lastGrouping: EnergyGrouping?
+
+    func aggregates(summaries: [DailySummary], grouping: EnergyGrouping) -> [EnergyAggregate] {
+        if grouping == lastGrouping, summaries == lastSummaries {
+            return cached
+        }
+        cached = EnergyAggregator.aggregate(summaries: summaries, grouping: grouping)
+        lastSummaries = summaries
+        lastGrouping = grouping
+        return cached
+    }
+}
+
 enum EnergyHistoryRange: Int, CaseIterable, Identifiable {
     case seven = 7
     case fourteen = 14
@@ -168,13 +185,14 @@ struct DailyEnergyComparisonChart: View {
     @State private var grouping: EnergyGrouping = .day
     @State private var hoveredAggregate: EnergyAggregate?
     @State private var dailyDetailsState = DailyDetailsDisclosureState()
+    @State private var aggregateCache = DailyAggregateCache()
 
     private var energySummaries: [DailySummary] {
         summaries.filter { $0.energyKWh != nil }
     }
 
     private var aggregates: [EnergyAggregate] {
-        EnergyAggregator.aggregate(summaries: energySummaries, grouping: grouping)
+        aggregateCache.aggregates(summaries: energySummaries, grouping: grouping)
     }
 
     var body: some View {

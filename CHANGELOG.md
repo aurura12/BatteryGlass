@@ -2,6 +2,31 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-09-30]
+
+### 修改
+- 更新 `CODEBUDDY.md`，修正与补齐近期变更：历史 payload 版本 `v4` → `v5`（`BatteryHistoryStore.swift:307` 实际为 v5），并补充 v5 迁移说明（`SleepSegment` 增 `hasUnobservedSource`/`boundaryPowerChange`、`DailySummary` 增 `energyQuality`，均带默认值解码、旧文件无需新迁移分支）。
+- `CODEBUDDY.md` 能耗计量段补充睡眠边界语义：`SleepEnergyCalculator.minimumDuration = 60s`、`SleepBoundaryPowerChange` 对称 `sourceChanged` 分支与 `SleepSegment.hasUnobservedSource`（下界）含义。
+- `CODEBUDDY.md` 补充 `DailySummary.energyQuality` 字段、`EnergyAggregator` 所在路径（`Support/EnergyAggregator.swift`），并在 Views/UI 段加入根目录已知问题记录 `HISTORY_PICKER_FLICKER.md` 的指引。
+- `CODEBUDDY.md` 新增「项目结构」目录树（`Sources/BatteryGlass/` 六个子目录职责 + 顶层 `script/`、`scripts/`、`Resources/`、`design-system/`、`docs/`、`dist/`）与「App 层（入口 / 场景 / 单实例）」小节（`AppInstanceGuard`/`AppDelegate`/`@main` 均在 `App/BatteryGlassApp.swift`，`init` 固定顺序与两个 Scene 的注入）。
+- `CODEBUDDY.md` 补齐此前未点名的类型与机制：`AppSettings` 设置项清单与 `DashboardView` 的 `@AppStorage("BatteryGlass.panelTab")` 例外、`MenuBarIconRenderer` 合成单张模板 `NSImage` 的原因、`ViewThatFits` 实时页回退、`HistoryView` 三个内联缓存（`TodaySamplesCache`/`PowerChartDataCache`/`BatteryLevelChartDataCache`）与两个数据纯类型。
+
+### 修复
+- 修复本地通知在应用前台（active）时被系统静默丢弃的问题：`NotificationService` 新增私有 `ForegroundNotificationPresenter`（遵循 `UNUserNotificationCenterDelegate`，`willPresent` 返回 `[.banner, .sound]`），并在 `BatteryGlassApp` 的 `AppDelegate.applicationDidFinishLaunching` 中调用 `NotificationService.installForegroundPresenter()` 安装。此前菜单栏面板打开或设置窗口位于前台时，低电量与插拔通知不会弹出横幅（NotificationService.swift、BatteryGlassApp.swift）。
+- 修复插拔适配器时可能多报一次「已接入电源」的问题：`BatteryMonitor.checkAdapterChange` 原用 `defer` 无条件写 `lastAdapterConnected`，会在 `isPresent == false` 的瞬态样本上写坏基准、导致下一个正常样本补发虚假通知；现改为 `!s.isPresent` 时直接返回、不更新基准（BatteryMonitor.swift）。
+
+### 修改
+- 统一「功率趋势」卡副标题口径：适配器供电时由「适配器输入功率」改为「适配器输出功率」，与「实时功率」卡及「电源分配」卡第三格（同为 `adapterInputPowerW`）一致（LiveDashboardView.swift）。
+- 设置页「关于 · 版本」不再硬编码 `1.0.0`，改为读取 `Bundle.main.infoDictionary["CFBundleShortVersionString"]`，取不到时回退 `1.0.0`（SettingsView.swift）。
+- 「退出」按钮增加二次确认：`DashboardView` 底部退出按钮改为先弹 `confirmationDialog`（含破坏性「退出」与「取消」），确认后才 `terminate`，避免误点即退出（DashboardView.swift）。
+
+### 重构
+- 可访问性：`AnimatedSegmentedControl` 每个分段补 `accessibilityAddTraits(.isSelected)`，VoiceOver 可播报当前选中项（AnimatedSegmentedControl.swift）。
+- 性能缓存（消除 2Hz 父视图重渲染下的重复计算）：
+  - `HistoryView` 新增 `DailyAggregateCache`，日/周/月聚合 `EnergyAggregator.aggregate` 仅在汇总集合或分组方式变化时重算（HistoryView.swift）。
+  - `MenuBarIconRenderer` 按「电量整数百分比 | 电源状态 | 是否外接电源」记忆化模板图，避免每次 body 求值都新建 `NSImage` 并重绘（MenuBarLabel.swift）。
+- 本次改动后 `swift build` 通过，`swift test` 全部 231 个测试通过。
+
 ## [2026-09-28]
 
 ### 修改

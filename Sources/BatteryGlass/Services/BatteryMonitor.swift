@@ -484,9 +484,10 @@ final class BatteryMonitor {
 
     /// 外接电源接入/断开时发送通知（需在设置中开启；首次读取不触发）。
     private func checkAdapterChange(_ s: BatterySnapshot) {
+        // 瞬态无电池样本（isPresent == false）不更新基准，避免写坏基准后误报一次「已接入电源」。
+        guard s.isPresent else { return }
         defer { lastAdapterConnected = s.adapterConnected }
         guard settings.adapterChangeNotificationsEnabled,
-              s.isPresent,
               let previous = lastAdapterConnected,
               previous != s.adapterConnected else { return }
         NotificationService.shared.sendAdapterChange(connected: s.adapterConnected, percent: s.percent)

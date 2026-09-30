@@ -57,6 +57,7 @@ struct AnimatedSegmentedControl<T: Hashable>: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(label(item))
+                        .accessibilityAddTraits(item == selection ? [.isSelected] : [])
                     }
                 }
             }

@@ -131,7 +131,7 @@ struct SettingsView: View {
             }
 
             Section("关于") {
-                LabeledContent("版本", value: "1.0.0")
+                LabeledContent("版本", value: appVersion)
                 Text("BatteryGlass 通过 IOKit 实时读取电池数据，菜单栏常驻，无需任何网络权限。macOS 26+ 使用系统 Liquid Glass 材质，macOS 14/15 自动降级为原生毛玻璃。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -180,6 +180,11 @@ struct SettingsView: View {
     /// 系统无法查询登录项状态时禁用开关。
     private var loginItemAvailable: Bool {
         LoginItemService.currentState != .unavailable
+    }
+
+    /// 优先读取 bundle 中的正式版本号，取不到时回退到默认值。
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
 
     private func applyLaunchAtLoginChange(from oldValue: Bool, to newValue: Bool) {

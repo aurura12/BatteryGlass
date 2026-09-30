@@ -31,7 +31,40 @@ swift scripts/generate_icon.swift                # 重新生成 AppIcon.icns
 
 应用带单实例保护（`AppInstanceGuard.enforceSingleInstance`，在 `BatteryGlassApp.init` 构造核心对象**之前**调用）：新实例会先终止同 bundle 的旧实例并等其 flush 落盘再接管，无法接管则 `exit(0)`；检查必须早于对象构造，否则旧实例未退出时新实例已启动定时器并写盘，会造成双进程并发写 history.json / power-diagnostics.jsonl。
 
+## 项目结构
+
+```
+Sources/BatteryGlass/
+├── App/          BatteryGlassApp.swift —— @main BatteryGlassApp、AppDelegate、AppInstanceGuard
+├── Models/       纯值类型与纯函数：BatterySnapshot（含 PowerState）、PowerSample、
+│                 HistorySample（含 DailySummary / DailyEnergyQuality）、SleepSegment、SleepInterval、
+│                 PowerDiagnosticsSample、EnergyCalculator、SleepEnergyCalculator、TimeRemainingEstimator、
+│                 ChargeRateTracker、TimeRemainingSmoother、PowerTelemetryEnergy、
+│                 PowerTelemetryCalibration、BatteryDischargeConfirmation
+├── Services/     有状态服务：BatteryMonitor（IOKit 采样）、DesktopWidgetController、
+│                 LoginItemService、NotificationService、PowerDiagnosticsLogger
+├── Stores/       持久化：AppSettings、BatteryHistoryStore、BoundedFileReader（+HistoryLoadLimits）、
+│                 DailyEnergySummaryPolicy、HistorySampleRecovery（+PowerDiagnosticsHistoryLoader）
+├── Support/      无状态工具：Formatters（BatteryFormatters）、BatteryStyling、DesignTokens、
+│                 View+Glass（glassSurface / panelGlassSurface / GlassContainerIfAvailable）、
+│                 PageTransition、Extensions（通知名与 Double 扩展）、EnergyAggregator、HistoryExporter
+└── Views/        SwiftUI 界面：DashboardView（含 PanelTab）、LiveDashboardView、HistoryView、
+                  SettingsView、DesktopWidgetView、MenuBarLabel、AnimatedSegmentedControl、
+                  FluidGlassBackground、StatsGridView（MetricsGrid）
+```
+
+顶层目录：`script/`（构建/安装/回归 shell 脚本）、`scripts/generate_icon.swift`（图标生成）、`Resources/`（AppIcon）、`design-system/batteryglass/MASTER.md`（UI 规范基准）、`docs/superpowers/{specs,plans}/`（能耗设计动机与实施计划）、`dist/`（构建产物）。根目录另有 `README.md`、`CHANGELOG.md`、`HISTORY_PICKER_FLICKER.md`。
+
 ## 架构
+
+### App 层（入口 / 场景 / 单实例）
+
+`App/BatteryGlassApp.swift` 内含三个类型，改动启动顺序前先读其文件头注释：
+
+- `AppInstanceGuard`（:12）与 `AppDelegate`（:42）与 `@main BatteryGlassApp`（:49）。
+- `BatteryGlassApp.init` 的固定顺序：**单实例接管 → `AppSettings` → 用系统登录项回写 `launchAtLoginEnabled` → `BatteryMonitor` → `BatteryHistoryStore` → `DesktopWidgetController`**。前三步顺序不可换（见上文单实例说明）。
+- 两个 Scene：`MenuBarExtra`（`.menuBarExtraStyle(.window)`）→ `DashboardView`（注入 `monitor`/`history`/`settings`）；`Settings` → `SettingsView`（注入 `history`/`settings`）。`MenuBarLabel` 只注入 `monitor`/`settings`。
+- `AppDelegate` 只做一件事：`applicationDidFinishLaunching` 里 `NSApp.setActivationPolicy(.accessory)`（不占 Dock）。
 
 ### 对象图与依赖注入
 
@@ -69,10 +102,10 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 能耗口径是"来源侧能量"（电池放电取放电能量、外接电源取适配器输入），睡眠期间用系统累计遥测补测。相关逻辑分布在多个纯函数类型中，新增/修改决策前先读对应测试：
 
 - `EnergyCalculator.dailyEnergyKWh(samples:)`：由相邻样本的 `consumptionPowerW` 梯形插值求区间能量，跨天边界切分，样本间隙 >60 s 视为断点。`BatteryHistoryStore` 用它做增量记入与全量重算（诊断回填后也会重算覆盖当天 summary）。测试 `EnergyConsumptionTests.swift`。
-- `SleepEnergyCalculator.segment(from:)`：睡眠段能量归属。待机模式以**睡眠前供电状态**为准（睡眠中无法插拔）；插电待机优先用 `AccumulatedWallEnergyEstimate` 计数器差值，电池供电用睡眠前后电量差 × 平均电压，不可用时回退到唤醒后维持功耗估算。测试 `SleepEnergyCalculatorTests.swift`。
+- `SleepEnergyCalculator.segment(from:)`：睡眠段能量归属，`minimumDuration = 60s`（更短的睡眠不生成区间、也不参与插值）。待机模式以**睡眠前供电状态**为准（睡眠中无法插拔）；插电待机优先用 `AccumulatedWallEnergyEstimate` 计数器差值，电池供电用睡眠前后电量差 × 平均电压，不可用时回退到唤醒后维持功耗估算。边界两侧供电状态变化（`SleepBoundaryPowerChange`，`batteryToAdapter`/`adapterToBattery`）走对称的 `sourceChanged` 分支，只计可观测来源并置 `SleepSegment.hasUnobservedSource = true`（该段能量为下界，见 `Models/SleepSegment.swift`）。测试 `SleepEnergyCalculatorTests.swift`。
 - `PowerTelemetryEnergy.wallEnergyKWh(before:after:duration:)`：计数器差值 → kWh（单位假设 µWh，须按机型用插座电表校准），带合理性校验（平均功率 ≤500 W）。测试 `PowerTelemetryEnergyTests.swift`。
 - `PowerTelemetryCalibrationStore`（`Models/PowerTelemetryCalibration.swift`）：按机型 + macOS 版本持久化校准系数到 `~/Library/Application Support/BatteryGlass/power-calibration.json`；无有效实测记录时系数为 1.0 且睡眠段 `isCalibrated = false`。测试 `PowerTelemetryCalibrationTests.swift`。
-- `DailySummary`（`Models/HistorySample.swift`）是日能耗聚合载体；`DailyEnergySummaryPolicy` 处理 reconcile 与稀疏日清除；`EnergyAggregator` 把每日能耗再按日/周/月聚合供图表分组。测试 `DailyEnergySummaryPolicyTests.swift`、`EnergyAggregatorTests.swift`。
+- `DailySummary`（`Models/HistorySample.swift`）是日能耗聚合载体，含 `energyQuality: DailyEnergyQuality?` 品质标记（旧汇总为 nil）；`DailyEnergySummaryPolicy` 处理 reconcile 与稀疏日清除；`EnergyAggregator`（`Support/EnergyAggregator.swift`）把每日能耗再按日/周/月聚合供图表分组。测试 `DailyEnergySummaryPolicyTests.swift`、`EnergyAggregatorTests.swift`。
 
 ### 可测试性设计（重要）
 
@@ -84,8 +117,8 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 
 ### Stores / 持久化
 
-- `AppSettings`：UserDefaults 持久化，key 见文件内 static 常量。
-- `BatteryHistoryStore`：`~/Library/Application Support/BatteryGlass/history.json`。payload 版本化（当前 v4：samples + dailySummaries + sleepSegments + sleepIntervals），每 15 秒异步写盘（串行 `persistenceQueue`），退出时 `flush()` 同步写盘（`willTerminateNotification`）。样本 ≥5 秒记一条，cycleCount/health 显著变化立即记。加载时按 `payload.version` 逐级迁移（v2 起含 dailySummaries，v3 起含 sleepSegments，v4 起含 sleepIntervals，后两者缺失按默认值处理），并含"用 power-diagnostics.jsonl 回填 `consumptionPowerW`"的恢复逻辑（实现于 `Stores/HistorySampleRecovery.swift` 的 `backfillConsumptionPower`，同样经 `BoundedFileReader` / `HistoryLoadLimits` 限幅）。
+- `AppSettings`：UserDefaults 持久化，key 见文件内 static 常量。涵盖低电量通知开关与阈值（读取时钳制 10–50）、外接电源变化通知、菜单栏显示模式（`MenuBarDisplayMode`：无 / 百分比 / 剩余时间）、桌面小组件开关 / 尺寸（`DesktopWidgetStyle`）/ 位置、记录历史、电源诊断日志、开机自启动、动效浓度与速度。注意 `DashboardView` 的分页记忆另用 `@AppStorage("BatteryGlass.panelTab")`，**不在** `AppSettings` 内。
+- `BatteryHistoryStore`：`~/Library/Application Support/BatteryGlass/history.json`。payload 版本化（当前 v5：samples + dailySummaries + sleepSegments + sleepIntervals），每 15 秒异步写盘（串行 `persistenceQueue`），退出时 `flush()` 同步写盘（`willTerminateNotification`）。样本 ≥5 秒记一条，cycleCount/health 显著变化立即记。加载时按 `payload.version` 逐级迁移（v2 起含 dailySummaries，v3 起含 sleepSegments，v4 起含 sleepIntervals，v5 起 `SleepSegment` 增 `hasUnobservedSource`/`boundaryPowerChange`、`DailySummary` 增 `energyQuality`；新增字段均带默认值、经 `decodeIfPresent` 解码，旧文件无需新增迁移分支），并含"用 power-diagnostics.jsonl 回填 `consumptionPowerW`"的恢复逻辑（实现于 `Stores/HistorySampleRecovery.swift` 的 `backfillConsumptionPower`，同样经 `BoundedFileReader` / `HistoryLoadLimits` 限幅）。
 - `PowerDiagnosticsLogger`（单例）：JSONL 追加写 `power-diagnostics.jsonl`，5 MB 自动轮换为 `.1.jsonl`。
 - `BoundedFileReader` / `HistoryLoadLimits`：所有本地文件读取必须走这里（历史上限 20 MB/10 万样本，诊断 50 MB/10 万样本），防止异常本地文件拖慢启动。
 - `HistoryExporter`（`Support/HistoryExporter.swift`）：把历史样本与每日汇总序列化为 CSV、JSON（JSON 另含睡眠区间），设置页导出按钮调用，纯函数。
@@ -93,10 +126,12 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 
 ### Views / UI
 
-- `DashboardView` 是 `MenuBarExtra` window 的面板根视图；`PanelTab` 分段控件切换 `LiveDashboardView` / `HistoryView`（HistoryView 用 Swift Charts）。
-- `Views/HistoryView.swift` 是仓库最大的单文件（约 1,690 行，占源码约 1/4），除图表视图外还内联了纯数据类型 `BatteryLevelChartData` / `BatteryLevelChartDataCache`（`HistoryView.swift:1351`、`:114`）。改图表相关逻辑优先看这里，并注意数据/缓存部分有独立测试，改动时不要破坏其纯函数边界。
+- `DashboardView` 是 `MenuBarExtra` window 的面板根视图；`PanelTab` 分段控件切换 `LiveDashboardView` / `HistoryView`（HistoryView 用 Swift Charts）。实时页用 `ViewThatFits(in: .vertical)`：标准字号直接展示完整面板，字号被系统放大导致空间不足时自动回退到 `ScrollView`。
+- 菜单栏图标：`MenuBarLabel` 经 `MenuBarIconRenderer` 把多层 SwiftUI 合成为**单张模板 `NSImage`**（`MenuBarExtra` 会丢弃多层子视图），着色交给系统模板；图标旁文字由 `AppSettings.menuBarDisplayMode` 控制。`MenuBarAccessibility`、`MenuBarBatteryFill`、`MenuBarPowerIndicator` 均为纯函数，测试 `MenuBarLabelTests`。
+- `Views/HistoryView.swift` 是仓库最大的单文件（约 1,690 行，占源码约 1/4），内联了三个纯函数缓存与两个纯数据类型：`TodaySamplesCache`(:66)、`PowerChartDataCache`(:86)、`BatteryLevelChartDataCache`(:114)，以及 `PowerChartData`(:1175)、`BatteryLevelChartData`(:1351)。改图表相关逻辑优先看这里；数据/缓存部分有独立测试（`PowerChartDataTests`、`PowerChartSegmentationTests`、`PowerChartInteractionTests`、`BatteryLevelChartDataTests`），改动时不要破坏其纯函数边界。
 - 动效集中在 `Views/FluidGlassBackground.swift`（流体光斑）、`Views/AnimatedSegmentedControl.swift`（胶囊滑动）与 `Support/PageTransition.swift`（页面切换过渡）；设计令牌（8pt 间距栅格、交通灯状态色、数据蓝）见 `Support/DesignTokens.swift`，配色见 `Support/BatteryStyling.swift`。动效参数调节说明见 README「流体玻璃动画参数调节」。
 - 桌面小组件是应用内 NSWindow（`DesktopWidgetController`），非 WidgetKit。
+- 历史页顶部原生 `Picker`（「分组」菜单 / 「统计范围」分段）在 macOS 26 上曾观察到边框周期性闪烁，复现步骤与排查结论（暂无法复现、未改业务代码）见根目录 `HISTORY_PICKER_FLICKER.md`。
 - UI 规范以 `design-system/batteryglass/MASTER.md` 为基准。
 - 能耗口径的设计动机与边界见 `docs/superpowers/specs/`（尤其 `2026-09-06-precision-energy-accounting-design.md` 定义"从电源侧消耗了多少电"这一指标口径），配套实施计划在 `docs/superpowers/plans/`。修改能耗相关决策前先读这两处。
 

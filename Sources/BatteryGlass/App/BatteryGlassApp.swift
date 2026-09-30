@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 菜单栏常驻应用：不占用 Dock。（单实例接管已在 App.init 之前完成）
         NSApp.setActivationPolicy(.accessory)
+        // 前台时也展示通知横幅（默认前台会被系统静默丢弃）。
+        NotificationService.installForegroundPresenter()
     }
 }
 

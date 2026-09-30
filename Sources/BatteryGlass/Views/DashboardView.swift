@@ -14,6 +14,7 @@ struct DashboardView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
+    @State private var showingQuitConfirmation = false
 
     private var tab: PanelTab {
         get { PanelTab(rawValue: tabRaw) ?? .live }
@@ -71,6 +72,12 @@ struct DashboardView: View {
         }
         .frame(width: 392, height: 672)
         .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.86), value: tab)
+        .confirmationDialog("确定要退出 BatteryGlass 吗？", isPresented: $showingQuitConfirmation, titleVisibility: .visible) {
+            Button("退出", role: .destructive) {
+                NSApplication.shared.terminate(nil)
+            }
+            Button("取消", role: .cancel) {}
+        }
     }
 
     /// 减弱动态时只做淡入淡出，去掉滑动/缩放/模糊位移。
@@ -149,7 +156,7 @@ struct DashboardView: View {
             Spacer()
 
             Button {
-                NSApplication.shared.terminate(nil)
+                showingQuitConfirmation = true
             } label: {
                 Label("退出", systemImage: "power")
             }

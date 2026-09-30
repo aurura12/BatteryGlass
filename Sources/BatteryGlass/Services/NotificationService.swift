@@ -7,9 +7,29 @@ enum NotificationPermissionPolicy {
     }
 }
 
+/// 应用处于前台时也弹出横幅：`UNUserNotificationCenter` 默认在前台静默通知，
+/// 需通过 delegate 的 `willPresent` 明确返回展示选项。
+private final class ForegroundNotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+}
+
 @MainActor
 final class NotificationService {
     static let shared = NotificationService()
+
+    /// 静态持有，避免 delegate 被释放后回调失效。
+    private static let foregroundPresenter = ForegroundNotificationPresenter()
+
+    /// 安装前台通知展示代理，让面板/设置窗口在前台时低电量与插拔通知仍能弹出。
+    static func installForegroundPresenter() {
+        UNUserNotificationCenter.current().delegate = foregroundPresenter
+    }
 
     private init() {}
 

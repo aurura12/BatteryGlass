@@ -102,7 +102,16 @@ enum MenuBarIconRenderer {
     private static let designHeight: CGFloat = 18
     private static let iconHeight: CGFloat = 15
 
+    /// 记忆化缓存：模板图只携带 alpha 遮罩，外观只由电量整数百分比、
+    /// 电源状态与外接电源标志决定，故仅这三项入 key。所有调用都在主线程。
+    private static var cache: (key: String, image: NSImage)?
+
     static func image(for snapshot: BatterySnapshot) -> NSImage {
+        let key = "\(Int(snapshot.percent.rounded()))|\(snapshot.state.rawValue)|\(snapshot.adapterConnected)"
+        if let cache, cache.key == key {
+            return cache.image
+        }
+
         let width = MenuBarPowerIndicator.iconWidth(for: snapshot)
         let image = NSImage(size: NSSize(width: width, height: iconHeight))
         image.isTemplate = true
@@ -185,6 +194,7 @@ enum MenuBarIconRenderer {
             )
         }
 
+        cache = (key, image)
         return image
     }
 }

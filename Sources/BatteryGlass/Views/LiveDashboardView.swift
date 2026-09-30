@@ -386,9 +386,9 @@ struct PowerTrendCard: View {
     private var directionCaption: String {
         if !hasSamples { return "暂无有效功率数据" }
         switch snapshot.state {
-        case .charging: return "适配器供电 · 适配器输入功率"
+        case .charging: return "适配器供电 · 适配器输出功率"
         case .discharging: return "电池供电 · 电池放电功率"
-        case .pluggedIn: return "适配器供电 · 适配器输入功率"
+        case .pluggedIn: return "适配器供电 · 适配器输出功率"
         case .unknown: return "暂无有效功率数据"
         }
     }
