@@ -51,10 +51,12 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
     var hasUnobservedSource: Bool = false
     /// 睡眠边界两侧的供电状态变化；`nil` 表示无变化或旧数据。
     var boundaryPowerChange: SleepBoundaryPowerChange?
+    /// Day allocation captured when the segment is recorded, stable across timezone changes.
+    var dailyEnergyByDayKey: [String: Double]?
 
     private enum CodingKeys: String, CodingKey {
         case id, start, end, energyKWh, averagePowerW, mode, measurementMethod, isCalibrated
-        case hasUnobservedSource, boundaryPowerChange
+        case hasUnobservedSource, boundaryPowerChange, dailyEnergyByDayKey
     }
 
     init(
@@ -67,7 +69,8 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
         measurementMethod: SleepEnergyMeasurementMethod = .fallbackEstimate,
         isCalibrated: Bool = false,
         hasUnobservedSource: Bool = false,
-        boundaryPowerChange: SleepBoundaryPowerChange? = nil
+        boundaryPowerChange: SleepBoundaryPowerChange? = nil,
+        dailyEnergyByDayKey: [String: Double]? = nil
     ) {
         self.id = id
         self.start = start
@@ -79,6 +82,7 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
         self.isCalibrated = isCalibrated
         self.hasUnobservedSource = hasUnobservedSource
         self.boundaryPowerChange = boundaryPowerChange
+        self.dailyEnergyByDayKey = dailyEnergyByDayKey
     }
 
     init(from decoder: Decoder) throws {
@@ -102,6 +106,10 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
             SleepBoundaryPowerChange.self,
             forKey: .boundaryPowerChange
         )
+        dailyEnergyByDayKey = try container.decodeIfPresent(
+            [String: Double].self,
+            forKey: .dailyEnergyByDayKey
+        )
     }
 
     func encode(to encoder: Encoder) throws {
@@ -116,5 +124,6 @@ struct SleepSegment: Codable, Identifiable, Equatable, Sendable {
         try container.encode(isCalibrated, forKey: .isCalibrated)
         try container.encode(hasUnobservedSource, forKey: .hasUnobservedSource)
         try container.encodeIfPresent(boundaryPowerChange, forKey: .boundaryPowerChange)
+        try container.encodeIfPresent(dailyEnergyByDayKey, forKey: .dailyEnergyByDayKey)
     }
 }

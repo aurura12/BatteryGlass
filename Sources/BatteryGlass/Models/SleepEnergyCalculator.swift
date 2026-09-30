@@ -153,7 +153,12 @@ enum SleepEnergyCalculator {
             measurementMethod: measurementMethod,
             isCalibrated: measurementMethod == .telemetryCounter && input.wallEnergyIsCalibrated,
             hasUnobservedSource: hasUnobservedSource,
-            boundaryPowerChange: boundaryPowerChange
+            boundaryPowerChange: boundaryPowerChange,
+            dailyEnergyByDayKey: dailyEnergySplit(
+                energyKWh: energyKWh,
+                from: input.sleepStart,
+                to: input.wakeTime
+            )
         )
     }
 

@@ -428,11 +428,7 @@ final class BatteryHistoryStore {
 
     /// Split sleep energy and provenance across the local days touched by the segment.
     private func addSleepEnergy(_ segment: SleepSegment) {
-        let split = SleepEnergyCalculator.dailyEnergySplit(
-            energyKWh: segment.energyKWh,
-            from: segment.start,
-            to: segment.end
-        )
+        let split = dailyEnergySplit(for: segment)
         for (dayKey, energy) in split {
             addEnergy(energy, to: dayKey, creatingMissingSummary: true)
             markSleepEnergyQuality(segment, for: dayKey)
@@ -530,11 +526,7 @@ final class BatteryHistoryStore {
         var restoredDayKeys: Set<String> = []
         var restored = false
         for segment in sleepSegments {
-            let split = SleepEnergyCalculator.dailyEnergySplit(
-                energyKWh: segment.energyKWh,
-                from: segment.start,
-                to: segment.end
-            )
+            let split = dailyEnergySplit(for: segment)
             for (dayKey, energy) in split {
                 if let index = ensureDailySummary(for: dayKey) {
                     if dailySummaries[index].energyKWh == nil {
@@ -552,13 +544,17 @@ final class BatteryHistoryStore {
         return restored
     }
 
+    private func dailyEnergySplit(for segment: SleepSegment) -> [String: Double] {
+        segment.dailyEnergyByDayKey ?? SleepEnergyCalculator.dailyEnergySplit(
+            energyKWh: segment.energyKWh,
+            from: segment.start,
+            to: segment.end
+        )
+    }
+
     private func dayKeysWithSleepEnergy(in summaries: [DailySummary]) -> Set<String> {
         var keys = Set(sleepSegments.flatMap { segment in
-            SleepEnergyCalculator.dailyEnergySplit(
-                energyKWh: segment.energyKWh,
-                from: segment.start,
-                to: segment.end
-            ).keys
+            dailyEnergySplit(for: segment).keys
         })
         // A persisted summary.date is an absolute midnight from the timezone active when it
         // was written. Protect matching sleep days even if the current timezone has changed.
@@ -589,11 +585,7 @@ final class BatteryHistoryStore {
         let todayKey = BatteryFormatters.dayKey(for: now)
         let todayStart = Calendar.current.startOfDay(for: now)
         for segment in sleepSegments where segment.end > todayStart {
-            let split = SleepEnergyCalculator.dailyEnergySplit(
-                energyKWh: segment.energyKWh,
-                from: segment.start,
-                to: segment.end
-            )
+            let split = dailyEnergySplit(for: segment)
             if let energy = split[todayKey] {
                 addEnergy(energy, to: todayKey)
                 markSleepEnergyQuality(segment, for: todayKey)
