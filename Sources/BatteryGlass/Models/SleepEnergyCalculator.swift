@@ -2,7 +2,7 @@ import Foundation
 
 /// 待机能耗计算（纯函数，便于单元测试）。
 ///
-/// 睡眠期间进程被挂起、无法实时采样，优先使用系统累计遥测计数器补测：
+/// 睡眠期间进程被挂起、无法实时采样，有本机实体电表校准记录时才使用累计遥测计数器：
 /// - 不插电待机：消耗全部来自电池，能量 = (睡眠前电量 − 唤醒后电量) × 平均电压；
 /// - 插电待机：优先使用累计墙上输入能量；若同时发生电池放电，则把可观测的
 ///   电池放电能量一并计入；计数器不可用时回退到电量差和唤醒后功率估算。
@@ -52,12 +52,17 @@ enum SleepEnergyCalculator {
         let mode: SleepSegmentMode
         let measurementMethod: SleepEnergyMeasurementMethod
 
-        let wallCounterEnergy = PowerTelemetryEnergy.wallEnergyKWh(
-            before: input.wallEnergyCounterBefore,
-            after: input.wallEnergyCounterAfter,
-            duration: duration,
-            calibrationFactor: input.wallEnergyCalibrationFactor
-        )
+        // The Apple counter is private and its unit is undocumented. Never let its
+        // assumed conversion affect saved energy until this hardware/OS has a physical
+        // wattmeter calibration record. Otherwise use the existing observable fallback.
+        let wallCounterEnergy = input.wallEnergyIsCalibrated
+            ? PowerTelemetryEnergy.wallEnergyKWh(
+                before: input.wallEnergyCounterBefore,
+                after: input.wallEnergyCounterAfter,
+                duration: duration,
+                calibrationFactor: input.wallEnergyCalibrationFactor
+            )
+            : nil
         let capacityDeltaMAh = input.capacityAfterMAh - input.capacityBeforeMAh
         guard capacityDeltaMAh.isFinite else { return nil }
         let averageVoltage = resolvedAverageVoltage(

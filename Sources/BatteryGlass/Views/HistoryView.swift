@@ -272,13 +272,6 @@ struct DailyEnergyComparisonChart: View {
                 comparisonMetrics
             }
 
-            if let energyQualitySummary {
-                Label(energyQualitySummary, systemImage: "info.circle")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
             if !summaries.isEmpty {
                 dailyDetails
             }
@@ -291,43 +284,7 @@ struct DailyEnergyComparisonChart: View {
     private var energyAccessibilitySummary: String {
         guard !aggregates.isEmpty else { return "暂无数据" }
         let total = aggregates.map(\.energyKWh).reduce(0, +)
-        let quality = energyQualitySummary.map { "。\($0)" } ?? ""
-        return "共 \(aggregates.count) 个周期，总计 \(BatteryFormatters.energyKWh(total))\(quality)"
-    }
-
-    private var energyQualitySummary: String? {
-        let summariesWithEnergy = energySummaries
-        guard !summariesWithEnergy.isEmpty else { return nil }
-        var notes: [String] = []
-        if summariesWithEnergy.contains(where: {
-            $0.energyQuality == nil || $0.energyQuality?.hasUnknownHistoricalCoverage == true
-        }) {
-            notes.append("部分历史可信度未知")
-        }
-        if summaries.contains(where: { $0.energyQuality?.hasSamplingGaps == true }) {
-            notes.append("存在采样中断")
-        }
-        if summaries.contains(where: { $0.energyQuality?.hasEstimatedSleepEnergy == true }) {
-            notes.append("含睡眠估算")
-        }
-        if summaries.contains(where: { $0.energyQuality?.hasUncalibratedCounterEnergy == true }) {
-            notes.append("含未校准计数器")
-        }
-        if summaries.contains(where: { $0.energyQuality?.hasLowerBoundSleepEnergy == true }) {
-            notes.append("含下界睡眠数据")
-        }
-        return notes.isEmpty ? "未记录到已知缺口" : "数据提示：" + notes.joined(separator: " · ")
-    }
-
-    private func dailyQualityDescription(_ quality: DailyEnergyQuality?) -> String {
-        guard let quality else { return "来源可信度未知" }
-        var notes: [String] = []
-        if quality.hasUnknownHistoricalCoverage { notes.append("历史可信度未知") }
-        if quality.hasSamplingGaps { notes.append("采样中断") }
-        if quality.hasEstimatedSleepEnergy { notes.append("睡眠估算") }
-        if quality.hasUncalibratedCounterEnergy { notes.append("计数器未校准") }
-        if quality.hasLowerBoundSleepEnergy { notes.append("睡眠能耗为下界") }
-        return notes.isEmpty ? "未记录到已知缺口" : notes.joined(separator: " · ")
+        return "共 \(aggregates.count) 个周期，总计 \(BatteryFormatters.energyKWh(total))"
     }
 
     private func updateHover(
@@ -509,16 +466,10 @@ struct DailyEnergyComparisonChart: View {
                 // 只渲染最近 30 天，避免长期使用后「全部」范围渲染数千行。
                 ForEach(summaries.suffix(30).reversed()) { summary in
                     HStack {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(summary.dayKey)
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                            Text(dailyQualityDescription(summary.energyQuality))
-                                .font(.system(size: 8))
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
+                        Text(summary.dayKey)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
                         Spacer()
                         Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))

@@ -7,9 +7,9 @@ struct PowerTelemetryCounters: Equatable, Sendable {
 }
 
 enum PowerTelemetryEnergy {
-    /// Current implementations are treated as micro-watt-hours. This unit
-    /// assumption must still be calibrated against a physical wattmeter on
-    /// each supported hardware family; plausibility checks reject bad deltas.
+    /// Provisional normalization for the private raw counter. This conversion
+    /// alone is not trusted; SleepEnergyCalculator only accepts it after a
+    /// physical wattmeter calibration for the active hardware/OS context.
     private static let rawUnitsPerKWh = 1_000_000.0
     private static let maximumPlausiblePowerW = 500.0
 

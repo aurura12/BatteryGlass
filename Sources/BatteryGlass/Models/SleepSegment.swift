@@ -30,7 +30,7 @@ enum SleepBoundaryPowerChange: String, Codable, Sendable, Equatable {
 ///
 /// `energyKWh` 为电脑从电源（插座或电池）消耗的总能量，恒为正：
 /// - 不插电待机：电池放电能量（电量差 × 电压）；
-/// - 插电待机：优先累计墙上输入能量；不可用时回退到充入电池能量和系统维持功耗估算；
+/// - 插电待机：优先使用已按本机校准的墙上输入能量；不可用时回退到电量变化和系统功率估算；
 /// - 电源在睡眠边界发生变化：只累计可观测的积分量（计数器差值 / 容量差），
 ///   结果系统性偏低，并置 `hasUnobservedSource`。
 struct SleepSegment: Codable, Identifiable, Equatable, Sendable {

@@ -189,6 +189,7 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             voltageAfterV: 12,
             adapterConnectedAfter: true,
             maintenanceDirectPowerW: 2.0,
+            wallEnergyIsCalibrated: true,
             wallEnergyCounterBefore: 1_000_000,
             wallEnergyCounterAfter: 1_250_000
         )
@@ -216,6 +217,7 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             voltageAfterV: 12,
             adapterConnectedAfter: true,
             maintenanceDirectPowerW: nil,
+            wallEnergyIsCalibrated: true,
             wallEnergyCounterBefore: 1_000_000,
             wallEnergyCounterAfter: 1_250_000
         )
@@ -312,6 +314,7 @@ final class SleepEnergyCalculatorTests: XCTestCase {
             maintenanceDirectPowerW: nil,
             maintenanceAdapterInputPowerW: 30,
             batteryDischargingBefore: true,
+            wallEnergyIsCalibrated: true,
             wallEnergyCounterBefore: 1_000_000,
             wallEnergyCounterAfter: 1_250_000
         )
