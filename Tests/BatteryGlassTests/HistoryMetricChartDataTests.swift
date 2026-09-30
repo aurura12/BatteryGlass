@@ -19,20 +19,6 @@ final class HistoryMetricChartDataTests: XCTestCase {
         )
     }
 
-    private func summary(dayOffset: Int, sampleCount: Int, maxCycleCount: Int) -> DailySummary {
-        DailySummary(
-            dayKey: "2026-08-\(String(format: "%02d", dayOffset + 1))",
-            date: Date(timeIntervalSince1970: 1_700_000_000 + Double(dayOffset) * 86_400),
-            sampleCount: sampleCount,
-            maxCycleCount: maxCycleCount,
-            minHealthPercent: nil,
-            energyKWh: nil,
-            averagePower: 0,
-            maxPower: 0,
-            minPower: 0
-        )
-    }
-
     // MARK: - TodayMetricChartData
 
     func testTemperatureMetricFiltersSamplesWithoutValue() {
@@ -98,34 +84,6 @@ final class HistoryMetricChartDataTests: XCTestCase {
 
     func testYDomainIgnoresNonFiniteValues() {
         XCTAssertEqual(MetricValueAxis.yDomain(for: [.nan, 20, 40, .infinity]), 18...42)
-    }
-
-    // MARK: - CycleTrendData
-
-    func testCycleTrendSkipsDaysWithoutOrdinarySamples() {
-        let data = CycleTrendData(summaries: [
-            summary(dayOffset: 0, sampleCount: 120, maxCycleCount: 10),
-            // 仅由睡眠能量创建的汇总：sampleCount == 0，maxCycleCount 为 0 不是真实循环数。
-            summary(dayOffset: 1, sampleCount: 0, maxCycleCount: 0),
-            summary(dayOffset: 2, sampleCount: 30, maxCycleCount: 12)
-        ])
-
-        XCTAssertEqual(data.entries.map(\.dayKey), ["2026-08-01", "2026-08-03"])
-        XCTAssertEqual(data.latest, 12)
-    }
-
-    func testCycleTrendCapsToLimitKeepingLatest() {
-        let summaries = (0..<5).map { summary(dayOffset: $0, sampleCount: 10, maxCycleCount: 100 + $0) }
-        let data = CycleTrendData(summaries: summaries, limit: 3)
-
-        XCTAssertEqual(data.entries.map(\.dayKey), ["2026-08-03", "2026-08-04", "2026-08-05"])
-        XCTAssertEqual(data.latest, 104)
-    }
-
-    func testCycleTrendLatestNilWhenEmpty() {
-        let data = CycleTrendData(summaries: [summary(dayOffset: 0, sampleCount: 0, maxCycleCount: 0)])
-        XCTAssertTrue(data.entries.isEmpty)
-        XCTAssertNil(data.latest)
     }
 
     // MARK: - TodayTemperatureStats

@@ -128,23 +128,6 @@ final class PowerChartInteractionTests: XCTestCase {
         )
     }
 
-    func testNearestDailySummarySelectsEnergyForHoveredDate() {
-        let first = Date(timeIntervalSince1970: 1_000)
-        let summaries = [
-            summary(at: first, dayKey: "2026-08-28", energy: 0.136),
-            summary(at: first.addingTimeInterval(86_400), dayKey: "2026-08-29", energy: 0.174),
-            summary(at: first.addingTimeInterval(172_800), dayKey: "2026-08-30", energy: 0.238)
-        ]
-
-        let nearest = PowerChartInteraction.nearestDailySummary(
-            to: first.addingTimeInterval(86_400 + 1_800),
-            from: summaries
-        )
-
-        XCTAssertEqual(nearest?.dayKey, "2026-08-29")
-        XCTAssertEqual(nearest?.energyKWh, 0.174)
-    }
-
     func testDailyTooltipAnchorUsesTheHoveredBarsPlotCoordinates() {
         let plotFrame = CGRect(x: 24, y: 12, width: 300, height: 138)
 

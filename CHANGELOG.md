@@ -15,6 +15,7 @@
 - 修复墙上能量计数器默认单位偏差 1000 倍：`PowerTelemetryEnergy.rawUnitsPerKWh` 由占位值 `1e6` 改为经实测反推的 `1e9`。依据：解析 `power-diagnostics.jsonl`（09:54–12:03，2 小时 9 分）得到适配器输出积分 0.0631 kWh，而计数器差值按 `1e6` 换算为 ~62.5 kWh，比值 ≈ 0.00101，即 MacBookPro18,1 上真实量级约为 **1e9 单位/kWh**。此前未校准读数被高估 1000 倍（会话 2 分钟即显示 0.74 kWh ≈ 22 kW），校准系数也会落在 0.001 量级并误触「系数偏离常见范围」告警；改后未校准读数接近真值、校准系数回到 ~1.1，该常量仍为暂定起点、以电表校准记录为准。同步更新 `PowerTelemetryEnergyTests`、`SleepEnergyCalculatorTests`、`PowerTelemetryCalibrationTests` 的期望值。（`PowerTelemetryEnergy.swift` 及三个测试文件）
 
 ### 修改
+- 移除历史页「循环次数趋势」图（`CycleTrendChart` 及其数据 `CycleTrendData`）：历史页不再展示循环次数趋势（实时页「循环次数」KPI 卡保持不变）。同时删除因此无用的 `PowerChartInteraction.nearestDailySummary` 及其测试。（`Views/HistoryView.swift`、`PowerChartInteractionTests`、`HistoryMetricChartDataTests`）
 - 移除历史页「电池健康趋势」图（`HealthTrendChart`）：历史页不再展示健康度长期曲线。实时页「电池健康」KPI 卡与桌面小组件的健康度显示保持不变。（`Views/HistoryView.swift`）
 - 更新 `CODEBUDDY.md`，修正与补齐近期变更：历史 payload 版本 `v4` → `v5`（`BatteryHistoryStore.swift:307` 实际为 v5），并补充 v5 迁移说明（`SleepSegment` 增 `hasUnobservedSource`/`boundaryPowerChange`、`DailySummary` 增 `energyQuality`，均带默认值解码、旧文件无需新迁移分支）。
 - `CODEBUDDY.md` 能耗计量段补充睡眠边界语义：`SleepEnergyCalculator.minimumDuration = 60s`、`SleepBoundaryPowerChange` 对称 `sourceChanged` 分支与 `SleepSegment.hasUnobservedSource`（下界）含义。

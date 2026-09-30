@@ -42,8 +42,6 @@ struct HistoryView: View {
                 )
 
                 TodayMetricChart(samples: todaySamples)
-
-                CycleTrendChart(summaries: history.allSummaries())
             }
             .padding(.bottom, DesignTokens.spacingXS)
         }
@@ -1184,164 +1182,6 @@ enum TodayTemperatureStats {
     }
 }
 
-/// 循环次数日趋势绘图数据：忽略没有普通样本的日（睡眠补测创建的汇总），取近 N 天。
-struct CycleTrendData {
-    let entries: [DailySummary]
-    let yDomain: ClosedRange<Double>
-
-    init(summaries: [DailySummary], limit: Int = 90) {
-        let filtered = summaries.filter { $0.sampleCount > 0 }.suffix(limit)
-        self.entries = Array(filtered)
-        self.yDomain = MetricValueAxis.yDomain(for: entries.map { Double($0.maxCycleCount) })
-    }
-
-    var latest: Int? {
-        entries.last?.maxCycleCount
-    }
-}
-
-/// 循环次数长期趋势：每日最大循环次数，按天展示近 90 天。循环次数单调递增，
-/// 斜率即每天消耗的循环，直接反映损耗速率。
-struct CycleTrendChart: View {
-    let summaries: [DailySummary]
-    @State private var hoveredSummary: DailySummary?
-    @State private var hoverLocation: CGPoint?
-
-    private var data: CycleTrendData {
-        CycleTrendData(summaries: summaries)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
-            Text("循环次数趋势")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if let latest = data.latest {
-                Text("最新 \(latest) 次 · 设计寿命 1000 次")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if data.entries.isEmpty {
-                ChartEmptyPlaceholder("暂无循环次数数据，运行一段时间后自动生成")
-                    .frame(height: 116)
-            } else {
-                Chart(data.entries) { summary in
-                    LineMark(
-                        x: .value("日期", summary.date),
-                        y: .value("循环次数", Double(summary.maxCycleCount))
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .foregroundStyle(DesignTokens.dataBlue)
-
-                    if let hoveredSummary {
-                        RuleMark(x: .value("悬停日期", hoveredSummary.date))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                            .foregroundStyle(.secondary.opacity(0.7))
-                        PointMark(
-                            x: .value("日期", hoveredSummary.date),
-                            y: .value("循环次数", Double(hoveredSummary.maxCycleCount))
-                        )
-                        .foregroundStyle(DesignTokens.dataBlue)
-                        .symbolSize(36)
-                    }
-                }
-                .chartYScale(domain: data.yDomain)
-                .chartYAxis {
-                    AxisMarks(position: .leading) { value in
-                        AxisGridLine()
-                        AxisTick()
-                        AxisValueLabel {
-                            if let raw = value.as(Double.self) {
-                                Text("\(Int(raw.rounded()))")
-                            }
-                        }
-                    }
-                }
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .month)) { _ in
-                        AxisGridLine().foregroundStyle(.clear)
-                        AxisTick()
-                        AxisValueLabel(format: .dateTime.month(.defaultDigits))
-                    }
-                }
-                .chartOverlay { proxy in
-                    GeometryReader { geometry in
-                        ZStack(alignment: .topLeading) {
-                            Rectangle()
-                                .fill(.clear)
-                                .onContinuousHover { phase in
-                                    updateHover(phase, proxy: proxy, geometry: geometry)
-                                }
-
-                            if let hoveredSummary, let hoverLocation {
-                                trendTooltip(for: hoveredSummary)
-                                    .position(
-                                        x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
-                                        y: min(max(hoverLocation.y - 26, 18), geometry.size.height - 18)
-                                    )
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                    }
-                }
-                .frame(height: 116)
-                .accessibilityLabel("循环次数趋势")
-                .accessibilityValue(data.latest.map { "最新 \($0) 次" } ?? "暂无数据")
-            }
-        }
-        .padding(DesignTokens.spacingM)
-        .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
-    }
-
-    private func updateHover(_ phase: HoverPhase, proxy: ChartProxy, geometry: GeometryProxy) {
-        switch phase {
-        case .ended:
-            hoveredSummary = nil
-            hoverLocation = nil
-        case .active(let location):
-            guard let plotFrame = proxy.plotFrame else {
-                hoveredSummary = nil
-                hoverLocation = nil
-                return
-            }
-            let frame = geometry[plotFrame]
-            guard frame.contains(location) else {
-                hoveredSummary = nil
-                hoverLocation = nil
-                return
-            }
-            let xPosition = location.x - frame.minX
-            guard let date: Date = proxy.value(atX: xPosition) else {
-                hoveredSummary = nil
-                hoverLocation = nil
-                return
-            }
-            hoverLocation = location
-            hoveredSummary = PowerChartInteraction.nearestDailySummary(to: date, from: data.entries)
-        }
-    }
-
-    private func trendTooltip(for summary: DailySummary) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(summary.dayKey)
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-            Text("\(summary.maxCycleCount) 次")
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(DesignTokens.dataBlue)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
-    }
-}
-
 /// 今日温度 / 电压分时曲线：整日一屏、分段切换，含最高温与高温累计时长等概览。
 struct TodayMetricChart: View {
     let samples: [HistorySample]
@@ -2027,15 +1867,6 @@ enum PowerChartInteraction {
         let lowerDistance = abs(lower.timestamp.timeIntervalSince(timestamp))
         let upperDistance = abs(upper.timestamp.timeIntervalSince(timestamp))
         return lowerDistance <= upperDistance ? lower : upper
-    }
-
-    static func nearestDailySummary(
-        to date: Date,
-        from summaries: [DailySummary]
-    ) -> DailySummary? {
-        summaries.min {
-            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
-        }
     }
 
     static func totalDailyEnergy(from summaries: [DailySummary]) -> Double? {
