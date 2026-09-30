@@ -57,6 +57,7 @@ struct BatteryGlassApp: App {
     private let monitor: BatteryMonitor
     private let history: BatteryHistoryStore
     private let desktopWidget: DesktopWidgetController
+    private let chartWindow: ChartWindowController
 
     init() {
         // 必须最先接管实例：下方的 BatteryMonitor / BatteryHistoryStore 会立即启动
@@ -77,11 +78,13 @@ struct BatteryGlassApp: App {
         let monitor = BatteryMonitor(settings: settings, telemetryCalibrationStore: calibrationStore)
         let history = BatteryHistoryStore(settings: settings)
         let desktopWidget = DesktopWidgetController(monitor: monitor, settings: settings)
+        let chartWindow = ChartWindowController(history: history)
         self.settings = settings
         self.calibrationStore = calibrationStore
         self.monitor = monitor
         self.history = history
         self.desktopWidget = desktopWidget
+        self.chartWindow = chartWindow
     }
 
     var body: some Scene {
@@ -90,6 +93,7 @@ struct BatteryGlassApp: App {
                 .environment(monitor)
                 .environment(history)
                 .environment(settings)
+                .environment(chartWindow)
         } label: {
             MenuBarLabel()
                 .environment(monitor)

@@ -4,6 +4,9 @@
 
 ## [2026-09-30]
 
+### 修改
+- 「放大查看」由面板内浮层改为**独立窗口**：菜单栏面板固定 392×672，绘图区约 304×407，长宽比对时间序列并不合适。新增 `Services/ChartWindowController`（普通可缩放窗口，默认 1000×600、最小 480×320，`setFrameAutosaveName` 记住位置与大小、显示配置变化后拉回主屏，只维护一个实例、切换曲线不重建窗口）与 `Views/ChartDetailView`（自行从 `BatteryHistoryStore` 取当天样本并记忆化曲线数据，窗口开着时随新样本实时刷新）；删除 `Views/ExpandedChartOverlay.swift` 及 `HistoryView` 里承载它的 `ZStack`/过渡动画，`ExpandedChart` 枚举随之迁到 `ChartDetailView.swift`。（`Views/ChartDetailView.swift`、`Services/ChartWindowController.swift`、`Views/HistoryView.swift`、`App/BatteryGlassApp.swift`）
+
 ### 修复
 - 修复 `HistoryPersistenceTests.testLowerBoundSleepSegmentEnergyIsCountedExactlyOnce` 的时间相关假失败：用例以 `Date()` 为起点构造「1 小时睡眠区间」，在临近本地午夜运行时会跨天，能量被按天切分（实测 23:12 运行只剩跨天前约 48 分钟的能量，`0.0142 → 0.01134`，与失败值吻合）。起点改为锚定「当天 10:00」，使用例与运行时刻无关。（`HistoryPersistenceTests.swift`）
 - 修复历史页三张曲线图的卡顿（主因）：`yDomain`（电量图）、`yAxis`（温压图）等计算属性被直接写在**逐样本的 `ForEach` 里**（`AreaMark` 的 `yStart`），于是每个样本都重跑一遍 `ChartViewport.visibleSamples`（O(全部样本) 筛选）与 `MetricValueAxis.ticks`（含刻度字符串格式化），整体退化成 O(n²)。现把 `effectiveWindow`/`visibleDomain`/`yDomain`/`yAxis`/`displaySegments`/`axisMarks`/`panRange` 等改成接受窗口参数的纯函数，并在各图 `body` 开头**每帧只求值一次**再传进 `Chart`；功率图的 `chartXAxis` 也不再在每个轴刻度上重新求值 `axisMarks`。（`Views/HistoryView.swift`）

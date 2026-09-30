@@ -3,14 +3,12 @@ import SwiftUI
 
 struct HistoryView: View {
     @Environment(BatteryHistoryStore.self) private var history
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(ChartWindowController.self) private var chartWindow
     @State private var energyRange: EnergyHistoryRange = .fourteen
     // 面板以 2Hz 重渲染；用记忆化避免每次重算今日样本与曲线数据。
     @State private var todayCache = TodaySamplesCache()
     @State private var chartCache = PowerChartDataCache()
     @State private var levelChartCache = BatteryLevelChartDataCache()
-    /// 当前放大的曲线；nil 表示未放大。
-    @State private var expandedChart: ExpandedChart?
 
     private var todaySamples: [HistorySample] {
         todayCache.samples(from: history.samples)
@@ -28,58 +26,38 @@ struct HistoryView: View {
     private var dayKey: String { BatteryFormatters.dayKey(for: Date()) }
 
     var body: some View {
-        ZStack {
-            ScrollView {
-                VStack(spacing: DesignTokens.spacingM) {
-                    DailyEnergyComparisonChart(
-                        summaries: energyRange.summaries(from: history),
-                        range: $energyRange
-                    )
+        ScrollView {
+            VStack(spacing: DesignTokens.spacingM) {
+                DailyEnergyComparisonChart(
+                    summaries: energyRange.summaries(from: history),
+                    range: $energyRange
+                )
 
-                    TodayPowerChart(
-                        chartData: chartData,
-                        sleepIntervals: history.sleepIntervals,
-                        dayKey: dayKey,
-                        onExpand: { expandedChart = .power }
-                    )
-                    // 跨天后以新的一天重建视图，重置时间滑块位置，
-                    // 避免 @State 停留在昨天的滚动位置导致曲线窗口错乱。
-                    .id(dayKey)
-
-                    TodayBatteryLevelChart(
-                        chartData: levelChartData,
-                        dayKey: dayKey,
-                        onExpand: { expandedChart = .level }
-                    )
-
-                    TodayMetricChart(
-                        samples: todaySamples,
-                        dayKey: dayKey,
-                        onExpand: { expandedChart = .metric }
-                    )
-                }
-                .padding(.bottom, DesignTokens.spacingXS)
-            }
-            .scrollIndicators(.hidden)
-
-            if let expandedChart {
-                ExpandedChartOverlay(
-                    kind: expandedChart,
+                TodayPowerChart(
                     chartData: chartData,
-                    levelData: levelChartData,
-                    metricSamples: todaySamples,
                     sleepIntervals: history.sleepIntervals,
                     dayKey: dayKey,
-                    onClose: { self.expandedChart = nil }
+                    onExpand: { chartWindow.show(.power) }
                 )
-                .transition(reduceMotion ? .opacity : .scale(scale: 0.96).combined(with: .opacity))
-                .zIndex(1)
+                // 跨天后以新的一天重建视图，重置时间滑块位置，
+                // 避免 @State 停留在昨天的滚动位置导致曲线窗口错乱。
+                .id(dayKey)
+
+                TodayBatteryLevelChart(
+                    chartData: levelChartData,
+                    dayKey: dayKey,
+                    onExpand: { chartWindow.show(.level) }
+                )
+
+                TodayMetricChart(
+                    samples: todaySamples,
+                    dayKey: dayKey,
+                    onExpand: { chartWindow.show(.metric) }
+                )
             }
+            .padding(.bottom, DesignTokens.spacingXS)
         }
-        .animation(
-            reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.86),
-            value: expandedChart
-        )
+        .scrollIndicators(.hidden)
     }
 }
 
