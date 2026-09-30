@@ -53,9 +53,26 @@ struct ChartPlotEventCatcher: NSViewRepresentable {
         override var isFlipped: Bool { true }
 
         private var hoverTrackingArea: NSTrackingArea?
+        /// 捏合事件的本地监听器（尽力而为，见安装处的说明）。
+        private var magnifyMonitor: Any?
+
+        deinit {
+            if let magnifyMonitor {
+                NSEvent.removeMonitor(magnifyMonitor)
+            }
+        }
 
         /// 面板可能未激活，首次点击也要能开始拖动。
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                removeMagnifyMonitor()
+            } else {
+                installMagnifyMonitor()
+            }
+        }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -70,6 +87,39 @@ struct ChartPlotEventCatcher: NSViewRepresentable {
             )
             addTrackingArea(area)
             hoverTrackingArea = area
+        }
+
+        /// 捏合事件的本地监听器（尽力而为）。
+        ///
+        /// 实测结论：菜单栏面板对 `magnify` 事件的投递**不稳定**——同一个面板、同样的
+        /// `active=true` + key window 状态下，有时能收到（此时下面这个监听器生效），
+        /// 有时一个都收不到（`NSView.magnify(with:)` 与 `NSEvent` 本地监听器都拿不到）。
+        /// 因此这里只作为补充；可靠的触控板/鼠标入口是 `scrollWheel`（⌘+滚轮缩放、
+        /// 双指横扫平移）与标题栏按钮。
+        private func installMagnifyMonitor() {
+            guard magnifyMonitor == nil else { return }
+            magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.magnify]) { [weak self] event in
+                guard let self, let ownWindow = self.window else { return event }
+
+                // 不能用 `event.window === self.window` 判断目标：`magnify` 事件的
+                // `event.window` 并不指向面板窗口。改用光标的屏幕坐标 + 命中测试判断。
+                let windowPoint = ownWindow.convertPoint(fromScreen: NSEvent.mouseLocation)
+                let hit = ownWindow.contentView?.hitTest(windowPoint)
+                guard hit === self || (hit?.isDescendant(of: self) ?? false) else { return event }
+
+                let point = self.convert(windowPoint, from: nil)
+                guard self.bounds.contains(point) else { return event }
+
+                self.onZoom?(1 + event.magnification, point)
+                return nil
+            }
+        }
+
+        private func removeMagnifyMonitor() {
+            if let magnifyMonitor {
+                NSEvent.removeMonitor(magnifyMonitor)
+                self.magnifyMonitor = nil
+            }
         }
 
         override func mouseMoved(with event: NSEvent) {
