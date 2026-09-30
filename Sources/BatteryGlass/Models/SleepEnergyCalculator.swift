@@ -48,12 +48,6 @@ enum SleepEnergyCalculator {
         let duration = input.wakeTime.timeIntervalSince(input.sleepStart)
         guard duration >= minimumDuration else { return nil }
 
-        let averageVoltage = resolvedAverageVoltage(
-            before: input.voltageBeforeV,
-            after: input.voltageAfterV
-        )
-        guard averageVoltage > 0 else { return nil }
-
         let energyKWh: Double
         let mode: SleepSegmentMode
         let measurementMethod: SleepEnergyMeasurementMethod
@@ -66,10 +60,18 @@ enum SleepEnergyCalculator {
         )
         let capacityDeltaMAh = input.capacityAfterMAh - input.capacityBeforeMAh
         guard capacityDeltaMAh.isFinite else { return nil }
-        let batteryDischargeKWh = max(0, -capacityDeltaMAh)
-            * averageVoltage / 1_000_000
-        let batteryChargeGainKWh = max(0, capacityDeltaMAh)
-            * averageVoltage / 1_000_000
+        let averageVoltage = resolvedAverageVoltage(
+            before: input.voltageBeforeV,
+            after: input.voltageAfterV
+        )
+        // Counter energy is already measured at the wall and does not require battery voltage.
+        // Voltage is only needed to convert a battery capacity change into energy.
+        let batteryDischargeKWh = averageVoltage > 0
+            ? max(0, -capacityDeltaMAh) * averageVoltage / 1_000_000
+            : 0
+        let batteryChargeGainKWh = averageVoltage > 0
+            ? max(0, capacityDeltaMAh) * averageVoltage / 1_000_000
+            : 0
 
         // 睡眠边界两侧供电状态不同：无法区分变化发生在睡眠途中还是唤醒瞬间，
         // 因此只能保留可观测的积分量（计数器差值 / 容量差），另一时段无法从两个端点恢复。
@@ -84,9 +86,9 @@ enum SleepEnergyCalculator {
             // 计数器不可用时，按电量净变化选择不重复的电源侧回退。
             if input.adapterConnectedBefore, let wallCounterEnergy {
                 // 混合供电时，累计墙上输入与电池下降量都属于 B 口径的能源贡献。
-                energyKWh = wallCounterEnergy
-                    + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
-                mode = input.batteryDischargingBefore ? .discharging :
+                // 端点容量净下降本身就证明睡眠期间有电池放电；不要求睡前已观测到放电。
+                energyKWh = wallCounterEnergy + batteryDischargeKWh
+                mode = (input.batteryDischargingBefore || batteryDischargeKWh > 0) ? .discharging :
                     (capacityDeltaMAh > 0 ? .charging : .pluggedIdle)
                 measurementMethod = .telemetryCounter
             } else if input.adapterConnectedBefore {
@@ -98,8 +100,10 @@ enum SleepEnergyCalculator {
                     energyKWh = powerEnergyKWh(
                         input.maintenanceAdapterInputPowerW,
                         duration: duration
-                    ) + (input.batteryDischargingBefore ? batteryDischargeKWh : 0)
-                    mode = input.batteryDischargingBefore ? .discharging : .pluggedIdle
+                    ) + batteryDischargeKWh
+                    mode = (input.batteryDischargingBefore || batteryDischargeKWh > 0)
+                        ? .discharging
+                        : .pluggedIdle
                 }
                 measurementMethod = .fallbackEstimate
             } else {

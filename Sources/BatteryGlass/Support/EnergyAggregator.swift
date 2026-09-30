@@ -53,7 +53,8 @@ enum EnergyAggregator {
         var merged: [Date: Double] = [:]
         for summary in summaries {
             guard let energy = summary.energyKWh else { continue }
-            let start = periodStart(for: summary.date, grouping: grouping, calendar: calendar)
+            let localDate = date(forDayKey: summary.dayKey, calendar: calendar) ?? summary.date
+            let start = periodStart(for: localDate, grouping: grouping, calendar: calendar)
             merged[start, default: 0] += energy
         }
         return merged.keys.sorted().map { start in
@@ -87,12 +88,35 @@ enum EnergyAggregator {
     ) -> String {
         switch grouping {
         case .day:
-            return BatteryFormatters.dayKey(for: date)
+            let components = calendar.dateComponents([.year, .month, .day], from: date)
+            return String(
+                format: "%04d-%02d-%02d",
+                components.year ?? 0,
+                components.month ?? 0,
+                components.day ?? 0
+            )
         case .week:
-            return "\(weekFormatter.string(from: date)) 周"
+            let components = calendar.dateComponents([.month, .day], from: date)
+            return String(format: "%02d-%02d 周", components.month ?? 0, components.day ?? 0)
         case .month:
-            return monthFormatter.string(from: date)
+            let components = calendar.dateComponents([.year, .month], from: date)
+            return String(format: "%04d-%02d", components.year ?? 0, components.month ?? 0)
         }
+    }
+
+    /// DailySummary.date is an absolute instant saved under the timezone active at the time.
+    /// Rebuild the calendar date from the stable local day key under the current grouping calendar.
+    private static func date(forDayKey key: String, calendar: Calendar) -> Date? {
+        let values = key.split(separator: "-").compactMap { Int($0) }
+        guard values.count == 3 else { return nil }
+        var components = DateComponents()
+        components.calendar = calendar
+        components.timeZone = calendar.timeZone
+        components.year = values[0]
+        components.month = values[1]
+        components.day = values[2]
+        components.hour = 12
+        return calendar.date(from: components)
     }
 
     /// 找到与给定日期最接近的聚合周期（用于 hover 命中）。
@@ -105,17 +129,4 @@ enum EnergyAggregator {
         }
     }
 
-    private static let weekFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd"
-        return formatter
-    }()
-
-    private static let monthFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM"
-        return formatter
-    }()
 }

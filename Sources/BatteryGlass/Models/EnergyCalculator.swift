@@ -1,10 +1,12 @@
 import Foundation
 
 enum EnergyCalculator {
+    static let maximumGap: TimeInterval = 60
+
     static func dailyEnergyKWh(
         samples: [HistorySample],
         calendar: Calendar = .current,
-        maximumGap: TimeInterval = 60,
+        maximumGap: TimeInterval = EnergyCalculator.maximumGap,
         excludedIntervals: [SleepInterval] = []
     ) -> [String: Double] {
         let sorted = samples.sorted { $0.timestamp < $1.timestamp }
@@ -52,6 +54,26 @@ enum EnergyCalculator {
             }
         }
 
+        return result
+    }
+
+    /// Day keys touched by the half-open interval `[start, end)`.
+    static func dayKeys(
+        from start: Date,
+        to end: Date,
+        calendar: Calendar = .current
+    ) -> Set<String> {
+        guard end > start else { return [] }
+        var result: Set<String> = []
+        var cursor = start
+        while cursor < end {
+            let dayStart = calendar.startOfDay(for: cursor)
+            result.insert(dayKey(for: dayStart, calendar: calendar))
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
+                break
+            }
+            cursor = min(end, nextDay)
+        }
         return result
     }
 

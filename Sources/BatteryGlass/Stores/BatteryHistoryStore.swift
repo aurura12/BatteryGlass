@@ -122,12 +122,21 @@ final class BatteryHistoryStore {
         updateSummary(with: sample)
 
         if let previous = lastRecordedSample {
+            let excludedIntervals = currentExcludedSleepIntervals
             let intervalEnergy = EnergyCalculator.dailyEnergyKWh(
                 samples: [previous, sample],
-                excludedIntervals: currentExcludedSleepIntervals
+                excludedIntervals: excludedIntervals
             )
             for (dayKey, energy) in intervalEnergy {
                 addEnergy(energy, to: dayKey)
+                updateEnergyQuality(for: dayKey) { _ in }
+            }
+            let duration = sample.timestamp.timeIntervalSince(previous.timestamp)
+            let overlapsKnownSleep = excludedIntervals.contains {
+                $0.overlaps(previous.timestamp, sample.timestamp)
+            }
+            if duration > EnergyCalculator.maximumGap, !overlapsKnownSleep {
+                markSamplingGap(from: previous.timestamp, to: sample.timestamp)
             }
         }
         lastRecordedSample = sample
@@ -140,10 +149,12 @@ final class BatteryHistoryStore {
         guard settings.recordHistory else { return }
         guard !sleepSegments.contains(where: { $0.id == segment.id }) else { return }
 
-        recordSleepInterval(start: segment.start, end: segment.end)
         sleepSegments.append(segment)
         sleepSegments.sort { $0.start < $1.start }
-        addSleepEnergy(segment.energyKWh, from: segment.start, to: segment.end)
+        addSleepEnergy(segment)
+        // Persist after the segment and its daily energy are in memory. Calling the interval
+        // recorder first could schedule a snapshot before the segment, then hit the throttle.
+        recordSleepInterval(start: segment.start, end: segment.end)
         persist()
     }
 
@@ -167,8 +178,9 @@ final class BatteryHistoryStore {
         guard let cutoff = Calendar.current.date(byAdding: .day, value: -lastDays, to: Date()) else {
             return dailySummaries
         }
+        let cutoffKey = BatteryFormatters.dayKey(for: cutoff)
         return dailySummaries
-            .filter { $0.date >= cutoff }
+            .filter { $0.dayKey >= cutoffKey }
             .suffix(lastDays)
             .map { $0 }
     }
@@ -231,7 +243,7 @@ final class BatteryHistoryStore {
         samples = payload.samples
         if payload.version >= 2 {
             // 统一按日期升序，保证依赖顺序的 suffix/UI 取最近 N 天正确。
-            dailySummaries = payload.dailySummaries.sorted { $0.date < $1.date }
+            dailySummaries = payload.dailySummaries.sorted { $0.dayKey < $1.dayKey }
         } else {
             dailySummaries = summaries(from: samples)
         }
@@ -242,16 +254,13 @@ final class BatteryHistoryStore {
         let sanitizedSummaries = DailyEnergySummaryPolicy.markSparseLegacySummariesIncomplete(
             dailySummaries,
             todayKey: BatteryFormatters.dayKey(for: Date()),
-            dayKeysWithSleepEnergy: Set(sleepSegments.flatMap { segment in
-                SleepEnergyCalculator.dailyEnergySplit(
-                    energyKWh: segment.energyKWh,
-                    from: segment.start,
-                    to: segment.end
-                ).keys
-            })
+            dayKeysWithSleepEnergy: dayKeysWithSleepEnergy(in: dailySummaries)
         )
         let summariesChanged = sanitizedSummaries != dailySummaries
         dailySummaries = sanitizedSummaries
+        let qualityBackfilled = markLegacyEnergyQualityUnknown()
+        let sleepEnergyRestored = restoreMissingSleepEnergyFromSegments()
+        let samplingGapsBackfilled = markKnownSamplingGaps(in: samples)
 
         let recovery = HistorySampleRecovery.backfillConsumptionPower(
             in: samples,
@@ -275,7 +284,8 @@ final class BatteryHistoryStore {
         lastSamplesPrunedDay = nil
         pruneHistory()
 
-        if recovery.didChange || summariesChanged {
+        if recovery.didChange || summariesChanged || qualityBackfilled
+            || sleepEnergyRestored || samplingGapsBackfilled {
             flush()
         }
     }
@@ -399,7 +409,7 @@ final class BatteryHistoryStore {
                     minPower: sample.power
                 )
             )
-            dailySummaries.sort { $0.date < $1.date }
+            dailySummaries.sort { $0.dayKey < $1.dayKey }
         }
     }
 
@@ -409,10 +419,32 @@ final class BatteryHistoryStore {
             dailySummaries[index].energyKWh = (dailySummaries[index].energyKWh ?? 0) + energy
             return
         }
-        guard creatingMissingSummary,
-              let date = BatteryFormatters.dayKeyDate(dayKey) else {
+        guard creatingMissingSummary, ensureDailySummary(for: dayKey) != nil,
+              let index = dailySummaries.firstIndex(where: { $0.dayKey == dayKey }) else {
             return
         }
+        dailySummaries[index].energyKWh = energy
+    }
+
+    /// Split sleep energy and provenance across the local days touched by the segment.
+    private func addSleepEnergy(_ segment: SleepSegment) {
+        let split = SleepEnergyCalculator.dailyEnergySplit(
+            energyKWh: segment.energyKWh,
+            from: segment.start,
+            to: segment.end
+        )
+        for (dayKey, energy) in split {
+            addEnergy(energy, to: dayKey, creatingMissingSummary: true)
+            markSleepEnergyQuality(segment, for: dayKey)
+        }
+    }
+
+    @discardableResult
+    private func ensureDailySummary(for dayKey: String) -> Int? {
+        if let index = dailySummaries.firstIndex(where: { $0.dayKey == dayKey }) {
+            return index
+        }
+        guard let date = BatteryFormatters.dayKeyDate(dayKey) else { return nil }
         dailySummaries.append(
             DailySummary(
                 dayKey: dayKey,
@@ -420,21 +452,124 @@ final class BatteryHistoryStore {
                 sampleCount: 0,
                 maxCycleCount: 0,
                 minHealthPercent: nil,
-                energyKWh: energy,
+                energyKWh: nil,
                 averagePower: 0,
                 maxPower: 0,
                 minPower: 0
             )
         )
-        dailySummaries.sort { $0.date < $1.date }
+        dailySummaries.sort { $0.dayKey < $1.dayKey }
+        return dailySummaries.firstIndex(where: { $0.dayKey == dayKey })
     }
 
-    /// 把待机区间能量按跨天时长比例拆分到对应日期。
-    private func addSleepEnergy(_ energyKWh: Double, from start: Date, to end: Date) {
-        let split = SleepEnergyCalculator.dailyEnergySplit(energyKWh: energyKWh, from: start, to: end)
-        for (dayKey, energy) in split {
-            addEnergy(energy, to: dayKey, creatingMissingSummary: true)
+    @discardableResult
+    private func updateEnergyQuality(
+        for dayKey: String,
+        _ update: (inout DailyEnergyQuality) -> Void
+    ) -> Bool {
+        guard let index = ensureDailySummary(for: dayKey) else { return false }
+        let previousQuality = dailySummaries[index].energyQuality
+        var quality = previousQuality ?? DailyEnergyQuality()
+        update(&quality)
+        guard previousQuality != quality else { return false }
+        dailySummaries[index].energyQuality = quality
+        return true
+    }
+
+    @discardableResult
+    private func markSamplingGap(from start: Date, to end: Date) -> Bool {
+        var changed = false
+        for dayKey in EnergyCalculator.dayKeys(from: start, to: end) {
+            changed = updateEnergyQuality(for: dayKey) { $0.hasSamplingGaps = true } || changed
         }
+        return changed
+    }
+
+    private func markKnownSamplingGaps(in samples: [HistorySample]) -> Bool {
+        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        var changed = false
+        for pair in zip(sorted, sorted.dropFirst()) {
+            let start = pair.0.timestamp
+            let end = pair.1.timestamp
+            guard end.timeIntervalSince(start) > EnergyCalculator.maximumGap,
+                  !sleepIntervals.contains(where: { $0.overlaps(start, end) }) else {
+                continue
+            }
+            changed = markSamplingGap(from: start, to: end) || changed
+        }
+        return changed
+    }
+
+    private func markSleepEnergyQuality(_ segment: SleepSegment, for dayKey: String) {
+        updateEnergyQuality(for: dayKey) { quality in
+            quality.hasEstimatedSleepEnergy = quality.hasEstimatedSleepEnergy
+                || segment.measurementMethod == .fallbackEstimate
+            quality.hasUncalibratedCounterEnergy = quality.hasUncalibratedCounterEnergy
+                || (segment.measurementMethod == .telemetryCounter && !segment.isCalibrated)
+            quality.hasLowerBoundSleepEnergy = quality.hasLowerBoundSleepEnergy
+                || segment.hasUnobservedSource
+        }
+    }
+
+    /// Old payloads have no provenance. Preserve that uncertainty while new observations accrue.
+    private func markLegacyEnergyQualityUnknown() -> Bool {
+        var changed = false
+        for index in dailySummaries.indices
+        where dailySummaries[index].energyKWh != nil && dailySummaries[index].energyQuality == nil {
+            dailySummaries[index].energyQuality = DailyEnergyQuality(
+                hasUnknownHistoricalCoverage: true
+            )
+            changed = true
+        }
+        return changed
+    }
+
+    /// Rebuild sleep-only days and values erased by older sparse-summary cleanup.
+    /// Existing non-nil totals already include the segment and are left untouched.
+    private func restoreMissingSleepEnergyFromSegments() -> Bool {
+        var restoredDayKeys: Set<String> = []
+        var restored = false
+        for segment in sleepSegments {
+            let split = SleepEnergyCalculator.dailyEnergySplit(
+                energyKWh: segment.energyKWh,
+                from: segment.start,
+                to: segment.end
+            )
+            for (dayKey, energy) in split {
+                if let index = ensureDailySummary(for: dayKey) {
+                    if dailySummaries[index].energyKWh == nil {
+                        dailySummaries[index].energyKWh = energy
+                        restoredDayKeys.insert(dayKey)
+                        restored = true
+                    } else if restoredDayKeys.contains(dayKey) {
+                        dailySummaries[index].energyKWh = (dailySummaries[index].energyKWh ?? 0) + energy
+                        restored = true
+                    }
+                }
+                markSleepEnergyQuality(segment, for: dayKey)
+            }
+        }
+        return restored
+    }
+
+    private func dayKeysWithSleepEnergy(in summaries: [DailySummary]) -> Set<String> {
+        var keys = Set(sleepSegments.flatMap { segment in
+            SleepEnergyCalculator.dailyEnergySplit(
+                energyKWh: segment.energyKWh,
+                from: segment.start,
+                to: segment.end
+            ).keys
+        })
+        // A persisted summary.date is an absolute midnight from the timezone active when it
+        // was written. Protect matching sleep days even if the current timezone has changed.
+        for summary in summaries {
+            let dayStart = summary.date
+            let dayEnd = dayStart.addingTimeInterval(26 * 60 * 60)
+            if sleepSegments.contains(where: { $0.start < dayEnd && $0.end > dayStart }) {
+                keys.insert(summary.dayKey)
+            }
+        }
+        return keys
     }
 
     private var currentExcludedSleepIntervals: [SleepInterval] {
@@ -461,6 +596,7 @@ final class BatteryHistoryStore {
             )
             if let energy = split[todayKey] {
                 addEnergy(energy, to: todayKey)
+                markSleepEnergyQuality(segment, for: todayKey)
             }
         }
     }

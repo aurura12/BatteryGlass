@@ -28,6 +28,29 @@ struct HistorySample: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// Known limitations and provenance for a daily energy value.
+struct DailyEnergyQuality: Codable, Equatable, Sendable {
+    var hasSamplingGaps: Bool
+    var hasEstimatedSleepEnergy: Bool
+    var hasUncalibratedCounterEnergy: Bool
+    var hasLowerBoundSleepEnergy: Bool
+    var hasUnknownHistoricalCoverage: Bool
+
+    init(
+        hasSamplingGaps: Bool = false,
+        hasEstimatedSleepEnergy: Bool = false,
+        hasUncalibratedCounterEnergy: Bool = false,
+        hasLowerBoundSleepEnergy: Bool = false,
+        hasUnknownHistoricalCoverage: Bool = false
+    ) {
+        self.hasSamplingGaps = hasSamplingGaps
+        self.hasEstimatedSleepEnergy = hasEstimatedSleepEnergy
+        self.hasUncalibratedCounterEnergy = hasUncalibratedCounterEnergy
+        self.hasLowerBoundSleepEnergy = hasLowerBoundSleepEnergy
+        self.hasUnknownHistoricalCoverage = hasUnknownHistoricalCoverage
+    }
+}
+
 struct DailySummary: Codable, Identifiable, Equatable, Sendable {
     var dayKey: String
     var date: Date
@@ -38,6 +61,8 @@ struct DailySummary: Codable, Identifiable, Equatable, Sendable {
     var averagePower: Double
     var maxPower: Double
     var minPower: Double
+    /// Nil for summaries written before energy provenance was tracked.
+    var energyQuality: DailyEnergyQuality? = nil
 
     var id: String { dayKey }
 }
