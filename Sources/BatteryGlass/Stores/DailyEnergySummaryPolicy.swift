@@ -29,10 +29,15 @@ enum DailyEnergySummaryPolicy {
     /// Clear it so the UI can show that the day is incomplete instead of displaying 0.000 kWh.
     static func markSparseLegacySummariesIncomplete(
         _ summaries: [DailySummary],
-        todayKey: String
+        todayKey: String,
+        dayKeysWithSleepEnergy: Set<String> = []
     ) -> [DailySummary] {
         summaries.map { summary in
-            guard summary.dayKey != todayKey, summary.sampleCount <= 1 else {
+            // Sleep energy is independently measured and remains valid even when a day has
+            // only one (or no) ordinary sample. Do not erase it as a sparse legacy sample day.
+            guard summary.dayKey != todayKey,
+                  summary.sampleCount <= 1,
+                  !dayKeysWithSleepEnergy.contains(summary.dayKey) else {
                 return summary
             }
 

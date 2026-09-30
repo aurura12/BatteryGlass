@@ -241,7 +241,14 @@ final class BatteryHistoryStore {
         sleepIntervals = (payload.sleepIntervals ?? []).filter { $0.end > $0.start }
         let sanitizedSummaries = DailyEnergySummaryPolicy.markSparseLegacySummariesIncomplete(
             dailySummaries,
-            todayKey: BatteryFormatters.dayKey(for: Date())
+            todayKey: BatteryFormatters.dayKey(for: Date()),
+            dayKeysWithSleepEnergy: Set(sleepSegments.flatMap { segment in
+                SleepEnergyCalculator.dailyEnergySplit(
+                    energyKWh: segment.energyKWh,
+                    from: segment.start,
+                    to: segment.end
+                ).keys
+            })
         )
         let summariesChanged = sanitizedSummaries != dailySummaries
         dailySummaries = sanitizedSummaries
@@ -252,13 +259,16 @@ final class BatteryHistoryStore {
         )
         if recovery.didChange {
             samples = recovery.samples
-            updateEnergySummaries(
+            let recalculatedDayKeys = updateEnergySummaries(
                 from: samples,
                 allowedDayKeys: [BatteryFormatters.dayKey(for: Date())]
             )
-            // 上面的全量重算会整体覆盖今天的 energyKWh，而重算值不含待机区间能量；
-            // 补回与今天有交集的待机段，避免睡眠段耗电量在启动恢复时丢失。
-            restoreSleepEnergy(forToday: Date())
+            // 只有重算确实覆盖了今天，才需要把睡眠份额补回去。若今天没有可积分的
+            // 相邻样本，reconcile 会保留已持久化的日值；再次累加睡眠份额会造成重计。
+            let todayKey = BatteryFormatters.dayKey(for: Date())
+            if recalculatedDayKeys.contains(todayKey) {
+                restoreSleepEnergy(forToday: Date())
+            }
         }
 
         lastRecordedSample = samples.last
@@ -345,7 +355,10 @@ final class BatteryHistoryStore {
         return dailySummaries
     }
 
-    private func updateEnergySummaries(from samples: [HistorySample], allowedDayKeys: Set<String>) {
+    private func updateEnergySummaries(
+        from samples: [HistorySample],
+        allowedDayKeys: Set<String>
+    ) -> Set<String> {
         let energyByDay = EnergyCalculator.dailyEnergyKWh(
             samples: samples,
             excludedIntervals: sleepIntervals
@@ -355,6 +368,7 @@ final class BatteryHistoryStore {
             recalculatedEnergy: energyByDay,
             allowedDayKeys: allowedDayKeys
         )
+        return Set(energyByDay.keys).intersection(allowedDayKeys)
     }
 
     private func updateSummary(with sample: HistorySample) {
@@ -389,17 +403,37 @@ final class BatteryHistoryStore {
         }
     }
 
-    private func addEnergy(_ energy: Double, to dayKey: String) {
+    private func addEnergy(_ energy: Double, to dayKey: String, creatingMissingSummary: Bool = false) {
         guard energy.isFinite, energy >= 0 else { return }
-        guard let index = dailySummaries.firstIndex(where: { $0.dayKey == dayKey }) else { return }
-        dailySummaries[index].energyKWh = (dailySummaries[index].energyKWh ?? 0) + energy
+        if let index = dailySummaries.firstIndex(where: { $0.dayKey == dayKey }) {
+            dailySummaries[index].energyKWh = (dailySummaries[index].energyKWh ?? 0) + energy
+            return
+        }
+        guard creatingMissingSummary,
+              let date = BatteryFormatters.dayKeyDate(dayKey) else {
+            return
+        }
+        dailySummaries.append(
+            DailySummary(
+                dayKey: dayKey,
+                date: date,
+                sampleCount: 0,
+                maxCycleCount: 0,
+                minHealthPercent: nil,
+                energyKWh: energy,
+                averagePower: 0,
+                maxPower: 0,
+                minPower: 0
+            )
+        )
+        dailySummaries.sort { $0.date < $1.date }
     }
 
     /// 把待机区间能量按跨天时长比例拆分到对应日期。
     private func addSleepEnergy(_ energyKWh: Double, from start: Date, to end: Date) {
         let split = SleepEnergyCalculator.dailyEnergySplit(energyKWh: energyKWh, from: start, to: end)
         for (dayKey, energy) in split {
-            addEnergy(energy, to: dayKey)
+            addEnergy(energy, to: dayKey, creatingMissingSummary: true)
         }
     }
 
