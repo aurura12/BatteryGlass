@@ -10,6 +10,7 @@
 - `CODEBUDDY.md` 补充 `DailySummary.energyQuality` 字段、`EnergyAggregator` 所在路径（`Support/EnergyAggregator.swift`），并在 Views/UI 段加入根目录已知问题记录 `HISTORY_PICKER_FLICKER.md` 的指引。
 - `CODEBUDDY.md` 新增「项目结构」目录树（`Sources/BatteryGlass/` 六个子目录职责 + 顶层 `script/`、`scripts/`、`Resources/`、`design-system/`、`docs/`、`dist/`）与「App 层（入口 / 场景 / 单实例）」小节（`AppInstanceGuard`/`AppDelegate`/`@main` 均在 `App/BatteryGlassApp.swift`，`init` 固定顺序与两个 Scene 的注入）。
 - `CODEBUDDY.md` 补齐此前未点名的类型与机制：`AppSettings` 设置项清单与 `DashboardView` 的 `@AppStorage("BatteryGlass.panelTab")` 例外、`MenuBarIconRenderer` 合成单张模板 `NSImage` 的原因、`ViewThatFits` 实时页回退、`HistoryView` 三个内联缓存（`TodaySamplesCache`/`PowerChartDataCache`/`BatteryLevelChartDataCache`）与两个数据纯类型。
+- `CODEBUDDY.md` 补充 `LoginItemService` 的 `.notFound` 执行语义：`apply(desiredEnabled:)` 在 `.notFound` + 期望关闭时返回 `LoginItemApplyResult.cannotConfirm`，设置页回滚开关并提示、不调用系统 API。
 
 ### 修复
 - 修复本地通知在应用前台（active）时被系统静默丢弃的问题：`NotificationService` 新增私有 `ForegroundNotificationPresenter`（遵循 `UNUserNotificationCenterDelegate`，`willPresent` 返回 `[.banner, .sound]`），并在 `BatteryGlassApp` 的 `AppDelegate.applicationDidFinishLaunching` 中调用 `NotificationService.installForegroundPresenter()` 安装。此前菜单栏面板打开或设置窗口位于前台时，低电量与插拔通知不会弹出横幅（NotificationService.swift、BatteryGlassApp.swift）。
