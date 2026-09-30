@@ -3,7 +3,6 @@ import SwiftUI
 
 struct HistoryView: View {
     @Environment(BatteryHistoryStore.self) private var history
-    @Environment(BatteryMonitor.self) private var monitor
     @State private var energyRange: EnergyHistoryRange = .fourteen
     // 面板以 2Hz 重渲染；用记忆化避免每次重算今日样本与曲线数据。
     @State private var todayCache = TodaySamplesCache()
@@ -42,23 +41,15 @@ struct HistoryView: View {
                     chartData: levelChartData
                 )
 
+                TodayMetricChart(samples: todaySamples)
+
                 HealthTrendChart(summaries: history.allSummaries())
 
-                HistoryMetricCard(
-                    title: "循环次数",
-                    icon: "repeat",
-                    value: "\(cycleCount)",
-                    caption: "次 · 设计寿命 1000 次",
-                    tint: DesignTokens.dataBlue
-                )
+                CycleTrendChart(summaries: history.allSummaries())
             }
             .padding(.bottom, DesignTokens.spacingXS)
         }
         .scrollIndicators(.hidden)
-    }
-
-    private var cycleCount: Int {
-        history.samples.last?.cycleCount ?? monitor.snapshot.cycleCount
     }
 }
 
@@ -1226,6 +1217,526 @@ struct HealthTrendChart: View {
     }
 }
 
+/// 今日温压分时曲线的可选指标。
+enum TodayMetric: String, CaseIterable, Identifiable {
+    case temperature
+    case voltage
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .temperature: "温度"
+        case .voltage: "电压"
+        }
+    }
+
+    func value(from sample: HistorySample) -> Double? {
+        switch self {
+        case .temperature: sample.temperatureCelsius
+        case .voltage: sample.voltage
+        }
+    }
+
+    func axisLabel(for value: Double) -> String {
+        switch self {
+        case .temperature: "\(Int(value.rounded()))"
+        case .voltage: String(format: "%.1f", value)
+        }
+    }
+
+    func valueLabel(for value: Double) -> String {
+        switch self {
+        case .temperature: String(format: "%.1f °C", value)
+        case .voltage: String(format: "%.2f V", value)
+        }
+    }
+}
+
+/// 某指标的今日分时绘图数据：过滤空值、抽样到上限、预算 Y 域。
+struct TodayMetricChartData {
+    let metric: TodayMetric
+    /// 今日有该指标值的全量样本，供悬停吸附使用。
+    let samples: [HistorySample]
+    /// 抽样后的渲染样本，最多 `maximumDisplayedSamples` 条。
+    let displayedSamples: [HistorySample]
+    /// 由全量样本预计算的 Y 轴域（抽样可能丢极值，故不能用抽样集计算）。
+    let valueDomain: ClosedRange<Double>
+
+    init(samples: [HistorySample], metric: TodayMetric, maximumDisplayedSamples: Int = 800) {
+        self.metric = metric
+        let valid = samples.filter { sample in
+            guard let value = metric.value(from: sample) else { return false }
+            return value.isFinite
+        }
+        self.samples = valid
+        self.valueDomain = MetricValueAxis.yDomain(for: valid.compactMap { metric.value(from: $0) })
+
+        guard maximumDisplayedSamples > 1, valid.count > maximumDisplayedSamples else {
+            self.displayedSamples = valid
+            return
+        }
+        let step = Double(valid.count - 1) / Double(maximumDisplayedSamples - 1)
+        self.displayedSamples = (0..<maximumDisplayedSamples).map { index in
+            valid[Int((Double(index) * step).rounded())]
+        }
+    }
+}
+
+/// 今日温压曲线数据记忆化：仅在样本集合或所选指标变化时重建（抽样到 800 点是 O(n) 开销）。
+final class TodayMetricChartDataCache {
+    private var cached: TodayMetricChartData?
+    private var lastMetric: TodayMetric?
+    private var lastCount = -1
+    private var lastID: UUID?
+
+    func data(for samples: [HistorySample], metric: TodayMetric) -> TodayMetricChartData {
+        if let cached, lastMetric == metric, lastCount == samples.count, lastID == samples.last?.id {
+            return cached
+        }
+        let data = TodayMetricChartData(samples: samples, metric: metric)
+        cached = data
+        lastMetric = metric
+        lastCount = samples.count
+        lastID = samples.last?.id
+        return data
+    }
+}
+
+/// 通用趋势 Y 轴域：空数据回退 0...1；平线时上下各留 max(|值|×5%, 1)；否则在跨度上留 10% 余量。
+enum MetricValueAxis {
+    static func yDomain(for values: [Double]) -> ClosedRange<Double> {
+        let finite = values.filter { $0.isFinite }
+        guard let minimum = finite.min(), let maximum = finite.max() else { return 0...1 }
+        let span = maximum - minimum
+        guard span >= 0.0001 else {
+            let padding = max(abs(minimum) * 0.05, 1)
+            return (minimum - padding)...(maximum + padding)
+        }
+        let padding = span * 0.1
+        return (minimum - padding)...(maximum + padding)
+    }
+}
+
+/// 今日温度统计：最高温与高于阈值的累计时长。
+enum TodayTemperatureStats {
+    static func maximum(in samples: [HistorySample]) -> Double? {
+        samples.compactMap(\.temperatureCelsius).filter { $0.isFinite }.max()
+    }
+
+    /// 高于阈值的累计时长：把相邻样本的间隔归给起始样本，跳过超过 `maximumGap` 的断点
+    /// （待机等无采样区间不应算作高温时长）。样本需按时间升序。
+    static func durationAbove(
+        _ threshold: Double,
+        in samples: [HistorySample],
+        maximumGap: TimeInterval = 60
+    ) -> TimeInterval {
+        var total: TimeInterval = 0
+        for (previous, next) in zip(samples, samples.dropFirst()) {
+            guard let value = previous.temperatureCelsius,
+                  value.isFinite,
+                  value >= threshold else {
+                continue
+            }
+            let gap = next.timestamp.timeIntervalSince(previous.timestamp)
+            guard gap > 0, gap <= maximumGap else { continue }
+            total += gap
+        }
+        return total
+    }
+}
+
+/// 循环次数日趋势绘图数据：忽略没有普通样本的日（睡眠补测创建的汇总），取近 N 天。
+struct CycleTrendData {
+    let entries: [DailySummary]
+    let yDomain: ClosedRange<Double>
+
+    init(summaries: [DailySummary], limit: Int = 90) {
+        let filtered = summaries.filter { $0.sampleCount > 0 }.suffix(limit)
+        self.entries = Array(filtered)
+        self.yDomain = MetricValueAxis.yDomain(for: entries.map { Double($0.maxCycleCount) })
+    }
+
+    var latest: Int? {
+        entries.last?.maxCycleCount
+    }
+}
+
+/// 循环次数长期趋势：每日最大循环次数，按天展示近 90 天。循环次数单调递增，
+/// 斜率即每天消耗的循环，直接反映损耗速率。
+struct CycleTrendChart: View {
+    let summaries: [DailySummary]
+    @State private var hoveredSummary: DailySummary?
+    @State private var hoverLocation: CGPoint?
+
+    private var data: CycleTrendData {
+        CycleTrendData(summaries: summaries)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
+            Text("循环次数趋势")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let latest = data.latest {
+                Text("最新 \(latest) 次 · 设计寿命 1000 次")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if data.entries.isEmpty {
+                ChartEmptyPlaceholder("暂无循环次数数据，运行一段时间后自动生成")
+                    .frame(height: 116)
+            } else {
+                Chart(data.entries) { summary in
+                    LineMark(
+                        x: .value("日期", summary.date),
+                        y: .value("循环次数", Double(summary.maxCycleCount))
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .foregroundStyle(DesignTokens.dataBlue)
+
+                    if let hoveredSummary {
+                        RuleMark(x: .value("悬停日期", hoveredSummary.date))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                            .foregroundStyle(.secondary.opacity(0.7))
+                        PointMark(
+                            x: .value("日期", hoveredSummary.date),
+                            y: .value("循环次数", Double(hoveredSummary.maxCycleCount))
+                        )
+                        .foregroundStyle(DesignTokens.dataBlue)
+                        .symbolSize(36)
+                    }
+                }
+                .chartYScale(domain: data.yDomain)
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel {
+                            if let raw = value.as(Double.self) {
+                                Text("\(Int(raw.rounded()))")
+                            }
+                        }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .month)) { _ in
+                        AxisGridLine().foregroundStyle(.clear)
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.month(.defaultDigits))
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        ZStack(alignment: .topLeading) {
+                            Rectangle()
+                                .fill(.clear)
+                                .onContinuousHover { phase in
+                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                                }
+
+                            if let hoveredSummary, let hoverLocation {
+                                trendTooltip(for: hoveredSummary)
+                                    .position(
+                                        x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
+                                        y: min(max(hoverLocation.y - 26, 18), geometry.size.height - 18)
+                                    )
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 116)
+                .accessibilityLabel("循环次数趋势")
+                .accessibilityValue(data.latest.map { "最新 \($0) 次" } ?? "暂无数据")
+            }
+        }
+        .padding(DesignTokens.spacingM)
+        .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    private func updateHover(_ phase: HoverPhase, proxy: ChartProxy, geometry: GeometryProxy) {
+        switch phase {
+        case .ended:
+            hoveredSummary = nil
+            hoverLocation = nil
+        case .active(let location):
+            guard let plotFrame = proxy.plotFrame else {
+                hoveredSummary = nil
+                hoverLocation = nil
+                return
+            }
+            let frame = geometry[plotFrame]
+            guard frame.contains(location) else {
+                hoveredSummary = nil
+                hoverLocation = nil
+                return
+            }
+            let xPosition = location.x - frame.minX
+            guard let date: Date = proxy.value(atX: xPosition) else {
+                hoveredSummary = nil
+                hoverLocation = nil
+                return
+            }
+            hoverLocation = location
+            hoveredSummary = PowerChartInteraction.nearestDailySummary(to: date, from: data.entries)
+        }
+    }
+
+    private func trendTooltip(for summary: DailySummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(summary.dayKey)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Text("\(summary.maxCycleCount) 次")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(DesignTokens.dataBlue)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+}
+
+/// 今日温度 / 电压分时曲线：整日一屏、分段切换，含最高温与高温累计时长等概览。
+struct TodayMetricChart: View {
+    let samples: [HistorySample]
+    @State private var metric: TodayMetric = .temperature
+    @State private var cache = TodayMetricChartDataCache()
+    @State private var hoveredSample: HistorySample?
+    @State private var hoverLocation: CGPoint?
+
+    /// 悬停位置与吸附样本超过该间隔视为「无数据」（待机缺口内不显示 tooltip）。
+    private let hoverMaximumGap: TimeInterval = 180
+    /// 高温提示阈值（℃）。
+    private static let highTemperatureThreshold: Double = 35
+
+    private var chartData: TodayMetricChartData {
+        cache.data(for: samples, metric: metric)
+    }
+
+    /// 以最后一条样本时间结尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
+    private var xDomain: ClosedRange<Date> {
+        BatteryLevelAxis.xDomain(now: samples.last?.timestamp ?? Date())
+    }
+
+    /// 缺口处断开连线；待机期间不记录样本，故无需再按待机区间过滤。
+    private var displaySegments: [[HistorySample]] {
+        PowerChartSegmentation.splitByGaps(chartData.displayedSamples)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
+            Picker("指标", selection: $metric) {
+                ForEach(TodayMetric.allCases) { item in
+                    Text(item.title).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if let statsText {
+                Text(statsText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if chartData.samples.isEmpty {
+                ChartEmptyPlaceholder("暂无今日\(metric.title)数据，应用运行后每 5 秒记录一次")
+                    .frame(height: 120)
+            } else {
+                Chart {
+                    ForEach(Array(displaySegments.enumerated()), id: \.offset) { _, segment in
+                        ForEach(segment) { sample in
+                            if let value = metric.value(from: sample) {
+                                AreaMark(
+                                    x: .value("时间", sample.timestamp),
+                                    yStart: .value("下界", chartData.valueDomain.lowerBound),
+                                    yEnd: .value(metric.title, value)
+                                )
+                                .interpolationMethod(.linear)
+                                .foregroundStyle(
+                                    LinearGradient(
+                                        colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+
+                                LineMark(
+                                    x: .value("时间", sample.timestamp),
+                                    y: .value(metric.title, value)
+                                )
+                                .interpolationMethod(.linear)
+                                .foregroundStyle(DesignTokens.dataBlue)
+                                .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            }
+                        }
+                    }
+
+                    if let hoveredSample, let value = metric.value(from: hoveredSample) {
+                        RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
+
+                        PointMark(
+                            x: .value("时间", hoveredSample.timestamp),
+                            y: .value(metric.title, value)
+                        )
+                        .foregroundStyle(DesignTokens.dataBlue)
+                        .symbolSize(36)
+                    }
+                }
+                .chartXScale(domain: xDomain)
+                .chartYScale(domain: chartData.valueDomain)
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel {
+                            if let raw = value.as(Double.self) {
+                                Text(metric.axisLabel(for: raw))
+                            }
+                        }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
+                        AxisGridLine().foregroundStyle(.clear)
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        ZStack(alignment: .topTrailing) {
+                            Rectangle()
+                                .fill(.clear)
+                                .onContinuousHover { phase in
+                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                                }
+
+                            if let hoveredSample,
+                               let hoverLocation,
+                               let value = metric.value(from: hoveredSample) {
+                                hoverTooltip(for: hoveredSample, value: value)
+                                    .position(
+                                        x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
+                                        y: min(max(hoverLocation.y - 26, 18), geometry.size.height - 18)
+                                    )
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 138)
+                // Y 轴顶端刻度以刻度线为中心绘制，贴着绘图区上沿会被 .clipped() 裁掉半行字。
+                .padding(.top, 14)
+                .clipped()
+                .accessibilityLabel("今日\(metric.title)曲线")
+                .accessibilityValue(accessibilitySummary)
+            }
+        }
+        .padding(DesignTokens.spacingM)
+        .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+    }
+
+    /// 概览：温度显示今日最高与高温累计时长，电压显示今日范围。
+    private var statsText: String? {
+        switch metric {
+        case .temperature:
+            guard let maximum = TodayTemperatureStats.maximum(in: chartData.samples) else { return nil }
+            let duration = TodayTemperatureStats.durationAbove(
+                Self.highTemperatureThreshold,
+                in: chartData.samples
+            )
+            return "今日最高 \(String(format: "%.1f", maximum)) °C · "
+                + "≥\(Int(Self.highTemperatureThreshold))°C 累计 \(Self.durationText(duration))"
+        case .voltage:
+            let values = chartData.samples.compactMap(\.voltage)
+            guard let minimum = values.min(), let maximum = values.max() else { return nil }
+            return String(format: "今日 %.2f – %.2f V", minimum, maximum)
+        }
+    }
+
+    private var accessibilitySummary: String {
+        guard let latest = chartData.samples.last,
+              let value = metric.value(from: latest) else {
+            return "暂无数据"
+        }
+        return "最新 \(metric.valueLabel(for: value))"
+    }
+
+    private static func durationText(_ interval: TimeInterval) -> String {
+        let minutes = Int((interval / 60).rounded())
+        guard minutes >= 60 else { return "\(minutes) 分" }
+        return "\(minutes / 60) 小时 \(minutes % 60) 分"
+    }
+
+    private func updateHover(_ phase: HoverPhase, proxy: ChartProxy, geometry: GeometryProxy) {
+        switch phase {
+        case .ended:
+            hoveredSample = nil
+            hoverLocation = nil
+        case .active(let location):
+            guard let plotFrame = proxy.plotFrame else {
+                hoveredSample = nil
+                hoverLocation = nil
+                return
+            }
+            let frame = geometry[plotFrame]
+            guard frame.contains(location) else {
+                hoveredSample = nil
+                hoverLocation = nil
+                return
+            }
+            let xPosition = location.x - frame.minX
+            guard let timestamp: Date = proxy.value(atX: xPosition) else {
+                hoveredSample = nil
+                hoverLocation = nil
+                return
+            }
+            hoverLocation = location
+            guard let nearest = PowerChartInteraction.nearestSample(to: timestamp, from: chartData.samples) else {
+                hoveredSample = nil
+                return
+            }
+            if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+                hoveredSample = nil
+                return
+            }
+            hoveredSample = nearest
+        }
+    }
+
+    private func hoverTooltip(for sample: HistorySample, value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(sample.timestamp, format: .dateTime
+                .hour(.defaultDigits(amPM: .omitted))
+                .minute(.twoDigits)
+                .second(.twoDigits))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Text(metric.valueLabel(for: value))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(DesignTokens.dataBlue)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+}
+
 struct PowerChartData {
     let timeline: PowerChartTimeline
     /// Positive, finite readings used for chart bounds and hover snapping.
@@ -1694,29 +2205,6 @@ enum PowerChartInteraction {
         guard !values.isEmpty else { return nil }
         return values.reduce(0, +)
     }
-}
-
-struct HistoryMetricCard: View {
-    let title: String
-    let icon: String
-    let value: String
-    let caption: String
-    let tint: Color
-
-    var body: some View {
-        KpiCard(title: title, icon: icon, verticalPadding: DesignTokens.spacingM) {
-            Text(value)
-                .font(.system(size: 30, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(tint)
-            Text(caption)
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-    }
-
 }
 
 struct ChartEmptyPlaceholder: View {

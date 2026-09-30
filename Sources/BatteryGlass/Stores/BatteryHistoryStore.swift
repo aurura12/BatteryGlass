@@ -115,7 +115,9 @@ final class BatteryHistoryStore {
             consumptionPowerW: snapshot.consumptionPowerW,
             percent: snapshot.percent,
             cycleCount: snapshot.cycleCount,
-            healthPercent: snapshot.healthPercent
+            healthPercent: snapshot.healthPercent,
+            temperatureCelsius: snapshot.temperatureCelsius,
+            voltage: snapshot.voltage > 0 ? snapshot.voltage : nil
         )
 
         samples.append(sample)
@@ -226,6 +228,8 @@ final class BatteryHistoryStore {
         var sleepSegments: [SleepSegment]?
         // v4 新增；可选以兼容 v2/v3 旧文件。
         var sleepIntervals: [SleepInterval]?
+        // v6 新增 HistorySample.temperatureCelsius/voltage，均为可选、旧文件缺键解码为 nil，
+        // 无需额外迁移分支。
     }
 
     private func load() {
@@ -304,7 +308,7 @@ final class BatteryHistoryStore {
 
     private func makePayload() -> HistoryPayload {
         HistoryPayload(
-            version: 5,
+            version: 6,
             samples: samples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,

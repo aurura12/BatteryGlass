@@ -5,6 +5,8 @@
 ## [2026-09-30]
 
 ### 新增
+- 历史页新增两张图并替换静态「循环次数」卡片（删除 `HistoryMetricCard` 及 `HistoryView` 中仅供其使用的 `monitor` 注入与 `cycleCount`）：①「今日温度 / 电压曲线」——分段切换，分时展示当天（复用「今日电量曲线」骨架），并显示今日最高温与 ≥35°C 累计时长（跳过待机断点）、电压今日范围；②「循环次数趋势」——按天近 90 天展示每日最大循环次数（循环次数单调递增，斜率即损耗速率）。`HistorySample` 增 `temperatureCelsius`/`voltage`，`BatteryHistoryStore.record` 落盘；新增纯类型 `TodayMetric`/`TodayMetricChartData`(+Cache)/`MetricValueAxis`/`TodayTemperatureStats`/`CycleTrendData` 与测试 `HistoryMetricChartDataTests`。（`Models/HistorySample.swift`、`Stores/BatteryHistoryStore.swift`、`Views/HistoryView.swift`）
+- 历史 payload v5 → v6：`HistorySample` 新增可选 `temperatureCelsius`/`voltage`，经合成 `decodeIfPresent` 解码，旧文件缺键为 nil、无需迁移分支（`DailySummary` 不变）；`HistoryExporter` CSV 表头与采样行新增「温度(°C)/电压(V)」两列（汇总行留空），JSON 导出版本同步升至 6。（`Stores/BatteryHistoryStore.swift`、`Support/HistoryExporter.swift`、`HistoryExporterTests`、`HistoryPersistenceTests`）
 - 新增设置页「电源校准」录入 UI：采用**引导式校准会话**——点击「开始校准」后应用自动记录当前墙上能量计数器与时间，用户保持接通电源并用外接电表记录同期用电量，之后点击「完成校准」输入实测 kWh 即自动结算系数；支持查看/删除单条记录与清空全部记录。`PowerTelemetryCalibrationStore` 由 `struct` 改为 `@MainActor @Observable` 共享引用类型，在 `BatteryGlassApp` 中创建唯一实例并同时注入 `BatteryMonitor` 与设置页，**校准保存后睡眠能耗计量立即采用新系数，无需重启**；payload 升至 `v2`（新增可选 `session` 字段，旧文件解码为 nil、无需迁移分支）；新增 `PowerTelemetryEnergy.uncalibratedEnergyKWh(rawDelta:)` 作为未校准换算的唯一来源；`BatteryMonitor` 新增只读 `currentWallEnergyCounter`。当结算系数明显偏离常见范围（`0.05...20`）时二次确认，以防把 Wh 误当 kWh 输入。（`PowerTelemetryCalibration.swift`、`PowerTelemetryEnergy.swift`、`BatteryMonitor.swift`、`BatteryGlassApp.swift`、`Views/PowerCalibrationSection.swift`、`SettingsView.swift`）
 - 校准相关测试扩展：`PowerTelemetryCalibrationTests` 覆盖记录增删清空与落盘、按 context 选取最新生效记录、会话开始/结算成功、计数器重置/上下文变化/输入非法分支、会话跨实例持久化；`PowerTelemetryEnergyTests` 覆盖 `uncalibratedEnergyKWh`。测试类更新为 `@MainActor`。
 

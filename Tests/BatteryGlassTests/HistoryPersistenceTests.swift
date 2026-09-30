@@ -455,6 +455,48 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertTrue(store.sleepSegments.isEmpty)
     }
 
+    func testRecordPersistsTemperatureAndVoltageOnSample() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = BatteryHistoryStore(settings: AppSettings(defaults: defaults), fileURL: fileURL)
+        var snapshot = BatterySnapshot()
+        snapshot.isPresent = true
+        snapshot.state = .discharging
+        snapshot.percent = 50
+        snapshot.voltage = 12.34
+        snapshot.temperatureCelsius = 35.2
+        snapshot.cycleCount = 1
+        store.record(snapshot)
+        store.flush()
+
+        let data = try Data(contentsOf: fileURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(PersistedHistory.self, from: data)
+
+        XCTAssertEqual(payload.samples.last?.temperatureCelsius ?? 0, 35.2, accuracy: 0.0001)
+        XCTAssertEqual(payload.samples.last?.voltage ?? 0, 12.34, accuracy: 0.0001)
+    }
+
+    func testLegacySampleWithoutTemperatureVoltageDecodesToNil() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let sampleJSON = """
+        {"id":"00000000-0000-0000-0000-000000000001","timestamp":"2026-08-27T10:00:00Z","power":-20,"consumptionPowerW":24,"percent":50,"cycleCount":1,"healthPercent":100}
+        """
+        let sample = try decoder.decode(HistorySample.self, from: Data(sampleJSON.utf8))
+        XCTAssertNil(sample.temperatureCelsius)
+        XCTAssertNil(sample.voltage)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }
