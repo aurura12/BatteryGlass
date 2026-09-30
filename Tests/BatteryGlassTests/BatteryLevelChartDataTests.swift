@@ -145,6 +145,51 @@ final class BatteryLevelChartDataTests: XCTestCase {
         )
     }
 
+    // MARK: - 可见域 Y 轴（缩放）
+
+    func testVisibleYDomainAtFullRangeEqualsPrecomputedDomain() {
+        // 未缩放时可见样本就是全量样本，动态 Y 域必须与预计算域逐值相等，
+        // 保证加缩放不影响默认外观。
+        let calendar = gmtCalendar()
+        let start = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let samples = (0..<120).map { index in
+            sample(
+                at: start.addingTimeInterval(Double(index) * 600),
+                percent: Double(40 + index % 25)
+            )
+        }
+        let data = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 800)
+        let domain = BatteryLevelAxis.xDomain(now: samples.last!.timestamp, calendar: calendar)
+
+        let visible = ChartViewport.visibleSamples(data.samples, in: domain)
+
+        XCTAssertEqual(visible.count, data.samples.count)
+        XCTAssertEqual(BatteryLevelAxis.yDomain(for: visible.map(\.percent)), data.percentDomain)
+    }
+
+    func testZoomedVisibleYDomainIsNarrowerThanFullDay() {
+        let calendar = gmtCalendar()
+        let start = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let samples = (0..<288).map { index in
+            let percent = index < 72
+                ? Double(40 + index % 10)
+                : Double(80 + index % 10)
+            return sample(at: start.addingTimeInterval(Double(index) * 300), percent: percent)
+        }
+        let data = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 800)
+
+        let zoomedVisible = ChartViewport.visibleSamples(
+            data.samples,
+            in: start...start.addingTimeInterval(6 * 3_600)
+        )
+        let zoomedDomain = BatteryLevelAxis.yDomain(for: zoomedVisible.map(\.percent))
+
+        XCTAssertLessThan(
+            zoomedDomain.upperBound - zoomedDomain.lowerBound,
+            data.percentDomain.upperBound - data.percentDomain.lowerBound
+        )
+    }
+
     // MARK: - Helpers
 
     private func sample(at timestamp: Date, percent: Double) -> HistorySample {

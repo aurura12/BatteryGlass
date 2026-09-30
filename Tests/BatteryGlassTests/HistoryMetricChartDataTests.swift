@@ -201,4 +201,54 @@ final class HistoryMetricChartDataTests: XCTestCase {
         XCTAssertTrue(empty.values.isEmpty)
         XCTAssertEqual(empty.domain, 5...5)
     }
+
+    // MARK: - 可见域 Y 轴（缩放）
+
+    func testVisibleMetricDomainAtFullRangeEqualsFullDayDomain() {
+        // 未缩放时可见样本就是全量样本，动态 Y 域必须与预计算域一致。
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let samples = (0..<120).map { index in
+            HistorySample(
+                timestamp: start.addingTimeInterval(Double(index) * 600),
+                power: 10,
+                percent: 50,
+                cycleCount: 1,
+                healthPercent: 100,
+                temperatureCelsius: Double(30 + index % 12)
+            )
+        }
+        let data = TodayMetricChartData(samples: samples, metric: .temperature)
+        let domain = BatteryLevelAxis.xDomain(now: samples.last!.timestamp, calendar: calendar)
+
+        let visible = ChartViewport.visibleSamples(data.samples, in: domain)
+        let dynamicDomain = MetricValueAxis.yDomain(
+            for: visible.compactMap(\.temperatureCelsius)
+        )
+
+        XCTAssertEqual(visible.count, data.samples.count)
+        XCTAssertEqual(dynamicDomain, data.valueDomain)
+    }
+
+    func testZoomedVisibleMetricDomainNarrows() {
+        let samples = (0..<288).map { index in
+            let temperature = index < 72
+                ? Double(30 + index % 4)
+                : Double(60 + index % 4)
+            return sample(offset: Double(index) * 300, temperature: temperature)
+        }
+        let data = TodayMetricChartData(samples: samples, metric: .temperature)
+
+        let zoomed = ChartViewport.visibleSamples(
+            data.samples,
+            in: Date(timeIntervalSince1970: 1_700_000_000)...Date(timeIntervalSince1970: 1_700_000_000 + 6 * 3_600)
+        )
+        let dynamicDomain = MetricValueAxis.yDomain(for: zoomed.compactMap(\.temperatureCelsius))
+
+        XCTAssertLessThan(
+            dynamicDomain.upperBound - dynamicDomain.lowerBound,
+            data.valueDomain.upperBound - data.valueDomain.lowerBound
+        )
+    }
 }

@@ -3,11 +3,14 @@ import SwiftUI
 
 struct HistoryView: View {
     @Environment(BatteryHistoryStore.self) private var history
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var energyRange: EnergyHistoryRange = .fourteen
     // 面板以 2Hz 重渲染；用记忆化避免每次重算今日样本与曲线数据。
     @State private var todayCache = TodaySamplesCache()
     @State private var chartCache = PowerChartDataCache()
     @State private var levelChartCache = BatteryLevelChartDataCache()
+    /// 当前放大的曲线；nil 表示未放大。
+    @State private var expandedChart: ExpandedChart?
 
     private var todaySamples: [HistorySample] {
         todayCache.samples(from: history.samples)
@@ -21,31 +24,62 @@ struct HistoryView: View {
         levelChartCache.data(for: todaySamples)
     }
 
+    /// 跨天标识：变化时重置各图的缩放窗口。
+    private var dayKey: String { BatteryFormatters.dayKey(for: Date()) }
+
     var body: some View {
-        ScrollView {
-            VStack(spacing: DesignTokens.spacingM) {
-                DailyEnergyComparisonChart(
-                    summaries: energyRange.summaries(from: history),
-                    range: $energyRange
-                )
+        ZStack {
+            ScrollView {
+                VStack(spacing: DesignTokens.spacingM) {
+                    DailyEnergyComparisonChart(
+                        summaries: energyRange.summaries(from: history),
+                        range: $energyRange
+                    )
 
-                TodayPowerChart(
-                    chartData: chartData,
-                    sleepIntervals: history.sleepIntervals
-                )
-                // 跨天后以新的一天重建视图，重置时间滑块位置，
-                // 避免 @State scrollPosition 停留在昨天的滚动位置导致曲线窗口错乱。
-                .id(BatteryFormatters.dayKey(for: Date()))
+                    TodayPowerChart(
+                        chartData: chartData,
+                        sleepIntervals: history.sleepIntervals,
+                        dayKey: dayKey,
+                        onExpand: { expandedChart = .power }
+                    )
+                    // 跨天后以新的一天重建视图，重置时间滑块位置，
+                    // 避免 @State 停留在昨天的滚动位置导致曲线窗口错乱。
+                    .id(dayKey)
 
-                TodayBatteryLevelChart(
-                    chartData: levelChartData
-                )
+                    TodayBatteryLevelChart(
+                        chartData: levelChartData,
+                        dayKey: dayKey,
+                        onExpand: { expandedChart = .level }
+                    )
 
-                TodayMetricChart(samples: todaySamples)
+                    TodayMetricChart(
+                        samples: todaySamples,
+                        dayKey: dayKey,
+                        onExpand: { expandedChart = .metric }
+                    )
+                }
+                .padding(.bottom, DesignTokens.spacingXS)
             }
-            .padding(.bottom, DesignTokens.spacingXS)
+            .scrollIndicators(.hidden)
+
+            if let expandedChart {
+                ExpandedChartOverlay(
+                    kind: expandedChart,
+                    chartData: chartData,
+                    levelData: levelChartData,
+                    metricSamples: todaySamples,
+                    sleepIntervals: history.sleepIntervals,
+                    dayKey: dayKey,
+                    onClose: { self.expandedChart = nil }
+                )
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.96).combined(with: .opacity))
+                .zIndex(1)
+            }
         }
-        .scrollIndicators(.hidden)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.86),
+            value: expandedChart
+        )
     }
 }
 
@@ -536,41 +570,80 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let chartData: PowerChartData
     let sleepIntervals: [SleepInterval]
-    /// 曲线坐标（秒，已跳过断点）下的可滚动范围；数据不足一屏时为 nil。
-    let scrollRange: ClosedRange<Double>?
-    @State private var scrollPosition: Double
+    /// 跨天标识：变化时重置缩放窗口。
+    let dayKey: String
+    /// 绘图区高度；nil 表示撑满剩余空间（放大浮层内使用）。
+    let plotHeight: CGFloat?
+    /// 非 nil 时在标题栏提供「放大查看」入口。
+    let onExpand: (() -> Void)?
+
+    /// 用户设定的缩放窗口；nil 表示跟随默认（贴最新一屏）。
+    @State private var window: ChartZoomWindow?
     @State private var hoveredSample: HistorySample?
     @State private var hoverLocation: CGPoint?
     /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
     private let hoverMaximumGap: TimeInterval = 180
+    /// 放大下限：1 分钟（5 秒一条时约 12 个点）。
+    private static let minimumVisibleDuration: TimeInterval = 60
 
     private var energySamples: [HistorySample] { chartData.plotSamples }
 
-    init(chartData: PowerChartData, sleepIntervals: [SleepInterval]) {
+    init(
+        chartData: PowerChartData,
+        sleepIntervals: [SleepInterval],
+        dayKey: String = "",
+        plotHeight: CGFloat? = 138,
+        onExpand: (() -> Void)? = nil
+    ) {
         self.chartData = chartData
         self.sleepIntervals = sleepIntervals
-        let range = PowerChartWindow.scrollBounds(
-            timeline: chartData.timeline,
-            samples: chartData.plotSamples
-        )
-        self.scrollRange = range
-        self._scrollPosition = State(
-            initialValue: range?.upperBound
-                ?? chartData.timeline.position(for: chartData.plotSamples.last?.timestamp ?? Date())
-        )
+        self.dayKey = dayKey
+        self.plotHeight = plotHeight
+        self.onExpand = onExpand
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        // 帧内只算一次：这些计算属性含 O(样本数) 的筛选与 O(断点数) 的坐标换算，
+        // 若直接写进逐样本的 ForEach，会被放大到 O(n²)（卡顿主因）。
+        let activeWindow = effectiveWindow(for: window)
+        let chartDomain = activeWindow.domain
+        let dateDomain = visibleDateDomain(for: chartDomain)
+        let tickUnit = ChartTimeAxis.unit(
+            forSpan: dateDomain.upperBound.timeIntervalSince(dateDomain.lowerBound)
+        )
+        let tickFormat: Date.FormatStyle = tickUnit.includesMinutes
+            ? Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
+            : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
+        let marks = axisMarks(in: dateDomain, unit: tickUnit, chartDomain: chartDomain)
+        let segments = displaySegments(isZoomed: activeWindow.isZoomed, in: dateDomain)
+        let sliderRange = panRange(for: activeWindow)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
                 Text("今日功率曲线")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if scrollRange != nil {
+                if activeWindow.isZoomed {
+                    Text("已放大")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                } else if activeWindow.canPan {
                     Text("横向滚动查看")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
+                }
+                ChartZoomButton(kind: .zoomOut) {
+                    $window.zoom(by: 1 / ChartZoomButton.step, effective: activeWindow)
+                }
+                ChartZoomButton(kind: .zoomIn) {
+                    $window.zoom(by: ChartZoomButton.step, effective: activeWindow)
+                }
+                if window != nil {
+                    ChartZoomResetButton { window = nil }
+                }
+                if let onExpand {
+                    ChartExpandButton(action: onExpand)
                 }
             }
 
@@ -580,7 +653,7 @@ struct TodayPowerChart: View {
             } else {
                 VStack(spacing: 4) {
                     Chart {
-                        ForEach(Array(displaySegments.enumerated()), id: \.offset) { _, segment in
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                             ForEach(segment) { sample in
                                 AreaMark(
                                     x: .value("时间", chartData.timeline.position(for: sample.timestamp)),
@@ -631,16 +704,16 @@ struct TodayPowerChart: View {
                         AxisMarks(position: .leading)
                     }
                     .chartXAxis {
-                        AxisMarks(values: axisMarks.map(\.position)) { value in
+                        AxisMarks(values: marks.map(\.position)) { value in
                             if let position = value.as(Double.self),
-                               let mark = axisMarks.min(by: {
+                               let mark = marks.min(by: {
                                    abs($0.position - position) < abs($1.position - position)
                                }) {
                                 AxisGridLine().foregroundStyle(.clear)
                                 AxisTick()
                                 AxisValueLabel {
                                     if let date = mark.date {
-                                        Text(date, format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                                        Text(date, format: tickFormat)
                                     } else {
                                         Text("//")
                                             .font(.system(size: 9, weight: .bold, design: .rounded))
@@ -649,15 +722,37 @@ struct TodayPowerChart: View {
                             }
                         }
                     }
-                    .chartXScale(domain: visibleChartDomain)
+                    .chartXScale(domain: chartDomain)
                     .chartOverlay { proxy in
                         GeometryReader { geometry in
+                            let plot = proxy.overlayPlotRect(in: geometry)
                             ZStack(alignment: .topTrailing) {
-                                Rectangle()
-                                    .fill(.clear)
-                                    .onContinuousHover { phase in
-                                        updateHover(phase, proxy: proxy, geometry: geometry)
+                                ChartPlotEventCatcher(
+                                    onZoom: { factor, location in
+                                        window = activeWindow.zoomed(
+                                            by: Double(factor),
+                                            anchorFraction: ChartZoomGestureMath.anchorFraction(
+                                                for: location,
+                                                in: plot
+                                            )
+                                        )
+                                        clearHover()
+                                    },
+                                    onPan: { deltaX, _ in
+                                        window = activeWindow.panned(
+                                            by: ChartZoomGestureMath.panDelta(
+                                                points: deltaX,
+                                                plotWidth: plot.width,
+                                                span: activeWindow.span
+                                            )
+                                        )
+                                        clearHover()
+                                    },
+                                    onHover: { location in
+                                        updateHover(at: location, proxy: proxy, geometry: geometry)
                                     }
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                                 if let hoveredSample, let hoverLocation {
                                     hoverTooltip(for: hoveredSample)
@@ -667,18 +762,20 @@ struct TodayPowerChart: View {
                                         )
                                         .allowsHitTesting(false)
                                 }
-
                             }
                         }
                     }
-                    .frame(height: 138)
+                    .chartPlotHeight(plotHeight)
                     .accessibilityLabel("今日功率曲线")
                     .accessibilityValue(powerAccessibilitySummary)
 
-                    if let scrollRange {
+                    if activeWindow.canPan {
                         Slider(
-                            value: $scrollPosition,
-                            in: scrollRange
+                            value: Binding(
+                                get: { activeWindow.start },
+                                set: { window = activeWindow.moved(toStart: $0) }
+                            ),
+                            in: sliderRange
                         )
                         .controlSize(.small)
                         .tint(DesignTokens.dataBlue)
@@ -690,78 +787,76 @@ struct TodayPowerChart: View {
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
-        .onChange(of: scrollRange?.upperBound) { previousEnd, newEnd in
-            guard let previousEnd, let newEnd, previousEnd != newEnd,
-                  PowerChartWindow.shouldFollowLatest(
-                      currentPosition: scrollPosition,
-                      previousEnd: previousEnd
-                  ) else {
-                return
+        .onChange(of: dayKey) { _, _ in
+            window = nil
+        }
+        .onChange(of: bounds.upperBound) { _, _ in
+            guard let current = window else { return }
+            let rebased = current.rebased(to: bounds)
+            if rebased != current {
+                window = rebased
             }
-            scrollPosition = newEnd
         }
     }
 
-    /// 曲线坐标下的可见窗口：宽度固定（默认 2 小时），随滚动位置平移，
-    /// 因此拖动时间滑块时横向比例不变（不会出现拉伸/回缩）。
-    private var visibleChartDomain: ClosedRange<Double> {
-        let start = scrollRangeStart
-        guard let scrollRange else {
-            let end = chartData.plotSamples.isEmpty ? start + 1 : chartEnd
-            return start...max(start + 1, end)
+    /// 曲线坐标下的可缩放总范围（今日全部有效样本）。
+    private var bounds: ClosedRange<Double> {
+        let first = chartData.plotSamples.first.map { chartData.timeline.position(for: $0.timestamp) }
+        let last = chartData.plotSamples.last.map { chartData.timeline.position(for: $0.timestamp) }
+        guard let first, let last, last > first else {
+            let end = last ?? first ?? 0
+            return end...(end + 1)
         }
-        let lower = min(max(scrollPosition, scrollRange.lowerBound), scrollRange.upperBound)
-        return PowerChartWindow.visibleChartDomain(startingAt: lower, end: chartEnd)
+        return first...last
     }
 
-    /// 曲线坐标下今日首条有效样本的位置。
-    private var scrollRangeStart: Double {
-        chartData.plotSamples.first.map { chartData.timeline.position(for: $0.timestamp) }
-            ?? chartData.timeline.position(for: Date())
+    /// 当前生效的窗口：未交互时贴最新的默认窗口（宽度 2 小时），交互后为用户的窗口。
+    private func effectiveWindow(for stored: ChartZoomWindow?) -> ChartZoomWindow {
+        let base = ChartZoomWindow.latest(
+            bounds: bounds,
+            defaultSpan: PowerChartWindow.defaultVisibleDuration,
+            minimumSpan: Self.minimumVisibleDuration
+        )
+        return (stored ?? base).rebased(to: bounds)
     }
 
-    /// 曲线坐标下今日最后一条有效样本的位置。
-    private var chartEnd: Double {
-        chartData.plotSamples.last.map { chartData.timeline.position(for: $0.timestamp) }
-            ?? chartData.timeline.position(for: Date())
+    /// 时间滑块的可用范围（可见窗口起点）。
+    private func panRange(for window: ChartZoomWindow) -> ClosedRange<Double> {
+        let lower = bounds.lowerBound
+        return lower...max(lower, bounds.upperBound - window.span)
     }
 
     /// 可见窗口对应的真实时间范围，用于筛选要绘制的样本。
-    private var visibleDateDomain: ClosedRange<Date> {
-        let domain = visibleChartDomain
-        let lower = chartData.timeline.date(for: domain.lowerBound)
-        return lower...max(lower, chartData.timeline.date(for: domain.upperBound))
+    private func visibleDateDomain(for chartDomain: ClosedRange<Double>) -> ClosedRange<Date> {
+        let lower = chartData.timeline.date(for: chartDomain.lowerBound)
+        return lower...max(lower, chartData.timeline.date(for: chartDomain.upperBound))
     }
 
-    private var axisMarks: [PowerChartAxisMark] {
-        let domain = visibleDateDomain
-        var marks: [PowerChartAxisMark] = []
-        let calendar = Calendar.current
-        var date = calendar.dateInterval(of: .hour, for: domain.lowerBound)?.start
-
-        while let tick = date, tick <= domain.upperBound {
-            if tick >= domain.lowerBound, !chartData.timeline.isInsideBreak(tick) {
-                marks.append(
-                    PowerChartAxisMark(
-                        position: chartData.timeline.position(for: tick),
-                        date: tick
-                    )
-                )
-            }
-            date = calendar.date(byAdding: .hour, value: 1, to: tick)
+    private func axisMarks(
+        in dateDomain: ClosedRange<Date>,
+        unit: ChartTickUnit,
+        chartDomain: ClosedRange<Double>
+    ) -> [PowerChartAxisMark] {
+        var marks = ChartTimeAxis.marks(in: dateDomain, unit: unit).map { tick in
+            PowerChartAxisMark(position: chartData.timeline.position(for: tick), date: tick)
+        }
+        // 断点内的整点刻度会塌缩到跳变点、与断点标记重叠，直接剔除。
+        marks.removeAll { mark in
+            guard let date = mark.date else { return false }
+            return chartData.timeline.isInsideBreak(date)
         }
 
         let visibleBreaks = chartData.timeline.breaks.filter {
             $0.duration > 5
-                && $0.end > domain.lowerBound
-                && $0.start < domain.upperBound
+                && $0.end > dateDomain.lowerBound
+                && $0.start < dateDomain.upperBound
         }
         let markerStride = max(1, Int(ceil(Double(visibleBreaks.count) / 8)))
         for (index, interval) in visibleBreaks.enumerated() where index.isMultiple(of: markerStride) {
             // 断点不占宽度，标记直接画在跳变点上；断点起点在窗口左侧时钳到可见域左边缘。
             let position = min(
-                max(chartData.timeline.position(for: interval.start), visibleChartDomain.lowerBound),
-                visibleChartDomain.upperBound
+                max(chartData.timeline.position(for: interval.start), chartDomain.lowerBound),
+                chartDomain.upperBound
             )
             marks.append(PowerChartAxisMark(position: position, date: nil))
         }
@@ -770,9 +865,14 @@ struct TodayPowerChart: View {
     }
 
     /// 只画正功率样本；无读数点、长缺口和系统睡眠都会切成独立曲线段。
-    private var displaySegments: [[HistorySample]] {
-        chartData.plotSegments.flatMap { segment in
-            let visible = PowerChartWindow.samples(in: visibleDateDomain, from: segment)
+    /// 放大后改用未抽样的完整段，避免 800 点抽样在窄窗口内过于稀疏。
+    private func displaySegments(
+        isZoomed: Bool,
+        in dateDomain: ClosedRange<Date>
+    ) -> [[HistorySample]] {
+        let source = isZoomed ? chartData.fullSegments : chartData.plotSegments
+        return source.flatMap { segment in
+            let visible = PowerChartWindow.samples(in: dateDomain, from: segment)
             let filtered = PowerChartSegmentation.excludingSleepIntervals(
                 visible,
                 sleepIntervals: sleepIntervals
@@ -791,53 +891,50 @@ struct TodayPowerChart: View {
         return String(format: "最新 %.1f 瓦", power)
     }
 
+    /// 手势进行中清掉 tooltip，避免标记跟着手指停留。
+    private func clearHover() {
+        hoveredSample = nil
+        hoverLocation = nil
+    }
+
     private func updateHover(
-        _ phase: HoverPhase,
+        at location: CGPoint?,
         proxy: ChartProxy,
         geometry: GeometryProxy
     ) {
-        switch phase {
-        case .ended:
-            hoveredSample = nil
-            hoverLocation = nil
-        case .active(let location):
-            guard let plotFrame = proxy.plotFrame else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-
-            let frame = geometry[plotFrame]
-            guard frame.contains(location) else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-
-            let xPosition = location.x - frame.minX
-            guard let coordinate: Double = proxy.value(atX: xPosition) else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-            let timestamp = chartData.timeline.date(for: coordinate)
-
-            hoverLocation = location
-            guard let nearest = PowerChartInteraction.nearestSample(
-                to: timestamp,
-                from: energySamples
-            ) else {
-                hoveredSample = nil
-                return
-            }
-            // 待机缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
-            // 避免把待机前的功率误当成待机期间的测量值。
-            if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
-                hoveredSample = nil
-                return
-            }
-            hoveredSample = nearest
+        guard let location, let plotFrame = proxy.plotFrame else {
+            clearHover()
+            return
         }
+
+        let frame = geometry[plotFrame]
+        guard frame.contains(location) else {
+            clearHover()
+            return
+        }
+
+        let xPosition = location.x - frame.minX
+        guard let coordinate: Double = proxy.value(atX: xPosition) else {
+            clearHover()
+            return
+        }
+        let timestamp = chartData.timeline.date(for: coordinate)
+
+        hoverLocation = location
+        guard let nearest = PowerChartInteraction.nearestSample(
+            to: timestamp,
+            from: energySamples
+        ) else {
+            hoveredSample = nil
+            return
+        }
+        // 待机缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
+        // 避免把待机前的功率误当成待机期间的测量值。
+        if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+            hoveredSample = nil
+            return
+        }
+        hoveredSample = nearest
     }
 
     private func hoverTooltip(for sample: HistorySample) -> some View {
@@ -862,42 +959,137 @@ struct TodayPowerChart: View {
     }
 }
 
-/// 今日电量曲线：整日一屏展示，不做横向滚动，支持悬停查看时间与电量。
+/// 今日电量曲线：整日一屏展示，支持捏合缩放 / 拖动平移与悬停查看时间与电量。
 struct TodayBatteryLevelChart: View {
     let chartData: BatteryLevelChartData
+    /// 跨天标识：变化时重置缩放窗口。
+    let dayKey: String
+    /// 绘图区高度；nil 表示撑满剩余空间（放大浮层内使用）。
+    let plotHeight: CGFloat?
+    /// 非 nil 时在标题栏提供「放大查看」入口。
+    let onExpand: (() -> Void)?
+
+    /// 用户设定的缩放窗口；nil 表示整日。
+    @State private var window: ChartZoomWindow?
     @State private var hoveredSample: HistorySample?
     @State private var hoverLocation: CGPoint?
     /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
     private let hoverMaximumGap: TimeInterval = 180
+    /// 放大下限：5 分钟。
+    private static let minimumVisibleDuration: TimeInterval = 300
 
     private var samples: [HistorySample] { chartData.samples }
 
+    init(
+        chartData: BatteryLevelChartData,
+        dayKey: String = "",
+        plotHeight: CGFloat? = 138,
+        onExpand: (() -> Void)? = nil
+    ) {
+        self.chartData = chartData
+        self.dayKey = dayKey
+        self.plotHeight = plotHeight
+        self.onExpand = onExpand
+    }
+
     /// 以最后一条样本时间结尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
-    private var xDomain: ClosedRange<Date> {
+    private var fullDomain: ClosedRange<Date> {
         BatteryLevelAxis.xDomain(now: samples.last?.timestamp ?? Date())
     }
 
+    /// 可缩放总范围，换算成参考纪元秒（与 ChartZoomWindow 的坐标单位一致）。
+    private var bounds: ClosedRange<Double> {
+        let lower = fullDomain.lowerBound.timeIntervalSinceReferenceDate
+        let upper = fullDomain.upperBound.timeIntervalSinceReferenceDate
+        return lower...upper
+    }
+
+    /// 当前生效窗口：未交互时是整日，交互后为用户的窗口。
+    private func effectiveWindow(for stored: ChartZoomWindow?) -> ChartZoomWindow {
+        let base = ChartZoomWindow.fullRange(
+            bounds: bounds,
+            minimumSpan: Self.minimumVisibleDuration
+        )
+        return (stored ?? base).rebased(to: bounds)
+    }
+
+    /// 可见的真实时间域。
+    private func visibleDomain(for window: ChartZoomWindow) -> ClosedRange<Date> {
+        let lower = Date(timeIntervalSinceReferenceDate: window.start)
+        let upper = Date(timeIntervalSinceReferenceDate: max(window.start + 1, window.upper))
+        return lower...max(lower, upper)
+    }
+
+    /// Y 轴域：缩放后按可见样本重算；未缩放时沿用整日预计算域（两者输入集一致）。
+    private func yDomain(
+        for window: ChartZoomWindow,
+        in domain: ClosedRange<Date>
+    ) -> ClosedRange<Double> {
+        guard window.isZoomed else { return chartData.percentDomain }
+        let visible = ChartViewport.visibleSamples(samples, in: domain)
+        return BatteryLevelAxis.yDomain(for: visible.map(\.percent))
+    }
+
     /// 缺口处断开连线；待机期间不记录样本，故无需再按待机区间过滤。
-    private var displaySegments: [[HistorySample]] {
-        PowerChartSegmentation.splitByGaps(chartData.displayedSamples)
+    private func displaySegments(
+        for window: ChartZoomWindow,
+        in domain: ClosedRange<Date>
+    ) -> [[HistorySample]] {
+        let source = window.isZoomed
+            ? ChartViewport.visibleSamples(samples, in: domain, maximum: 800)
+            : chartData.displayedSamples
+        return PowerChartSegmentation.splitByGaps(source)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("今日电量曲线")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        // 帧内只算一次：若把 `yDomain` 这类计算属性直接写进逐样本的 ForEach，
+        // 每个样本都会重跑一遍 O(样本数) 的筛选，整体退化成 O(n²)（卡顿主因）。
+        let activeWindow = effectiveWindow(for: window)
+        let plotDomain = visibleDomain(for: activeWindow)
+        let plotYDomain = yDomain(for: activeWindow, in: plotDomain)
+        let segments = displaySegments(for: activeWindow, in: plotDomain)
+        let tickUnit = ChartTimeAxis.unit(
+            forSpan: plotDomain.upperBound.timeIntervalSince(plotDomain.lowerBound)
+        )
+        let tickFormat: Date.FormatStyle = tickUnit.includesMinutes
+            ? Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
+            : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("今日电量曲线")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if activeWindow.isZoomed {
+                    Text("已放大")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                ChartZoomButton(kind: .zoomOut) {
+                    $window.zoom(by: 1 / ChartZoomButton.step, effective: activeWindow)
+                }
+                ChartZoomButton(kind: .zoomIn) {
+                    $window.zoom(by: ChartZoomButton.step, effective: activeWindow)
+                }
+                if window != nil {
+                    ChartZoomResetButton { window = nil }
+                }
+                if let onExpand {
+                    ChartExpandButton(action: onExpand)
+                }
+            }
 
             if samples.isEmpty {
                 ChartEmptyPlaceholder("暂无今日数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
                 Chart {
-                    ForEach(Array(displaySegments.enumerated()), id: \.offset) { _, segment in
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                         ForEach(segment) { sample in
                             AreaMark(
                                 x: .value("时间", sample.timestamp),
-                                yStart: .value("电量下界", chartData.percentDomain.lowerBound),
+                                yStart: .value("电量下界", plotYDomain.lowerBound),
                                 yEnd: .value("电量", sample.percent)
                             )
                             .interpolationMethod(.linear)
@@ -932,8 +1124,8 @@ struct TodayBatteryLevelChart: View {
                         .symbolSize(36)
                     }
                 }
-                .chartXScale(domain: xDomain)
-                .chartYScale(domain: chartData.percentDomain)
+                .chartXScale(domain: plotDomain)
+                .chartYScale(domain: plotYDomain)
                 .chartYAxis {
                     AxisMarks(position: .leading) { value in
                         AxisGridLine()
@@ -946,20 +1138,42 @@ struct TodayBatteryLevelChart: View {
                     }
                 }
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
+                    AxisMarks(values: ChartTimeAxis.marks(in: plotDomain, unit: tickUnit)) { _ in
                         AxisGridLine().foregroundStyle(.clear)
                         AxisTick()
-                        AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                        AxisValueLabel(format: tickFormat)
                     }
                 }
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
+                        let plot = proxy.overlayPlotRect(in: geometry)
                         ZStack(alignment: .topTrailing) {
-                            Rectangle()
-                                .fill(.clear)
-                                .onContinuousHover { phase in
-                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                            ChartPlotEventCatcher(
+                                onZoom: { factor, location in
+                                    window = activeWindow.zoomed(
+                                        by: Double(factor),
+                                        anchorFraction: ChartZoomGestureMath.anchorFraction(
+                                            for: location,
+                                            in: plot
+                                        )
+                                    )
+                                    clearHover()
+                                },
+                                onPan: { deltaX, _ in
+                                    window = activeWindow.panned(
+                                        by: ChartZoomGestureMath.panDelta(
+                                            points: deltaX,
+                                            plotWidth: plot.width,
+                                            span: activeWindow.span
+                                        )
+                                    )
+                                    clearHover()
+                                },
+                                onHover: { location in
+                                    updateHover(at: location, proxy: proxy, geometry: geometry)
                                 }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                             if let hoveredSample, let hoverLocation {
                                 hoverTooltip(for: hoveredSample)
@@ -972,7 +1186,7 @@ struct TodayBatteryLevelChart: View {
                         }
                     }
                 }
-                .frame(height: 138)
+                .chartPlotHeight(plotHeight)
                 // Y 轴顶端刻度（如 100%）以刻度线为中心绘制，贴着绘图区上沿会被 .clipped()
                 // 裁掉上半个字并压到标题上；在图表外包一层顶部内边距给标签留出空间。
                 .padding(.top, 14)
@@ -983,6 +1197,9 @@ struct TodayBatteryLevelChart: View {
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+        .onChange(of: dayKey) { _, _ in
+            window = nil
+        }
     }
 
     /// VoiceOver 概要：最新一条电量样本。
@@ -991,52 +1208,49 @@ struct TodayBatteryLevelChart: View {
         return "最新电量 \(BatteryFormatters.percent(latest.percent))"
     }
 
+    /// 手势进行中清掉 tooltip，避免标记跟着手指停留。
+    private func clearHover() {
+        hoveredSample = nil
+        hoverLocation = nil
+    }
+
     private func updateHover(
-        _ phase: HoverPhase,
+        at location: CGPoint?,
         proxy: ChartProxy,
         geometry: GeometryProxy
     ) {
-        switch phase {
-        case .ended:
-            hoveredSample = nil
-            hoverLocation = nil
-        case .active(let location):
-            guard let plotFrame = proxy.plotFrame else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-
-            let frame = geometry[plotFrame]
-            guard frame.contains(location) else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-
-            let xPosition = location.x - frame.minX
-            guard let timestamp: Date = proxy.value(atX: xPosition) else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-
-            hoverLocation = location
-            guard let nearest = PowerChartInteraction.nearestSample(
-                to: timestamp,
-                from: samples
-            ) else {
-                hoveredSample = nil
-                return
-            }
-            // 缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
-            // 避免把待机前的电量误当成待机期间的读数。
-            if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
-                hoveredSample = nil
-                return
-            }
-            hoveredSample = nearest
+        guard let location, let plotFrame = proxy.plotFrame else {
+            clearHover()
+            return
         }
+
+        let frame = geometry[plotFrame]
+        guard frame.contains(location) else {
+            clearHover()
+            return
+        }
+
+        let xPosition = location.x - frame.minX
+        guard let timestamp: Date = proxy.value(atX: xPosition) else {
+            clearHover()
+            return
+        }
+
+        hoverLocation = location
+        guard let nearest = PowerChartInteraction.nearestSample(
+            to: timestamp,
+            from: samples
+        ) else {
+            hoveredSample = nil
+            return
+        }
+        // 缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
+        // 避免把待机前的电量误当成待机期间的读数。
+        if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+            hoveredSample = nil
+            return
+        }
+        hoveredSample = nearest
     }
 
     private func hoverTooltip(for sample: HistorySample) -> some View {
@@ -1262,8 +1476,17 @@ enum TodayTemperatureStats {
 /// 今日温度 / 电压分时曲线：整日一屏、分段切换，含最高温与高温累计时长等概览。
 struct TodayMetricChart: View {
     let samples: [HistorySample]
+    /// 跨天标识：变化时重置缩放窗口。
+    let dayKey: String
+    /// 绘图区高度；nil 表示撑满剩余空间（放大浮层内使用）。
+    let plotHeight: CGFloat?
+    /// 非 nil 时在标题栏提供「放大查看」入口。
+    let onExpand: (() -> Void)?
+
     @State private var metric: TodayMetric = .temperature
     @State private var cache = TodayMetricChartDataCache()
+    /// 用户设定的缩放窗口；nil 表示整日。
+    @State private var window: ChartZoomWindow?
     @State private var hoveredSample: HistorySample?
     @State private var hoverLocation: CGPoint?
 
@@ -1271,23 +1494,93 @@ struct TodayMetricChart: View {
     private let hoverMaximumGap: TimeInterval = 180
     /// 高温提示阈值（℃）。
     private static let highTemperatureThreshold: Double = 35
+    /// 放大下限：5 分钟。
+    private static let minimumVisibleDuration: TimeInterval = 300
+
+    init(
+        samples: [HistorySample],
+        dayKey: String = "",
+        plotHeight: CGFloat? = 138,
+        onExpand: (() -> Void)? = nil
+    ) {
+        self.samples = samples
+        self.dayKey = dayKey
+        self.plotHeight = plotHeight
+        self.onExpand = onExpand
+    }
 
     private var chartData: TodayMetricChartData {
         cache.data(for: samples, metric: metric)
     }
 
     /// 以最后一条样本时间结尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
-    private var xDomain: ClosedRange<Date> {
+    private var fullDomain: ClosedRange<Date> {
         BatteryLevelAxis.xDomain(now: samples.last?.timestamp ?? Date())
     }
 
+    /// 可缩放总范围，换算成参考纪元秒（与 ChartZoomWindow 的坐标单位一致）。
+    private var bounds: ClosedRange<Double> {
+        let lower = fullDomain.lowerBound.timeIntervalSinceReferenceDate
+        let upper = fullDomain.upperBound.timeIntervalSinceReferenceDate
+        return lower...upper
+    }
+
+    /// 当前生效窗口：未交互时是整日，交互后为用户的窗口。
+    private func effectiveWindow(for stored: ChartZoomWindow?) -> ChartZoomWindow {
+        let base = ChartZoomWindow.fullRange(
+            bounds: bounds,
+            minimumSpan: Self.minimumVisibleDuration
+        )
+        return (stored ?? base).rebased(to: bounds)
+    }
+
+    /// 可见的真实时间域。
+    private func visibleDomain(for window: ChartZoomWindow) -> ClosedRange<Date> {
+        let lower = Date(timeIntervalSinceReferenceDate: window.start)
+        let upper = Date(timeIntervalSinceReferenceDate: max(window.start + 1, window.upper))
+        return lower...max(lower, upper)
+    }
+
+    /// Y 轴域与刻度：缩放后按可见样本重算；未缩放时沿用整日预计算值。
+    private func yAxis(
+        for window: ChartZoomWindow,
+        in domain: ClosedRange<Date>
+    ) -> AxisTickScale {
+        guard window.isZoomed else { return chartData.axisTicks }
+        let visible = ChartViewport.visibleSamples(chartData.samples, in: domain)
+        let valueDomain = MetricValueAxis.yDomain(
+            for: visible.compactMap { metric.value(from: $0) }
+        )
+        return MetricValueAxis.ticks(in: valueDomain)
+    }
+
     /// 缺口处断开连线；待机期间不记录样本，故无需再按待机区间过滤。
-    private var displaySegments: [[HistorySample]] {
-        PowerChartSegmentation.splitByGaps(chartData.displayedSamples)
+    private func displaySegments(
+        for window: ChartZoomWindow,
+        in domain: ClosedRange<Date>
+    ) -> [[HistorySample]] {
+        let source = window.isZoomed
+            ? ChartViewport.visibleSamples(chartData.samples, in: domain, maximum: 800)
+            : chartData.displayedSamples
+        return PowerChartSegmentation.splitByGaps(source)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
+        // 帧内只算一次：若把 `yAxis` 直接写进逐样本的 ForEach，每个样本都会重跑
+        // 一遍 O(样本数) 的筛选 + 刻度字符串格式化（卡顿主因）。
+        let activeWindow = effectiveWindow(for: window)
+        let plotDomain = visibleDomain(for: activeWindow)
+        let plotYAxis = yAxis(for: activeWindow, in: plotDomain)
+        let segments = displaySegments(for: activeWindow, in: plotDomain)
+        let tickUnit = ChartTimeAxis.unit(
+            forSpan: plotDomain.upperBound.timeIntervalSince(plotDomain.lowerBound)
+        )
+        let tickFormat: Date.FormatStyle = tickUnit.includesMinutes
+            ? Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
+            : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
+        let metricTitle = metric.title
+
+        return VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
             Picker("指标", selection: $metric) {
                 ForEach(TodayMetric.allCases) { item in
                     Text(item.title).tag(item)
@@ -1296,24 +1589,46 @@ struct TodayMetricChart: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            if let statsText {
-                Text(statsText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                if let statsText {
+                    Text(statsText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if activeWindow.isZoomed {
+                    Text("已放大")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                ChartZoomButton(kind: .zoomOut) {
+                    $window.zoom(by: 1 / ChartZoomButton.step, effective: activeWindow)
+                }
+                ChartZoomButton(kind: .zoomIn) {
+                    $window.zoom(by: ChartZoomButton.step, effective: activeWindow)
+                }
+                if window != nil {
+                    ChartZoomResetButton { window = nil }
+                }
+                if let onExpand {
+                    ChartExpandButton(action: onExpand)
+                }
             }
+            .frame(minHeight: 14)
 
             if chartData.samples.isEmpty {
-                ChartEmptyPlaceholder("暂无今日\(metric.title)数据，应用运行后每 5 秒记录一次")
+                ChartEmptyPlaceholder("暂无今日\(metricTitle)数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
                 Chart {
-                    ForEach(Array(displaySegments.enumerated()), id: \.offset) { _, segment in
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                         ForEach(segment) { sample in
                             if let value = metric.value(from: sample) {
                                 AreaMark(
                                     x: .value("时间", sample.timestamp),
-                                    yStart: .value("下界", chartData.valueDomain.lowerBound),
-                                    yEnd: .value(metric.title, value)
+                                    yStart: .value("下界", plotYAxis.domain.lowerBound),
+                                    yEnd: .value(metricTitle, value)
                                 )
                                 .interpolationMethod(.linear)
                                 .foregroundStyle(
@@ -1326,7 +1641,7 @@ struct TodayMetricChart: View {
 
                                 LineMark(
                                     x: .value("时间", sample.timestamp),
-                                    y: .value(metric.title, value)
+                                    y: .value(metricTitle, value)
                                 )
                                 .interpolationMethod(.linear)
                                 .foregroundStyle(DesignTokens.dataBlue)
@@ -1342,40 +1657,62 @@ struct TodayMetricChart: View {
 
                         PointMark(
                             x: .value("时间", hoveredSample.timestamp),
-                            y: .value(metric.title, value)
+                            y: .value(metricTitle, value)
                         )
                         .foregroundStyle(DesignTokens.dataBlue)
                         .symbolSize(36)
                     }
                 }
-                .chartXScale(domain: xDomain)
-                .chartYScale(domain: chartData.valueDomain)
+                .chartXScale(domain: plotDomain)
+                .chartYScale(domain: plotYAxis.domain)
                 .chartYAxis {
-                    AxisMarks(position: .leading, values: chartData.axisTicks.values) { value in
+                    AxisMarks(position: .leading, values: plotYAxis.values) { value in
                         AxisGridLine()
                         AxisTick()
                         AxisValueLabel {
                             if let raw = value.as(Double.self) {
-                                Text(chartData.axisTicks.label(for: raw))
+                                Text(plotYAxis.label(for: raw))
                             }
                         }
                     }
                 }
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
+                    AxisMarks(values: ChartTimeAxis.marks(in: plotDomain, unit: tickUnit)) { _ in
                         AxisGridLine().foregroundStyle(.clear)
                         AxisTick()
-                        AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .omitted)))
+                        AxisValueLabel(format: tickFormat)
                     }
                 }
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
+                        let plot = proxy.overlayPlotRect(in: geometry)
                         ZStack(alignment: .topTrailing) {
-                            Rectangle()
-                                .fill(.clear)
-                                .onContinuousHover { phase in
-                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                            ChartPlotEventCatcher(
+                                onZoom: { factor, location in
+                                    window = activeWindow.zoomed(
+                                        by: Double(factor),
+                                        anchorFraction: ChartZoomGestureMath.anchorFraction(
+                                            for: location,
+                                            in: plot
+                                        )
+                                    )
+                                    clearHover()
+                                },
+                                onPan: { deltaX, _ in
+                                    window = activeWindow.panned(
+                                        by: ChartZoomGestureMath.panDelta(
+                                            points: deltaX,
+                                            plotWidth: plot.width,
+                                            span: activeWindow.span
+                                        )
+                                    )
+                                    clearHover()
+                                },
+                                onHover: { location in
+                                    updateHover(at: location, proxy: proxy, geometry: geometry)
                                 }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                             if let hoveredSample,
                                let hoverLocation,
@@ -1390,16 +1727,19 @@ struct TodayMetricChart: View {
                         }
                     }
                 }
-                .frame(height: 138)
+                .chartPlotHeight(plotHeight)
                 // Y 轴顶端刻度以刻度线为中心绘制，贴着绘图区上沿会被 .clipped() 裁掉半行字。
                 .padding(.top, 14)
                 .clipped()
-                .accessibilityLabel("今日\(metric.title)曲线")
+                .accessibilityLabel("今日\(metricTitle)曲线")
                 .accessibilityValue(accessibilitySummary)
             }
         }
         .padding(DesignTokens.spacingM)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+        .onChange(of: dayKey) { _, _ in
+            window = nil
+        }
     }
 
     /// 概览：温度显示今日最高与高温累计时长，电压显示今日范围。
@@ -1428,46 +1768,43 @@ struct TodayMetricChart: View {
         return "最新 \(metric.valueLabel(for: value))"
     }
 
+    /// 手势进行中清掉 tooltip，避免标记跟着手指停留。
+    private func clearHover() {
+        hoveredSample = nil
+        hoverLocation = nil
+    }
+
     private static func durationText(_ interval: TimeInterval) -> String {
         let minutes = Int((interval / 60).rounded())
         guard minutes >= 60 else { return "\(minutes) 分" }
         return "\(minutes / 60) 小时 \(minutes % 60) 分"
     }
 
-    private func updateHover(_ phase: HoverPhase, proxy: ChartProxy, geometry: GeometryProxy) {
-        switch phase {
-        case .ended:
-            hoveredSample = nil
-            hoverLocation = nil
-        case .active(let location):
-            guard let plotFrame = proxy.plotFrame else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-            let frame = geometry[plotFrame]
-            guard frame.contains(location) else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-            let xPosition = location.x - frame.minX
-            guard let timestamp: Date = proxy.value(atX: xPosition) else {
-                hoveredSample = nil
-                hoverLocation = nil
-                return
-            }
-            hoverLocation = location
-            guard let nearest = PowerChartInteraction.nearestSample(to: timestamp, from: chartData.samples) else {
-                hoveredSample = nil
-                return
-            }
-            if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
-                hoveredSample = nil
-                return
-            }
-            hoveredSample = nearest
+    private func updateHover(at location: CGPoint?, proxy: ChartProxy, geometry: GeometryProxy) {
+        guard let location, let plotFrame = proxy.plotFrame else {
+            clearHover()
+            return
         }
+        let frame = geometry[plotFrame]
+        guard frame.contains(location) else {
+            clearHover()
+            return
+        }
+        let xPosition = location.x - frame.minX
+        guard let timestamp: Date = proxy.value(atX: xPosition) else {
+            clearHover()
+            return
+        }
+        hoverLocation = location
+        guard let nearest = PowerChartInteraction.nearestSample(to: timestamp, from: chartData.samples) else {
+            hoveredSample = nil
+            return
+        }
+        if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+            hoveredSample = nil
+            return
+        }
+        hoveredSample = nearest
     }
 
     private func hoverTooltip(for sample: HistorySample, value: Double) -> some View {
@@ -1498,6 +1835,8 @@ struct PowerChartData {
     let plotSamples: [HistorySample]
     /// Renderable runs split at no-power samples before downsampling.
     let plotSegments: [[HistorySample]]
+    /// 未抽样的完整连续段：放大到窄窗口时用它渲染，避免 800 点抽样在细节区间过稀。
+    let fullSegments: [[HistorySample]]
 
     let energySamples: [HistorySample]
     let chartSamples: [HistorySample]
@@ -1523,6 +1862,7 @@ struct PowerChartData {
             sleepIntervals: sleepIntervals
         )
         self.timeline = PowerChartTimeline(segments: validSegments)
+        self.fullSegments = validSegments
         let plotSegments = Self.downsampleSegments(
             validSegments,
             maximumDisplayedSamples: maximumDisplayedSamples

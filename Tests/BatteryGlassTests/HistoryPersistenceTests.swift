@@ -232,7 +232,10 @@ final class HistoryPersistenceTests: XCTestCase {
             settings: AppSettings(defaults: defaults),
             fileURL: fileURL
         )
-        let start = Date()
+        // 起点锚定在「当天 10:00」而不是 `Date()`：若直接用当前时刻，在临近本地午夜
+        // 运行时间隔会跨天，能量被按天切分，本用例会假失败（实测 23:12 运行时只剩
+        // 跨天前的约 48 分钟能量）。
+        let start = Calendar.current.startOfDay(for: Date()).addingTimeInterval(10 * 3_600)
         let end = start.addingTimeInterval(3600)
         store.record(snapshot(at: start, cycleCount: 1))
         NotificationCenter.default.post(
