@@ -55,7 +55,7 @@ enum BatteryFormatters {
         xAxisDayFormatter.string(from: date)
     }
 
-    /// 历史曲线的日期标签：今天 → 「今日」，昨天 → 「昨天」，其余 → 「M/d」。
+    /// 历史曲线的日期标签：今日 / 昨天 / M/d，跨年份时包含年份。
     static func historyDayLabel(
         _ day: Date,
         now: Date = Date(),
@@ -67,7 +67,14 @@ enum BatteryFormatters {
            calendar.isDate(day, inSameDayAs: yesterday) {
             return "昨天"
         }
-        return xAxisDayLabel(day)
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        guard let year = components.year, let month = components.month, let dayOfMonth = components.day else {
+            return xAxisDayLabel(day)
+        }
+        if year != calendar.component(.year, from: now) {
+            return "\(year)/\(month)/\(dayOfMonth)"
+        }
+        return "\(month)/\(dayOfMonth)"
     }
 
     /// 柱状图横轴月份标签："2026-08"。

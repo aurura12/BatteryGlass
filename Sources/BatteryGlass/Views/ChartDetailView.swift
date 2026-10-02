@@ -68,14 +68,13 @@ struct ChartDetailView: View {
     /// 选择变化回调，供窗口同步标题。
     let onSelectionChange: (ExpandedChart, Date) -> Void
 
-    @State private var todayCache = TodaySamplesCache()
     @State private var chartCache = PowerChartDataCache()
     @State private var levelChartCache = BatteryLevelChartDataCache()
 
     /// 可选日期与前后一天导航。
     private var daySelection: HistoryDaySelection {
         HistoryDaySelection(
-            days: HistoryRetention.availableDays(from: history.samples),
+            days: history.availableDays(),
             selected: model.selectedDay
         )
     }
@@ -92,7 +91,7 @@ struct ChartDetailView: View {
 
     var body: some View {
         let days = daySelection
-        let samples = todayCache.samples(from: history.samples, day: days.selected)
+        let samples = history.samples(forDay: days.selected)
 
         return VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
             HStack(spacing: DesignTokens.spacingM) {

@@ -3,6 +3,20 @@ import XCTest
 @testable import BatteryGlass
 
 final class HistoryRetentionTests: XCTestCase {
+    func testDefaultRetentionKeepsYearsOfHistoryAtMinuteResolution() {
+        let oldest = date("2020-01-01 12:00:00")
+        let now = date("2026-08-27 12:00:00")
+        let kept = HistoryRetention.retainedSamples([
+            historySample(at: oldest),
+            historySample(at: oldest.addingTimeInterval(55)),
+            historySample(at: oldest.addingTimeInterval(60)),
+            historySample(at: now),
+            historySample(at: now.addingTimeInterval(5))
+        ], now: now, calendar: utcCalendar())
+
+        XCTAssertEqual(kept.map(\.timestamp), [oldest.addingTimeInterval(55), oldest.addingTimeInterval(60), now, now.addingTimeInterval(5)])
+    }
+
     // MARK: - retainedSamples
 
     func testRetentionKeepsAllTodayAndThinsOlderToLastOfBucket() {

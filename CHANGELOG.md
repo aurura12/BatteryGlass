@@ -2,6 +2,12 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-10-02]
+
+### 新增
+- 历史曲线改为**长期保留**：新增 `Stores/HistorySampleArchive.swift`（系统 SQLite3，无第三方依赖）把往日样本按「epoch 分钟」为 PRIMARY KEY 归档到 `history.sqlite`（每分钟最后一条；`BEGIN IMMEDIATE` 事务、upsert 幂等、失败 `ROLLBACK` 不半写），`history.json` 热层只保留「今天 + 跨午夜前最后一条」并升至 payload **v7**（旧文件迁移前备份 `history.legacy.json`）。`pruneHistory()` 改为「先写归档、成功后再从热层淘汰」；图表按需读取单日（`BatteryHistoryStore.samples(forDay:)`，归档 + 热层合并并记忆化），`availableDays()` 取归档索引与热层的并集，`allCurveSamples()` 供导出全量读取。设置页导出与清空历史相应改走归档（清空同时删除 `history.sqlite` 与 `history.legacy.json`），放大窗口日期集合改用 `history.availableDays()`，跨年份日期标签显示年份。（`Stores/HistorySampleArchive.swift`、`Stores/BatteryHistoryStore.swift`、`Support/Formatters.swift`、`Support/HistoryExporter.swift`、`Views/ChartDetailView.swift`、`Views/SettingsView.swift`、`README.md`）
+- 新增测试 `HistorySampleArchiveTests`（分钟 upsert 幂等、按时区与跨午夜查询、DST 边界、失败批次回滚）与 `LongTermHistoryTests`（旧版迁移与备份、跨天归档与重启后细粒度/能量边界、超大归档按需加载、清空、迁移失败重试、损坏热层文件不被覆盖）；`HistoryRetentionTests`、`BatteryFormattersTests` 补充长期保留与跨年标签用例。
+
 ## [2026-09-30]
 
 ### 新增

@@ -2,7 +2,7 @@ import Foundation
 
 /// 历史数据导出：纯函数生成 CSV / JSON 文本，便于单元测试。
 enum HistoryExporter {
-    /// 生成包含保留原始采样与完整每日汇总的 CSV，避免高频采样长期累积导致文件无限增长。
+    /// 生成包含长期曲线采样与完整每日汇总的 CSV。
     static func csvString(
         samples: [HistorySample],
         dailySummaries: [DailySummary]
@@ -48,7 +48,7 @@ enum HistoryExporter {
         return ([Self.extendedHeader] + sampleRows + summaryRows).joined(separator: "\n")
     }
 
-    /// 生成 JSON（与 history.json 相同结构，版本 6，含每日汇总、待机区间与睡眠边界）。
+    /// 生成可独立读取的版本 6 JSON，包含全部曲线、每日汇总与睡眠边界。
     static func jsonString(
         samples: [HistorySample],
         dailySummaries: [DailySummary],

@@ -23,4 +23,14 @@ final class BatteryFormattersTests: XCTestCase {
         XCTAssertEqual(BatteryFormatters.xAxisDayLabel(date), "8/30")
         XCTAssertEqual(BatteryFormatters.xAxisMonthLabel(date), "2026-08")
     }
+
+    func testHistoryDateIncludesYearForOlderYearsAndUsesRequestedTimeZone() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_788_048_000) // 2026-08-30 12:00 UTC
+        let older = calendar.date(from: DateComponents(year: 2025, month: 8, day: 30))!
+        XCTAssertEqual(BatteryFormatters.historyDayLabel(older, now: now, calendar: calendar), "2025/8/30")
+        let sameYear = calendar.date(from: DateComponents(year: 2026, month: 8, day: 25))!
+        XCTAssertEqual(BatteryFormatters.historyDayLabel(sameYear, now: now, calendar: calendar), "8/25")
+    }
 }

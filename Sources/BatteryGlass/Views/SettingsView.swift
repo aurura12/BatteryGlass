@@ -111,6 +111,9 @@ struct SettingsView: View {
 
             Section("数据与历史") {
                 Toggle("记录充放电历史", isOn: $settings.recordHistory)
+                Text("曲线长期保留：当天约每 5 秒记录一次，往日每分钟保留一个数据点。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Button("清空历史数据", role: .destructive) {
                     showingClearHistoryConfirmation = true
                 }
@@ -186,7 +189,7 @@ struct SettingsView: View {
         .alert("导出失败", isPresented: $showingExportErrorAlert) {
             Button("好", role: .cancel) {}
         } message: {
-            Text("无法写入导出文件，请检查目标位置是否可写。")
+            Text("无法读取历史或写入导出文件，请检查数据文件与目标位置是否可访问。")
         }
     }
 
@@ -229,15 +232,16 @@ struct SettingsView: View {
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        let content = asCSV
-            ? HistoryExporter.csvString(samples: history.samples, dailySummaries: history.dailySummaries)
-            : HistoryExporter.jsonString(
-                samples: history.samples,
-                dailySummaries: history.dailySummaries,
-                sleepSegments: history.sleepSegments,
-                sleepIntervals: history.sleepIntervals
-            )
         do {
+            let samples = try history.allCurveSamples()
+            let content = asCSV
+                ? HistoryExporter.csvString(samples: samples, dailySummaries: history.dailySummaries)
+                : HistoryExporter.jsonString(
+                    samples: samples,
+                    dailySummaries: history.dailySummaries,
+                    sleepSegments: history.sleepSegments,
+                    sleepIntervals: history.sleepIntervals
+                )
             try content.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             showingExportErrorAlert = true

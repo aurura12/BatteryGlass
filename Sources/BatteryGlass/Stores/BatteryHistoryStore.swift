@@ -9,9 +9,24 @@ final class BatteryHistoryStore {
     private(set) var dailySummaries: [DailySummary] = []
     private(set) var sleepSegments: [SleepSegment] = []
     private(set) var sleepIntervals: [SleepInterval] = []
+    private(set) var archivedDays: [Date] = []
 
     private let settings: AppSettings
     private let fileURL: URL
+    private let archive: HistorySampleArchive
+    private let currentDate: () -> Date
+    private var needsLegacyBackup = false
+    private var canPersist = true
+    @ObservationIgnored private var cachedArchiveDay: Date?
+    @ObservationIgnored private var cachedArchiveSamples: [HistorySample] = []
+    @ObservationIgnored private var cachedMergedSamples: [HistorySample] = []
+    @ObservationIgnored private var cachedLiveCount = -1
+    @ObservationIgnored private var cachedLiveLastID: UUID?
+    @ObservationIgnored private var cachedAsOfDay: Date?
+    @ObservationIgnored private var cachedAvailableDays: [Date] = []
+    @ObservationIgnored private var cachedAvailableDaysCount = -1
+    @ObservationIgnored private var cachedAvailableDaysLastID: UUID?
+    @ObservationIgnored private var cachedArchivedDayCount = -1
     private var observer: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
     private var sleepSegmentObserver: NSObjectProtocol?
@@ -30,19 +45,26 @@ final class BatteryHistoryStore {
     private var lastPersistenceScheduledAt = Date.distantPast
     private let persistenceInterval: TimeInterval = 15
 
-    /// 保留的原始样本天数（含今天）；配合 `olderSampleResolution` 使条数与体积远低于加载上限。
-    private static let retentionDays = 7
     /// 往日样本的降采样间隔：今天保持原生 ~5 秒精度，往日 1 分钟一条。
     private static let olderSampleResolution: TimeInterval = 60
 
-    init(settings: AppSettings, fileURL: URL? = nil) {
+    init(settings: AppSettings, fileURL: URL? = nil, now: @escaping () -> Date = { Date() }) {
         self.settings = settings
+        self.currentDate = now
+        let resolvedURL: URL
         if let fileURL {
-            self.fileURL = fileURL
+            resolvedURL = fileURL
         } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
                 ?? FileManager.default.temporaryDirectory
-            self.fileURL = base.appendingPathComponent("BatteryGlass/history.json", isDirectory: false)
+            resolvedURL = base.appendingPathComponent("BatteryGlass/history.json", isDirectory: false)
+        }
+        self.fileURL = resolvedURL
+        self.archive = HistorySampleArchive(fileURL: resolvedURL.deletingPathExtension().appendingPathExtension("sqlite"))
+        do {
+            archivedDays = try archive.availableDays()
+        } catch {
+            NSLog("BatteryGlass: 曲线归档读取失败 - %@", error.localizedDescription)
         }
         load()
 
@@ -106,7 +128,7 @@ final class BatteryHistoryStore {
     func record(_ snapshot: BatterySnapshot) {
         guard settings.recordHistory, snapshot.isPresent else { return }
 
-        let now = Date()
+        let now = currentDate()
         let significantChange = snapshot.cycleCount != lastCycleCount || snapshot.healthPercent != lastHealth
         guard now.timeIntervalSince(lastRecord) >= 5 || significantChange else { return }
 
@@ -196,6 +218,60 @@ final class BatteryHistoryStore {
         dailySummaries
     }
 
+    /// Dates come from the archive index and the small live buffer, not all historical rows.
+    func availableDays() -> [Date] {
+        if cachedAvailableDaysCount != samples.count || cachedAvailableDaysLastID != samples.last?.id
+            || cachedArchivedDayCount != archivedDays.count {
+            cachedAvailableDays = Array(Set(archivedDays + HistoryRetention.availableDays(from: samples))).sorted()
+            cachedAvailableDaysCount = samples.count
+            cachedAvailableDaysLastID = samples.last?.id
+            cachedArchivedDayCount = archivedDays.count
+        }
+        return cachedAvailableDays
+    }
+
+    /// Keep one archived day in memory. The live buffer remains observable for today's chart.
+    func samples(forDay day: Date) -> [HistorySample] {
+        let start = Calendar.current.startOfDay(for: day)
+        if cachedArchiveDay != start {
+            do {
+                cachedArchiveSamples = try persistenceQueue.sync { try archive.samples(forDay: start) }
+                cachedArchiveDay = start
+                cachedLiveCount = -1
+            } catch {
+                NSLog("BatteryGlass: 曲线读取失败 - %@", error.localizedDescription)
+                cachedArchiveSamples = []
+                cachedArchiveDay = nil
+                cachedLiveCount = -1
+            }
+        }
+        let today = Calendar.current.startOfDay(for: currentDate())
+        if cachedLiveCount != samples.count || cachedLiveLastID != samples.last?.id || cachedAsOfDay != today {
+            cachedMergedSamples = mergedSamples(
+                cachedArchiveSamples, HistoryRetention.samples(forDay: start, from: samples)
+            )
+            cachedLiveCount = samples.count
+            cachedLiveLastID = samples.last?.id
+            cachedAsOfDay = today
+        }
+        return cachedMergedSamples
+    }
+
+    /// Export explicitly reads the complete archive; normal charting only reads one day.
+    func allCurveSamples() throws -> [HistorySample] {
+        let archived = try persistenceQueue.sync { try archive.allSamples() }
+        return mergedSamples(archived, samples)
+    }
+
+    private func mergedSamples(_ archived: [HistorySample], _ live: [HistorySample]) -> [HistorySample] {
+        var byID = Dictionary(archived.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        for sample in live { byID[sample.id] = sample }
+        return HistoryRetention.retainedSamples(
+            Array(byID.values), now: currentDate(), retentionDays: nil,
+            olderResolution: Self.olderSampleResolution
+        )
+    }
+
     func clearHistory() {
         samples = []
         dailySummaries = []
@@ -209,18 +285,31 @@ final class BatteryHistoryStore {
         lastRecord = .distantPast
         lastCycleCount = -1
         lastHealth = nil
+        archivedDays = []
+        cachedArchiveDay = nil
+        cachedArchiveSamples = []
+        cachedMergedSamples = []
+        cachedLiveCount = -1
+        cachedAvailableDaysCount = -1
+        needsLegacyBackup = false
+        canPersist = true
         persistenceQueue.sync {
             try? FileManager.default.removeItem(at: fileURL)
+            try? archive.remove()
+            try? FileManager.default.removeItem(at: Self.legacyBackupURL(for: fileURL))
         }
     }
 
     /// 退出前同步写入最新快照，避免异步保存尚未执行就结束进程。
     func flush() {
+        guard canPersist else { return }
         let payload = makePayload()
         let fileURL = self.fileURL
-        persistenceQueue.sync {
-            Self.write(payload, to: fileURL)
+        let today = Calendar.current.startOfDay(for: currentDate())
+        let didWrite = persistenceQueue.sync {
+            Self.write(payload, to: fileURL, archive: archive, today: today, backupLegacy: needsLegacyBackup)
         }
+        if didWrite { needsLegacyBackup = false }
     }
 
     // MARK: - 持久化
@@ -238,17 +327,19 @@ final class BatteryHistoryStore {
     }
 
     private func load() {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         guard let data = BoundedFileReader.read(
             at: fileURL,
             maximumBytes: HistoryLoadLimits.maxHistoryFileBytes
-        ) else { return }
+        ) else { canPersist = false; return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let payload = try? decoder.decode(HistoryPayload.self, from: data) else { return }
+        guard let payload = try? decoder.decode(HistoryPayload.self, from: data) else { canPersist = false; return }
         guard HistoryLoadLimits.acceptsHistory(
             sampleCount: payload.samples.count,
             summaryCount: payload.dailySummaries.count
-        ) else { return }
+        ), payload.version <= 7 else { canPersist = false; return }
+        needsLegacyBackup = payload.version < 7
         samples = payload.samples
         if payload.version >= 2 {
             // 统一按日期升序，保证依赖顺序的 suffix/UI 取最近 N 天正确。
@@ -262,7 +353,7 @@ final class BatteryHistoryStore {
         sleepIntervals = (payload.sleepIntervals ?? []).filter { $0.end > $0.start }
         let sanitizedSummaries = DailyEnergySummaryPolicy.markSparseLegacySummariesIncomplete(
             dailySummaries,
-            todayKey: BatteryFormatters.dayKey(for: Date()),
+            todayKey: BatteryFormatters.dayKey(for: currentDate()),
             dayKeysWithSleepEnergy: dayKeysWithSleepEnergy(in: dailySummaries)
         )
         let summariesChanged = sanitizedSummaries != dailySummaries
@@ -279,17 +370,17 @@ final class BatteryHistoryStore {
             samples = recovery.samples
             let recalculatedDayKeys = updateEnergySummaries(
                 from: samples,
-                allowedDayKeys: [BatteryFormatters.dayKey(for: Date())]
+                allowedDayKeys: [BatteryFormatters.dayKey(for: currentDate())]
             )
             // 只有重算确实覆盖了今天，才需要把睡眠份额补回去。若今天没有可积分的
             // 相邻样本，reconcile 会保留已持久化的日值；再次累加睡眠份额会造成重计。
-            let todayKey = BatteryFormatters.dayKey(for: Date())
+            let todayKey = BatteryFormatters.dayKey(for: currentDate())
             if recalculatedDayKeys.contains(todayKey) {
-                restoreSleepEnergy(forToday: Date())
+                restoreSleepEnergy(forToday: currentDate())
             }
         }
 
-        lastRecordedSample = samples.last
+        lastRecordedSample = samples.max { $0.timestamp < $1.timestamp }
         lastSamplesPrunedDay = nil
         pruneHistory()
 
@@ -300,20 +391,26 @@ final class BatteryHistoryStore {
     }
 
     private func persist() {
-        let now = Date()
+        guard canPersist else { return }
+        let now = currentDate()
         guard now.timeIntervalSince(lastPersistenceScheduledAt) >= persistenceInterval else { return }
         lastPersistenceScheduledAt = now
 
         let payload = makePayload()
         let fileURL = self.fileURL
+        let archive = self.archive
+        let today = Calendar.current.startOfDay(for: now)
+        // Migration must finish synchronously before ordinary background writes can replace
+        // the legacy file, even if an earlier attempt failed.
+        guard !needsLegacyBackup else { flush(); return }
         persistenceQueue.async {
-            Self.write(payload, to: fileURL)
+            Self.write(payload, to: fileURL, archive: archive, today: today, backupLegacy: false)
         }
     }
 
     private func makePayload() -> HistoryPayload {
         HistoryPayload(
-            version: 6,
+            version: 7,
             samples: samples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,
@@ -321,34 +418,74 @@ final class BatteryHistoryStore {
         )
     }
 
-    nonisolated private static func write(_ payload: HistoryPayload, to fileURL: URL) {
+    nonisolated private static func legacyBackupURL(for fileURL: URL) -> URL {
+        fileURL.deletingPathExtension().appendingPathExtension("legacy.json")
+    }
+
+    nonisolated private static func liveSamples(_ samples: [HistorySample], today: Date) -> [HistorySample] {
+        // The last pre-midnight point is required for energy integration after a restart.
+        let previous = samples.last(where: { $0.timestamp < today })
+        return (previous.map { [$0] } ?? []) + samples.filter { $0.timestamp >= today }
+    }
+
+    @discardableResult
+    nonisolated private static func write(
+        _ payload: HistoryPayload, to fileURL: URL, archive: HistorySampleArchive,
+        today: Date, backupLegacy: Bool
+    ) -> Bool {
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
+            if backupLegacy {
+                let backup = legacyBackupURL(for: fileURL)
+                if !FileManager.default.fileExists(atPath: backup.path) {
+                    try FileManager.default.copyItem(at: fileURL, to: backup)
+                }
+            }
+            // Commit archival rows before replacing the live snapshot. A crash between the
+            // two writes is safe: the next attempt upserts the same minute buckets.
+            try archive.store(payload.samples.filter { $0.timestamp < today })
+            var livePayload = payload
+            livePayload.samples = liveSamples(payload.samples, today: today)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.sortedKeys]
-            let data = try encoder.encode(payload)
+            let data = try encoder.encode(livePayload)
             try data.write(to: fileURL, options: .atomic)
+            return true
         } catch {
             NSLog("BatteryGlass: 历史记录保存失败 - %@", error.localizedDescription)
+            return false
         }
     }
 
     private func pruneHistory() {
         dailySummaries = DailyEnergySummaryPolicy.retainedSummaries(dailySummaries)
 
-        let today = Calendar.current.startOfDay(for: Date())
+        guard canPersist else { return }
+        let today = Calendar.current.startOfDay(for: currentDate())
         guard lastSamplesPrunedDay != today else { return }
-        // 保留近 7 天：今天原生精度，往日降到 1 分钟（详见 HistoryRetention.retainedSamples）。
+        // Retain every historical minute; eviction only removes rows from the live buffer
+        // after the archive and new snapshot have both been saved successfully.
         samples = HistoryRetention.retainedSamples(
             samples,
-            now: Date(),
-            retentionDays: Self.retentionDays,
+            now: currentDate(),
+            retentionDays: nil,
             olderResolution: Self.olderSampleResolution
         )
+        let payload = makePayload()
+        let didWrite = persistenceQueue.sync {
+            Self.write(payload, to: fileURL, archive: archive, today: today, backupLegacy: needsLegacyBackup)
+        }
+        guard didWrite else { return }
+        needsLegacyBackup = false
+        let older = samples.filter { $0.timestamp < today }
+        archivedDays = Array(Set(archivedDays + HistoryRetention.availableDays(from: older))).sorted()
+        samples = Self.liveSamples(samples, today: today)
+        cachedArchiveDay = nil
+        cachedArchiveSamples = []
         lastSamplesPrunedDay = today
     }
 
@@ -500,7 +637,7 @@ final class BatteryHistoryStore {
         let sorted = samples.sorted { $0.timestamp < $1.timestamp }
         // 往日样本已降到 1 分钟一条，相邻间隔最长可达约 119 秒，会被误判成「采样断点」。
         // 只有以今天结尾的间隔才做判定；今天的原生精度不变，当天真实断点仍会被标记。
-        let todayStart = Calendar.current.startOfDay(for: Date())
+        let todayStart = Calendar.current.startOfDay(for: currentDate())
         var changed = false
         for pair in zip(sorted, sorted.dropFirst()) {
             let start = pair.0.timestamp
@@ -614,7 +751,8 @@ final class BatteryHistoryStore {
 }
 
 enum HistoryRetention {
-    /// 保留近 `retentionDays` 天：今天原样保留，往日降采样到 `olderResolution` 秒一条。
+    /// Long-term retention by default: preserve today, thin older days to one point per minute.
+    /// An explicit day limit is still available for bounded previews and compatibility tests.
     ///
     /// - 往日按 epoch 桶（`floor(timestamp / olderResolution)`）分组、**每桶保留最后一条**：
     ///   单次遍历即可完成，输出保持升序、条数只减不增；用 epoch 桶而非日历分钟可避免
@@ -625,15 +763,14 @@ enum HistoryRetention {
     static func retainedSamples(
         _ samples: [HistorySample],
         now: Date = Date(),
-        retentionDays: Int = 7,
+        retentionDays: Int? = nil,
         olderResolution: TimeInterval = 60,
         calendar: Calendar = .current
     ) -> [HistorySample] {
         let todayStart = calendar.startOfDay(for: now)
-        let days = max(retentionDays, 1)
-        guard let cutoffStart = calendar.date(byAdding: .day, value: -(days - 1), to: todayStart) else {
-            return samples
-        }
+        let cutoffStart = retentionDays.flatMap {
+            calendar.date(byAdding: .day, value: -(max($0, 1) - 1), to: todayStart)
+        } ?? Date.distantPast
         guard olderResolution > 0 else {
             return samples.filter { $0.timestamp >= cutoffStart }
         }
