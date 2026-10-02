@@ -458,7 +458,7 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertTrue(store.sleepSegments.isEmpty)
     }
 
-    func testRecordPersistsTemperatureAndVoltageOnSample() throws {
+    func testRecordPersistsTemperatureOnSample() throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
         let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
@@ -473,7 +473,6 @@ final class HistoryPersistenceTests: XCTestCase {
         snapshot.isPresent = true
         snapshot.state = .discharging
         snapshot.percent = 50
-        snapshot.voltage = 12.34
         snapshot.temperatureCelsius = 35.2
         snapshot.cycleCount = 1
         store.record(snapshot)
@@ -485,10 +484,9 @@ final class HistoryPersistenceTests: XCTestCase {
         let payload = try decoder.decode(PersistedHistory.self, from: data)
 
         XCTAssertEqual(payload.samples.last?.temperatureCelsius ?? 0, 35.2, accuracy: 0.0001)
-        XCTAssertEqual(payload.samples.last?.voltage ?? 0, 12.34, accuracy: 0.0001)
     }
 
-    func testLegacySampleWithoutTemperatureVoltageDecodesToNil() throws {
+    func testLegacySampleWithoutTemperatureDecodesToNil() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
@@ -497,7 +495,6 @@ final class HistoryPersistenceTests: XCTestCase {
         """
         let sample = try decoder.decode(HistorySample.self, from: Data(sampleJSON.utf8))
         XCTAssertNil(sample.temperatureCelsius)
-        XCTAssertNil(sample.voltage)
     }
 
     private struct PersistedHistory: Decodable {

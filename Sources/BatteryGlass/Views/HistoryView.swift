@@ -51,7 +51,7 @@ struct HistoryView: View {
                 TodayMetricChart(
                     samples: todaySamples,
                     day: today,
-                    onExpand: { metric in chartWindow.show(ExpandedChart(metric: metric)) }
+                    onExpand: { chartWindow.show(.temperature) }
                 )
             }
             .padding(.bottom, DesignTokens.spacingXS)
@@ -1278,29 +1278,17 @@ struct TodayBatteryLevelChart: View {
 /// 今日温压分时曲线的可选指标。
 enum TodayMetric: String, CaseIterable, Identifiable {
     case temperature
-    case voltage
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .temperature: "温度"
-        case .voltage: "电压"
-        }
-    }
+    var title: String { "温度" }
 
     func value(from sample: HistorySample) -> Double? {
-        switch self {
-        case .temperature: sample.temperatureCelsius
-        case .voltage: sample.voltage
-        }
+        sample.temperatureCelsius
     }
 
     func valueLabel(for value: Double) -> String {
-        switch self {
-        case .temperature: String(format: "%.1f °C", value)
-        case .voltage: String(format: "%.2f V", value)
-        }
+        String(format: "%.1f °C", value)
     }
 }
 
@@ -1473,19 +1461,16 @@ enum TodayTemperatureStats {
     }
 }
 
-/// 温度 / 电压分时曲线：分段切换，含最高温与高温累计时长等概览。
+/// 今日温度分时曲线：含最高温与高温累计时长等概览。
 struct TodayMetricChart: View {
     let samples: [HistorySample]
     /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
     let day: Date
     /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
     let plotHeight: CGFloat?
-    /// 由外部固定指标并隐藏内置切换器（放大窗口按标签页驱动）；nil 时用内置状态。
-    let fixedMetric: TodayMetric?
-    /// 非 nil 时在标题栏提供「放大查看」入口，并回传当前指标。
-    let onExpand: ((TodayMetric) -> Void)?
+    /// 非 nil 时在标题栏提供「放大查看」入口。
+    let onExpand: (() -> Void)?
 
-    @State private var metric: TodayMetric = .temperature
     @State private var cache = TodayMetricChartDataCache()
     /// 用户设定的缩放窗口；nil 表示整段范围。
     @State private var window: ChartZoomWindow?
@@ -1503,13 +1488,11 @@ struct TodayMetricChart: View {
         samples: [HistorySample],
         day: Date = Date(),
         plotHeight: CGFloat? = 138,
-        fixedMetric: TodayMetric? = nil,
-        onExpand: ((TodayMetric) -> Void)? = nil
+        onExpand: (() -> Void)? = nil
     ) {
         self.samples = samples
         self.day = day
         self.plotHeight = plotHeight
-        self.fixedMetric = fixedMetric
         self.onExpand = onExpand
     }
 
@@ -1518,10 +1501,8 @@ struct TodayMetricChart: View {
         BatteryFormatters.historyDayLabel(day)
     }
 
-    /// 当前实际展示的指标：外部指定优先，否则用内置切换器的状态。
-    private var activeMetric: TodayMetric {
-        fixedMetric ?? metric
-    }
+    /// 当前展示的指标：电压已移除，固定为温度。
+    private var activeMetric: TodayMetric { .temperature }
 
     private var chartData: TodayMetricChartData {
         cache.data(for: samples, metric: activeMetric)
@@ -1601,17 +1582,6 @@ struct TodayMetricChart: View {
         let metricTitle = metricKind.title
 
         return VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
-            // 放大窗口按标签页指定指标时隐藏内置切换器，避免两层重复控件。
-            if fixedMetric == nil {
-                Picker("指标", selection: $metric) {
-                    ForEach(TodayMetric.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
-
             HStack(spacing: 6) {
                 if let statsText {
                     Text(statsText)
@@ -1635,7 +1605,7 @@ struct TodayMetricChart: View {
                     ChartZoomResetButton { window = nil }
                 }
                 if let onExpand {
-                    ChartExpandButton { onExpand(metricKind) }
+                    ChartExpandButton(action: onExpand)
                 }
             }
             .frame(minHeight: 14)
@@ -1765,22 +1735,15 @@ struct TodayMetricChart: View {
         }
     }
 
-    /// 概览：温度显示最高温与高温累计时长，电压显示范围。
+    /// 概览：最高温与高温累计时长。
     private var statsText: String? {
-        switch activeMetric {
-        case .temperature:
-            guard let maximum = TodayTemperatureStats.maximum(in: chartData.samples) else { return nil }
-            let duration = TodayTemperatureStats.durationAbove(
-                Self.highTemperatureThreshold,
-                in: chartData.samples
-            )
-            return "\(dayLabel)最高 \(String(format: "%.1f", maximum)) °C · "
-                + "≥\(Int(Self.highTemperatureThreshold))°C 累计 \(Self.durationText(duration))"
-        case .voltage:
-            let values = chartData.samples.compactMap(\.voltage)
-            guard let minimum = values.min(), let maximum = values.max() else { return nil }
-            return "\(dayLabel) " + String(format: "%.2f – %.2f V", minimum, maximum)
-        }
+        guard let maximum = TodayTemperatureStats.maximum(in: chartData.samples) else { return nil }
+        let duration = TodayTemperatureStats.durationAbove(
+            Self.highTemperatureThreshold,
+            in: chartData.samples
+        )
+        return "\(dayLabel)最高 \(String(format: "%.1f", maximum)) °C · "
+            + "≥\(Int(Self.highTemperatureThreshold))°C 累计 \(Self.durationText(duration))"
     }
 
     private var accessibilitySummary: String {

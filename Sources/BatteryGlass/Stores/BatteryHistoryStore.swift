@@ -143,8 +143,7 @@ final class BatteryHistoryStore {
             percent: snapshot.percent,
             cycleCount: snapshot.cycleCount,
             healthPercent: snapshot.healthPercent,
-            temperatureCelsius: snapshot.temperatureCelsius,
-            voltage: snapshot.voltage > 0 ? snapshot.voltage : nil
+            temperatureCelsius: snapshot.temperatureCelsius
         )
 
         samples.append(sample)
@@ -322,8 +321,9 @@ final class BatteryHistoryStore {
         var sleepSegments: [SleepSegment]?
         // v4 新增；可选以兼容 v2/v3 旧文件。
         var sleepIntervals: [SleepInterval]?
-        // v6 新增 HistorySample.temperatureCelsius/voltage，均为可选、旧文件缺键解码为 nil，
-        // 无需额外迁移分支。
+        // v6 新增 HistorySample.temperatureCelsius，为可选、旧文件缺键解码为 nil，
+        // 无需额外迁移分支。（电压已不再写入历史；旧文件里多出的 voltage 键会被合成
+        // Codable 忽略，不影响加载。）
     }
 
     private func load() {

@@ -21,8 +21,7 @@ enum HistoryExporter {
                 "",
                 "",
                 "",
-                sample.temperatureCelsius.map { Self.decimal($0) } ?? "",
-                sample.voltage.map { Self.decimal($0, 2) } ?? ""
+                sample.temperatureCelsius.map { Self.decimal($0) } ?? ""
             ].map(Self.csvField).joined(separator: ",")
         }
 
@@ -40,7 +39,6 @@ enum HistoryExporter {
                 Self.decimal(summary.maxPower),
                 Self.decimal(summary.minPower),
                 "\(summary.sampleCount)",
-                "",
                 ""
             ].map(Self.csvField).joined(separator: ",")
         }
@@ -48,7 +46,7 @@ enum HistoryExporter {
         return ([Self.extendedHeader] + sampleRows + summaryRows).joined(separator: "\n")
     }
 
-    /// 生成可独立读取的版本 6 JSON，包含全部曲线、每日汇总与睡眠边界。
+    /// 生成可独立读取的版本 7 JSON，包含全部曲线、每日汇总与睡眠边界。
     static func jsonString(
         samples: [HistorySample],
         dailySummaries: [DailySummary],
@@ -59,7 +57,7 @@ enum HistoryExporter {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let payload = ExportPayload(
-            version: 6,
+            version: 7,
             samples: samples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,
@@ -69,7 +67,7 @@ enum HistoryExporter {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    private static let extendedHeader = "类型,时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%),耗电量(kWh),平均功率(W),最大功率(W),最小功率(W),样本数,温度(°C),电压(V)"
+    private static let extendedHeader = "类型,时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%),耗电量(kWh),平均功率(W),最大功率(W),最小功率(W),样本数,温度(°C)"
 
     private static let timeFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()

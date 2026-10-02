@@ -5,8 +5,7 @@ import XCTest
 final class HistoryMetricChartDataTests: XCTestCase {
     private func sample(
         offset: TimeInterval,
-        temperature: Double? = nil,
-        voltage: Double? = nil
+        temperature: Double? = nil
     ) -> HistorySample {
         HistorySample(
             timestamp: Date(timeIntervalSince1970: 1_700_000_000 + offset),
@@ -14,8 +13,7 @@ final class HistoryMetricChartDataTests: XCTestCase {
             percent: 50,
             cycleCount: 1,
             healthPercent: 100,
-            temperatureCelsius: temperature,
-            voltage: voltage
+            temperatureCelsius: temperature
         )
     }
 
@@ -34,20 +32,6 @@ final class HistoryMetricChartDataTests: XCTestCase {
         XCTAssertEqual(data.samples.count, 2)
         XCTAssertEqual(data.samples.compactMap(\.temperatureCelsius), [30, 35])
         XCTAssertEqual(data.valueDomain, 29.5...35.5)
-    }
-
-    func testVoltageMetricFiltersSamplesWithoutValue() {
-        let data = TodayMetricChartData(
-            samples: [
-                sample(offset: 0, voltage: 12),
-                sample(offset: 5, temperature: 30),
-                sample(offset: 10, voltage: 13)
-            ],
-            metric: .voltage
-        )
-
-        XCTAssertEqual(data.samples.count, 2)
-        XCTAssertEqual(data.valueDomain, 11.9...13.1)
     }
 
     func testChartDataDownsamplesKeepingFirstAndLast() {
@@ -132,8 +116,8 @@ final class HistoryMetricChartDataTests: XCTestCase {
         XCTAssertEqual(scale.labels, ["30.5", "30.6", "30.7", "30.8"])
     }
 
-    /// 当日电压跨度很小时，固定 1 位小数会让刻度全变成 "12.7"。
-    func testNarrowVoltageDomainKeepsLabelsDistinct() {
+    /// 窄小数跨度（如 12.6x）：固定 1 位小数会让刻度全变成 "12.7"，需要按步长加位。
+    func testNarrowDecimalDomainKeepsLabelsDistinct() {
         let scale = MetricValueAxis.ticks(in: 12.667...12.703)
 
         XCTAssertEqual(scale.fractionDigits, 2)

@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// 可在独立窗口放大查看的曲线（窗口内即为 4 个标签页）。
+/// 可在独立窗口放大查看的曲线（窗口内即为 3 个标签页）。
 enum ExpandedChart: String, CaseIterable, Identifiable {
     case power
     case level
     case temperature
-    case voltage
 
     var id: String { rawValue }
 
@@ -15,7 +14,6 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
         case .power: "功率曲线"
         case .level: "电量曲线"
         case .temperature: "温度曲线"
-        case .voltage: "电压曲线"
         }
     }
 
@@ -25,27 +23,12 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
         case .power: "功率"
         case .level: "电量"
         case .temperature: "温度"
-        case .voltage: "电压"
         }
     }
 
     /// 窗口标题：日期 + 曲线名。
     func title(day: Date, now: Date = Date()) -> String {
         "\(BatteryFormatters.historyDayLabel(day, now: now)) · \(baseTitle)"
-    }
-
-    /// 该标签对应的温压指标；非温压标签为 nil。
-    var metric: TodayMetric? {
-        switch self {
-        case .power, .level: nil
-        case .temperature: .temperature
-        case .voltage: .voltage
-        }
-    }
-
-    /// 温压指标对应的标签。
-    init(metric: TodayMetric) {
-        self = metric == .temperature ? .temperature : .voltage
     }
 }
 
@@ -206,13 +189,11 @@ struct ChartDetailView: View {
                 day: day,
                 plotHeight: nil
             )
-        case .temperature, .voltage:
-            // 指标由标签页决定，内置切换器在这里隐藏，避免出现两层重复控件。
+        case .temperature:
             TodayMetricChart(
                 samples: samples,
                 day: day,
-                plotHeight: nil,
-                fixedMetric: kind.metric
+                plotHeight: nil
             )
         }
     }

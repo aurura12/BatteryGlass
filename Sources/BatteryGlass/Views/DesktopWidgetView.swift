@@ -116,7 +116,6 @@ struct DesktopWidgetView: View {
             spacing: 8
         ) {
             metric(icon: "thermometer", title: "温度", value: BatteryFormatters.temperature(snapshot.temperatureCelsius))
-            metric(icon: "bolt", title: "电压", value: BatteryFormatters.voltage(snapshot.voltage))
             metric(icon: "heart.text.square", title: "健康度", value: snapshot.healthText)
             metric(icon: "repeat", title: "循环", value: "\(snapshot.cycleCount)")
         }

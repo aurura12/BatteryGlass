@@ -155,7 +155,7 @@ final class LongTermHistoryTests: XCTestCase {
     }
 
     private func sample(at timestamp: Date) -> HistorySample {
-        HistorySample(timestamp: timestamp, power: -20, consumptionPowerW: 20, percent: 50, cycleCount: 1, healthPercent: 98, temperatureCelsius: 35.2, voltage: 12.34)
+        HistorySample(timestamp: timestamp, power: -20, consumptionPowerW: 20, percent: 50, cycleCount: 1, healthPercent: 98, temperatureCelsius: 35.2)
     }
 
     private func snapshot(at timestamp: Date) -> BatterySnapshot {
