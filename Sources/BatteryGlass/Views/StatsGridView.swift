@@ -16,6 +16,11 @@ struct MetricsGrid: View {
                 value: BatteryFormatters.temperature(snapshot.temperatureCelsius)
             )
             MetricCell(
+                icon: "bolt",
+                title: "电压",
+                value: BatteryFormatters.voltage(snapshot.voltage)
+            )
+            MetricCell(
                 icon: "cpu",
                 title: "系统功耗",
                 value: systemPowerText

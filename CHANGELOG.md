@@ -5,6 +5,7 @@
 ## [2026-10-02]
 
 ### 修改
+- 恢复面板实时页指标行的**电压**显示（`MetricsGrid` 与 `BatteryFormatters.voltage`）：4 格布局 温度 / 电压 / 系统功耗 / 电源适配器。历史记录、桌面小组件、历史与放大窗口的曲线仍不含电压。（`Views/StatsGridView.swift`、`Support/Formatters.swift`、`README.md`）
 - **移除电池电压的展示与历史记录**：删除 `HistorySample.voltage` 字段（合成 Codable 会忽略旧 `history.json`/`history.sqlite` 里多出的 `voltage` 键，无需迁移分支，payload 保持 **v7**），`BatteryHistoryStore.record` 不再写入电压；`HistoryExporter` CSV 去掉「电压(V)」列（14→13 列）、导出版本 6→7。UI 侧删除 `BatteryFormatters.voltage`、面板指标行的「电压」格（4→3 格）、桌面小组件的「电压」行，历史页「温度 / 电压」分段卡改为**今日温度曲线**（`TodayMetric` 仅保留温度、移除内置切换器），放大窗口去掉「电压」标签页（`ExpandedChart` 4→3 项）。（`Models/HistorySample.swift`、`Stores/BatteryHistoryStore.swift`、`Support/HistoryExporter.swift`、`Support/Formatters.swift`、`Views/StatsGridView.swift`、`Views/DesktopWidgetView.swift`、`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`README.md`、`CODEBUDDY.md`）
 - 保留底层电压读取：`BatterySnapshot.voltage` 仍用于「功率 = 电压 × 电流」与睡眠能耗（`SleepEnergyCalculator`），诊断日志 `power-diagnostics.jsonl` 仍记录原始电压（仅手动开启诊断时写入）。受影响的 `HistoryExporterTests`、`HistoryMetricChartDataTests`、`HistoryPersistenceTests`、`HistorySampleArchiveTests`、`LongTermHistoryTests` 同步调整。
 

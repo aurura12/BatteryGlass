@@ -18,6 +18,10 @@ enum BatteryFormatters {
         return String(format: "%.1f °C", value)
     }
 
+    static func voltage(_ value: Double) -> String {
+        value > 0 ? String(format: "%.2f V", value) : "--"
+    }
+
     static func timeRemaining(_ interval: TimeInterval?) -> String {
         guard let interval, interval.isFinite, interval > 0 else { return "--" }
         let total = Int(interval.rounded())
