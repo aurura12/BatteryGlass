@@ -8,6 +8,9 @@
 - 历史曲线改为**长期保留**：新增 `Stores/HistorySampleArchive.swift`（系统 SQLite3，无第三方依赖）把往日样本按「epoch 分钟」为 PRIMARY KEY 归档到 `history.sqlite`（每分钟最后一条；`BEGIN IMMEDIATE` 事务、upsert 幂等、失败 `ROLLBACK` 不半写），`history.json` 热层只保留「今天 + 跨午夜前最后一条」并升至 payload **v7**（旧文件迁移前备份 `history.legacy.json`）。`pruneHistory()` 改为「先写归档、成功后再从热层淘汰」；图表按需读取单日（`BatteryHistoryStore.samples(forDay:)`，归档 + 热层合并并记忆化），`availableDays()` 取归档索引与热层的并集，`allCurveSamples()` 供导出全量读取。设置页导出与清空历史相应改走归档（清空同时删除 `history.sqlite` 与 `history.legacy.json`），放大窗口日期集合改用 `history.availableDays()`，跨年份日期标签显示年份。（`Stores/HistorySampleArchive.swift`、`Stores/BatteryHistoryStore.swift`、`Support/Formatters.swift`、`Support/HistoryExporter.swift`、`Views/ChartDetailView.swift`、`Views/SettingsView.swift`、`README.md`）
 - 新增测试 `HistorySampleArchiveTests`（分钟 upsert 幂等、按时区与跨午夜查询、DST 边界、失败批次回滚）与 `LongTermHistoryTests`（旧版迁移与备份、跨天归档与重启后细粒度/能量边界、超大归档按需加载、清空、迁移失败重试、损坏热层文件不被覆盖）；`HistoryRetentionTests`、`BatteryFormattersTests` 补充长期保留与跨年标签用例。
 
+### 修改
+- 更新 `CODEBUDDY.md` 以对齐当前工作树：持久化章节由「v6 / 近 7 天内存保留 + 1 分钟降采样」改为**双层持久化**——热层 `history.json` 只留「今天 + 跨午夜前最后一条」（payload **v7**，旧文件迁移前备份 `history.legacy.json`），冷层 `history.sqlite`（`HistorySampleArchive`）按 epoch 分钟归档往日样本、长期保留；补充 `samples(forDay:)`/`availableDays()`/`allCurveSamples()` 读取路径、归档先写后淘汰的崩溃安全语义，以及「`history.sqlite` 不受 `HistoryLoadLimits` 限制」的说明。新增 `HistorySampleArchive` 与 `PowerCalibrationSection` 到项目结构，补 `HistorySampleArchiveTests`、`LongTermHistoryTests`、`HistoryMetricChartDataTests` 到测试地图，修正 `HistoryView.swift` 行数（~1,900 → ~2,360）并移除易失效的类型行号。（`CODEBUDDY.md`）
+
 ## [2026-09-30]
 
 ### 新增
