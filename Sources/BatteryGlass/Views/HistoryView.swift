@@ -346,6 +346,12 @@ struct DailyEnergyComparisonChart: View {
             .pickerStyle(.segmented)
             .controlSize(.mini)
 
+            if summaries.contains(where: { $0.energyQuality?.hasUnmeasuredSleepEnergy == true }) {
+                Label("部分睡眠时段未计入耗电，总计可能偏低", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
             if aggregates.isEmpty {
                 ChartEmptyPlaceholder("暂无可用每日耗电量数据")
                     .frame(height: 138)
@@ -646,7 +652,10 @@ struct DailyEnergyComparisonChart: View {
         guard let quality = summary.energyQuality else { return nil }
         var reasons: [String] = []
         if quality.hasSamplingGaps {
-            reasons.append("当天存在超过 60 秒的采样断点，耗电量可能偏低")
+            reasons.append("当天存在采样断点或累计功率读数缺失，耗电量可能偏低")
+        }
+        if quality.hasUnmeasuredSleepEnergy {
+            reasons.append("部分睡眠时段缺少能耗记录，耗电量可能偏低")
         }
         if quality.hasEstimatedSleepEnergy {
             reasons.append("睡眠段为估算值（无可用计数器或未校准）")

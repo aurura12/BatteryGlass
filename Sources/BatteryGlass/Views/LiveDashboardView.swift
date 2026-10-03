@@ -364,34 +364,18 @@ struct PowerTrendCard: View {
         }
     }
 
-    /// 以最新样本时间戳为锚点取最近 120 秒，避免样本稀疏时“最近 N 条”横跨远超 2 分钟。
-    private var windowSamples: [PowerSample] {
-        guard let latest = samples.last?.timestamp else { return [] }
-        let cutoff = latest.addingTimeInterval(-120)
-        return samples.filter { $0.timestamp >= cutoff }
-    }
-
-    private var hasSamples: Bool {
-        !windowSamples.isEmpty
-    }
-
-    private var peakPower: Double {
-        windowSamples.max(by: { abs($0.power) < abs($1.power) })?.power ?? 0
-    }
-
-    private var averagePower: Double {
-        guard !windowSamples.isEmpty else { return 0 }
-        return windowSamples.map(\.power).reduce(0, +) / Double(windowSamples.count)
+    private var statistics: PowerTrendStatistics {
+        PowerTrendStatistics(samples: samples, now: snapshot.timestamp)
     }
 
     /// 采样功率恒为正（消耗功率），无数据时显示 "--" 而非误导性的 "+0.0 W"。
     private var peakText: String {
-        guard hasSamples else { return "--" }
+        guard let peakPower = statistics.peakPower else { return "--" }
         return String(format: "%.1f W", peakPower)
     }
 
     private var averageText: String {
-        guard hasSamples else { return "--" }
+        guard let averagePower = statistics.averagePower else { return "--" }
         return String(format: "%.1f W", averagePower)
     }
 
@@ -399,7 +383,7 @@ struct PowerTrendCard: View {
         if let message = snapshot.powerDisplayStatus.message {
             return "\(message) · 显示最近 2 分钟记录"
         }
-        if !hasSamples { return "暂无有效功率数据" }
+        if statistics.averagePower == nil { return "暂无有效功率数据" }
         switch snapshot.state {
         case .charging: return "适配器供电 · 适配器输出功率"
         case .discharging: return "电池供电 · 电池放电功率"

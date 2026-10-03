@@ -126,7 +126,7 @@ struct SettingsView: View {
                 }
 
                 Toggle("记录电源诊断日志", isOn: $settings.powerDiagnosticsLoggingEnabled)
-                Text("启用后每秒记录一次原始功率遥测和应用计算结果，日志最多保留约 5 MB。")
+                Text("启用后每秒记录一次原始功率遥测和应用计算结果，保留当前日志和上一份日志，合计最多约 10 MB。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("打开诊断日志文件夹") {
@@ -147,7 +147,7 @@ struct SettingsView: View {
         // 高度留出小屏（可见高度约 700pt）余地，超出内容由 Form 滚动。
         .frame(width: 440, height: 640)
         .confirmationDialog(
-            "确定要清空全部历史数据吗？此操作不可撤销。",
+            "确定要清空全部历史数据及其备份吗？此操作不可撤销。",
             isPresented: $showingClearHistoryConfirmation,
             titleVisibility: .visible
         ) {

@@ -15,6 +15,9 @@ final class BatteryHistoryStore {
     private let fileURL: URL
     private let archive: HistorySampleArchive
     private let currentDate: () -> Date
+    private let finishPendingSleepEnergy: () -> Void
+    private let cancelPendingSleepEnergy: () -> Void
+    private var historyClearedAt: Date?
     private var needsLegacyBackup = false
     private var canPersist = true
     @ObservationIgnored private var cachedArchiveDay: Date?
@@ -51,9 +54,17 @@ final class BatteryHistoryStore {
     /// 往日样本的降采样间隔：今天保持原生 ~5 秒精度，往日 1 分钟一条。
     private static let olderSampleResolution: TimeInterval = 60
 
-    init(settings: AppSettings, fileURL: URL? = nil, now: @escaping () -> Date = { Date() }) {
+    init(
+        settings: AppSettings,
+        fileURL: URL? = nil,
+        now: @escaping () -> Date = { Date() },
+        finishPendingSleepEnergy: @escaping () -> Void = {},
+        cancelPendingSleepEnergy: @escaping () -> Void = {}
+    ) {
         self.settings = settings
         self.currentDate = now
+        self.finishPendingSleepEnergy = finishPendingSleepEnergy
+        self.cancelPendingSleepEnergy = cancelPendingSleepEnergy
         let resolvedURL: URL
         if let fileURL {
             resolvedURL = fileURL
@@ -129,7 +140,8 @@ final class BatteryHistoryStore {
     }
 
     func record(_ snapshot: BatterySnapshot) {
-        guard settings.recordHistory, snapshot.isPresent else { return }
+        guard settings.recordHistory, snapshot.isPresent,
+              acceptsHistory(startingAt: snapshot.timestamp) else { return }
 
         let now = currentDate()
         let significantChange = snapshot.cycleCount != lastCycleCount || snapshot.healthPercent != lastHealth
@@ -176,7 +188,9 @@ final class BatteryHistoryStore {
 
     /// 记录一次待机区间：将其能量按跨天比例并入每日耗电量，并持久化。
     func recordSleepSegment(_ segment: SleepSegment) {
-        guard settings.recordHistory else { return }
+        guard settings.recordHistory, segment.end > segment.start,
+              segment.energyKWh.isFinite, segment.energyKWh > 0,
+              acceptsHistory(startingAt: segment.start) else { return }
         guard !sleepSegments.contains(where: { $0.id == segment.id }) else { return }
 
         sleepSegments.append(segment)
@@ -190,29 +204,33 @@ final class BatteryHistoryStore {
 
     /// Opens a boundary before the wake snapshot arrives so no sample pair can bridge sleep.
     private func beginSleepInterval(at start: Date) {
-        guard settings.recordHistory else { return }
+        guard settings.recordHistory, acceptsHistory(startingAt: start) else { return }
         activeSleepStart = start
     }
 
     /// Persists a boundary without adding energy; a short sleep intentionally remains unknown.
     func recordSleepInterval(start: Date, end: Date) {
-        guard settings.recordHistory, end > start else { return }
-        guard !sleepIntervals.contains(where: { $0.start == start && $0.end == end }) else { return }
+        guard settings.recordHistory, end > start,
+              acceptsHistory(startingAt: start) else { return }
 
-        sleepIntervals.append(SleepInterval(start: start, end: end))
-        sleepIntervals.sort { $0.start < $1.start }
+        if !sleepIntervals.contains(where: { $0.start == start && $0.end == end }) {
+            sleepIntervals.append(SleepInterval(start: start, end: end))
+            sleepIntervals.sort { $0.start < $1.start }
+        }
+        reconcileUnmeasuredSleepEnergyQuality()
         persist()
     }
 
     func summaries(lastDays: Int) -> [DailySummary] {
-        guard let cutoff = Calendar.current.date(byAdding: .day, value: -lastDays, to: Date()) else {
-            return dailySummaries
+        guard lastDays > 0 else { return [] }
+        let today = Calendar.current.startOfDay(for: currentDate())
+        guard let cutoff = Calendar.current.date(byAdding: .day, value: 1 - lastDays, to: today) else {
+            return []
         }
         let cutoffKey = BatteryFormatters.dayKey(for: cutoff)
+        let todayKey = BatteryFormatters.dayKey(for: today)
         return dailySummaries
-            .filter { $0.dayKey >= cutoffKey }
-            .suffix(lastDays)
-            .map { $0 }
+            .filter { $0.dayKey >= cutoffKey && $0.dayKey <= todayKey }
     }
 
     func allSummaries() -> [DailySummary] {
@@ -274,6 +292,8 @@ final class BatteryHistoryStore {
     }
 
     func clearHistory() {
+        historyClearedAt = currentDate()
+        cancelPendingSleepEnergy()
         samples = []
         dailySummaries = []
         sleepSegments = []
@@ -299,12 +319,20 @@ final class BatteryHistoryStore {
             try? FileManager.default.removeItem(at: fileURL)
             try? archive.remove()
             try? FileManager.default.removeItem(at: Self.legacyBackupURL(for: fileURL))
+            Self.removeRepairBackups(for: fileURL)
         }
+    }
+
+    private func acceptsHistory(startingAt date: Date) -> Bool {
+        historyClearedAt.map { date >= $0 } ?? true
     }
 
     /// 退出前同步写入最新快照，避免异步保存尚未执行就结束进程。
     func flush() {
         guard canPersist else { return }
+        // Complete the wake measurement before taking the persisted snapshot. This also
+        // makes termination ordering independent of NotificationCenter observer order.
+        finishPendingSleepEnergy()
         let payload = makePayload()
         let fileURL = self.fileURL
         let today = Calendar.current.startOfDay(for: currentDate())
@@ -354,7 +382,7 @@ final class BatteryHistoryStore {
         let temperatureHistoryNeedsRemoval = payload.version < 8
         samples = payload.samples
         if payload.version >= 2 {
-            // 统一按日期升序，保证依赖顺序的 suffix/UI 取最近 N 天正确。
+            // 统一按日期升序，保证统计范围和明细展示的顺序一致。
             dailySummaries = payload.dailySummaries.sorted { $0.dayKey < $1.dayKey }
         } else {
             dailySummaries = summaries(from: samples)
@@ -372,6 +400,7 @@ final class BatteryHistoryStore {
         dailySummaries = sanitizedSummaries
         let qualityBackfilled = markLegacyEnergyQualityUnknown()
         let sleepEnergyRestored = restoreMissingSleepEnergyFromSegments()
+        let unmeasuredSleepBackfilled = reconcileUnmeasuredSleepEnergyQuality()
 
         let recovery = HistorySampleRecovery.backfillConsumptionPower(
             in: samples,
@@ -399,7 +428,8 @@ final class BatteryHistoryStore {
         pruneHistory()
 
         if recovery.didChange || summariesChanged || qualityBackfilled
-            || sleepEnergyRestored || samplingGapsBackfilled || temperatureHistoryNeedsRemoval {
+            || sleepEnergyRestored || unmeasuredSleepBackfilled
+            || samplingGapsBackfilled || temperatureHistoryNeedsRemoval {
             flush()
         }
     }
@@ -434,6 +464,22 @@ final class BatteryHistoryStore {
 
     nonisolated private static func legacyBackupURL(for fileURL: URL) -> URL {
         fileURL.deletingPathExtension().appendingPathExtension("legacy.json")
+    }
+
+    nonisolated private static func removeRepairBackups(for fileURL: URL) {
+        guard FileManager.default.fileExists(atPath: fileURL.deletingLastPathComponent().path) else { return }
+        let prefix = fileURL.lastPathComponent + ".before-counter-unit-repair-"
+        do {
+            let entries = try FileManager.default.contentsOfDirectory(
+                at: fileURL.deletingLastPathComponent(), includingPropertiesForKeys: [.isRegularFileKey]
+            )
+            for entry in entries where entry.lastPathComponent.hasPrefix(prefix) {
+                guard try entry.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
+                try FileManager.default.removeItem(at: entry)
+            }
+        } catch {
+            NSLog("BatteryGlass: 历史修复备份清理失败 - %@", error.localizedDescription)
+        }
     }
 
     nonisolated private static func removeTemperatureHistoryFromLegacyBackup(at url: URL) throws {
@@ -723,6 +769,34 @@ final class BatteryHistoryStore {
             quality.hasLowerBoundSleepEnergy = quality.hasLowerBoundSleepEnergy
                 || segment.hasUnobservedSource
         }
+    }
+
+    /// A long sleep without a measured/estimated segment must not look like complete data.
+    /// Reconcile again after delayed settlement so only unresolved intervals keep the flag.
+    @discardableResult
+    private func reconcileUnmeasuredSleepEnergyQuality() -> Bool {
+        var unmeasuredDays: Set<String> = []
+        for interval in sleepIntervals
+        where interval.end.timeIntervalSince(interval.start) >= SleepEnergyCalculator.minimumDuration {
+            let isCovered = sleepSegments.contains { segment in
+                segment.start <= interval.start && segment.end >= interval.end
+                    && segment.energyKWh.isFinite && segment.energyKWh > 0
+            }
+            if !isCovered {
+                unmeasuredDays.formUnion(EnergyCalculator.dayKeys(from: interval.start, to: interval.end))
+            }
+        }
+        let previouslyFlagged = dailySummaries.filter {
+            $0.energyQuality?.hasUnmeasuredSleepEnergy == true
+        }.map(\.dayKey)
+        var changed = false
+        for dayKey in unmeasuredDays.union(previouslyFlagged) {
+            let didChange = updateEnergyQuality(for: dayKey) {
+                $0.hasUnmeasuredSleepEnergy = unmeasuredDays.contains(dayKey)
+            }
+            changed = didChange || changed
+        }
+        return changed
     }
 
     /// Old payloads have no provenance. Preserve that uncertainty while new observations accrue.

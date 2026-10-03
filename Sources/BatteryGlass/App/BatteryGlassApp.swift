@@ -76,7 +76,11 @@ struct BatteryGlassApp: App {
         // 因此必须在 monitor 之前创建并注入同一实例。
         let calibrationStore = PowerTelemetryCalibrationStore()
         let monitor = BatteryMonitor(settings: settings, telemetryCalibrationStore: calibrationStore)
-        let history = BatteryHistoryStore(settings: settings)
+        let history = BatteryHistoryStore(
+            settings: settings,
+            finishPendingSleepEnergy: { [weak monitor] in monitor?.finishPendingSleepEnergy() },
+            cancelPendingSleepEnergy: { [weak monitor] in monitor?.cancelPendingSleepEnergy() }
+        )
         let desktopWidget = DesktopWidgetController(monitor: monitor, settings: settings)
         let chartWindow = ChartWindowController(history: history)
         self.settings = settings

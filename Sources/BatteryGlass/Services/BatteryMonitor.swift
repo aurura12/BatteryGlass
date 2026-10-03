@@ -268,14 +268,25 @@ final class BatteryMonitor {
 
     // MARK: - 睡眠/唤醒补测
 
+    /// 保存或退出前，使用已采集的端点和维持功率结算一次；不等待剩余定时器。
+    func finishPendingSleepEnergy() {
+        guard wakeBaseline != nil else { return }
+        finalizeSleepSegment()
+    }
+
+    /// 清空历史时丢弃尚未结算的旧睡眠，防止稍后重新写回已删除的记录。
+    func cancelPendingSleepEnergy() {
+        cancelMaintenanceSampling()
+        sleepBaseline = nil
+        wakeBaseline = nil
+    }
+
     /// 系统即将睡眠：记录当前快照作为基线。回调要轻，系统可能随即挂起。
     private func handleWillSleep() {
         // 上次唤醒后的维持功耗采样窗口尚未结束就再次睡眠（典型：开盖后又马上合盖）：
         // 此时 wakeBaseline 仍在，说明上一段待机还没结算。先用已采集的样本把它结算掉，
         // 否则其能量会被下方的 cancelMaintenanceSampling 连同基线一起丢弃。
-        if wakeBaseline != nil {
-            finalizeSleepSegment()
-        }
+        finishPendingSleepEnergy()
         cancelMaintenanceSampling()
         sleepBaseline = (
             date: snapshot.timestamp,

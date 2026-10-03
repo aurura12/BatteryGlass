@@ -35,19 +35,37 @@ struct DailyEnergyQuality: Codable, Equatable, Sendable {
     var hasUncalibratedCounterEnergy: Bool
     var hasLowerBoundSleepEnergy: Bool
     var hasUnknownHistoricalCoverage: Bool
+    var hasUnmeasuredSleepEnergy: Bool
 
     init(
         hasSamplingGaps: Bool = false,
         hasEstimatedSleepEnergy: Bool = false,
         hasUncalibratedCounterEnergy: Bool = false,
         hasLowerBoundSleepEnergy: Bool = false,
-        hasUnknownHistoricalCoverage: Bool = false
+        hasUnknownHistoricalCoverage: Bool = false,
+        hasUnmeasuredSleepEnergy: Bool = false
     ) {
         self.hasSamplingGaps = hasSamplingGaps
         self.hasEstimatedSleepEnergy = hasEstimatedSleepEnergy
         self.hasUncalibratedCounterEnergy = hasUncalibratedCounterEnergy
         self.hasLowerBoundSleepEnergy = hasLowerBoundSleepEnergy
         self.hasUnknownHistoricalCoverage = hasUnknownHistoricalCoverage
+        self.hasUnmeasuredSleepEnergy = hasUnmeasuredSleepEnergy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hasSamplingGaps, hasEstimatedSleepEnergy, hasUncalibratedCounterEnergy
+        case hasLowerBoundSleepEnergy, hasUnknownHistoricalCoverage, hasUnmeasuredSleepEnergy
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        hasSamplingGaps = try values.decodeIfPresent(Bool.self, forKey: .hasSamplingGaps) ?? false
+        hasEstimatedSleepEnergy = try values.decodeIfPresent(Bool.self, forKey: .hasEstimatedSleepEnergy) ?? false
+        hasUncalibratedCounterEnergy = try values.decodeIfPresent(Bool.self, forKey: .hasUncalibratedCounterEnergy) ?? false
+        hasLowerBoundSleepEnergy = try values.decodeIfPresent(Bool.self, forKey: .hasLowerBoundSleepEnergy) ?? false
+        hasUnknownHistoricalCoverage = try values.decodeIfPresent(Bool.self, forKey: .hasUnknownHistoricalCoverage) ?? false
+        hasUnmeasuredSleepEnergy = try values.decodeIfPresent(Bool.self, forKey: .hasUnmeasuredSleepEnergy) ?? false
     }
 
     /// 数值可能偏离真实值（采样断点 / 睡眠估算 / 未校准计数器 / 只统计到可观测来源）。
@@ -57,6 +75,7 @@ struct DailyEnergyQuality: Codable, Equatable, Sendable {
             || hasEstimatedSleepEnergy
             || hasUncalibratedCounterEnergy
             || hasLowerBoundSleepEnergy
+            || hasUnmeasuredSleepEnergy
     }
 
     /// 旧版本记录，统计口径未知。数值本身不一定偏低，因此不并入 `hasAccuracyWarning`，
