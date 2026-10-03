@@ -765,11 +765,13 @@ struct TodayPowerChart: View {
             } else {
                 VStack(spacing: 4) {
                     Chart {
-                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        ForEach(Array(segments.enumerated()), id: \.offset) { segmentIndex, segment in
+                            let segmentID = segment.first?.id.uuidString ?? "segment-\(segmentIndex)"
                             ForEach(segment) { sample in
                                 AreaMark(
                                     x: .value("时间", chartData.timeline.position(for: sample.timestamp)),
-                                    y: .value("功率", sample.consumptionPowerW ?? 0)
+                                    y: .value("功率", sample.consumptionPowerW ?? 0),
+                                    series: .value("曲线段", segmentID)
                                 )
                                 .interpolationMethod(.linear)
                                 .foregroundStyle(
@@ -782,7 +784,8 @@ struct TodayPowerChart: View {
 
                                 LineMark(
                                     x: .value("时间", chartData.timeline.position(for: sample.timestamp)),
-                                    y: .value("功率", sample.consumptionPowerW ?? 0)
+                                    y: .value("功率", sample.consumptionPowerW ?? 0),
+                                    series: .value("曲线段", segmentID)
                                 )
                                 .interpolationMethod(.linear)
                                 .foregroundStyle(DesignTokens.dataBlue)
@@ -985,8 +988,7 @@ struct TodayPowerChart: View {
         isZoomed: Bool,
         in dateDomain: ClosedRange<Date>
     ) -> [[HistorySample]] {
-        let source = isZoomed ? chartData.fullSegments : chartData.plotSegments
-        return source.flatMap { segment in
+        let visibleSegments = chartData.fullSegments.flatMap { segment in
             let visible = PowerChartWindow.samples(in: dateDomain, from: segment)
             let filtered = PowerChartSegmentation.excludingSleepIntervals(
                 visible,
@@ -997,6 +999,47 @@ struct TodayPowerChart: View {
                 breakingAt: sleepIntervals
             )
         }
+
+        // Select overview points from the visible window itself. Downsampling the whole
+        // day first can leave only a handful of points in the latest two-hour viewport.
+        var renderedSegments = isZoomed
+            ? visibleSegments
+            : HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+                visibleSegments,
+                limit: HistoryChartRendering.maximumDisplayedSamples,
+                value: { $0.consumptionPowerW }
+            )
+
+        // The tooltip and PointMark use the original sample. Keep that exact sample in
+        // the rendered line too, so a hovered point cannot float away from the curve
+        // just because overview downsampling omitted it.
+        guard let hoveredSample,
+              let sourceSegment = visibleSegments.first(where: { segment in
+                  segment.contains { $0.id == hoveredSample.id }
+              }) else {
+            return renderedSegments
+        }
+
+        if let renderedIndex = renderedSegments.firstIndex(where: { segment in
+            segment.first?.id == sourceSegment.first?.id
+                && segment.last?.id == sourceSegment.last?.id
+        }) {
+            guard !renderedSegments[renderedIndex].contains(where: { $0.id == hoveredSample.id }) else {
+                return renderedSegments
+            }
+            let insertionIndex = renderedSegments[renderedIndex].firstIndex {
+                $0.timestamp > hoveredSample.timestamp
+            } ?? renderedSegments[renderedIndex].endIndex
+            renderedSegments[renderedIndex].insert(hoveredSample, at: insertionIndex)
+        } else if let sampleIndex = sourceSegment.firstIndex(where: { $0.id == hoveredSample.id }) {
+            // If the run itself fell outside the segment budget, draw its immediate
+            // neighbors as a short independent line so the hovered sample is still traced.
+            let lowerIndex = max(0, sampleIndex - 1)
+            let upperIndex = min(sourceSegment.count - 1, sampleIndex + 1)
+            renderedSegments.append(Array(sourceSegment[lowerIndex...upperIndex]))
+        }
+
+        return renderedSegments
     }
 
     /// VoiceOver 概要：最新一条可见功率样本。
@@ -1215,12 +1258,14 @@ struct TodayBatteryLevelChart: View {
                     .frame(height: 120)
             } else {
                 Chart {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    ForEach(Array(segments.enumerated()), id: \.offset) { segmentIndex, segment in
+                        let segmentID = segment.first?.id.uuidString ?? "segment-\(segmentIndex)"
                         ForEach(segment) { sample in
                             AreaMark(
                                 x: .value("时间", sample.timestamp),
                                 yStart: .value("电量下界", plotYDomain.lowerBound),
-                                yEnd: .value("电量", sample.percent)
+                                yEnd: .value("电量", sample.percent),
+                                series: .value("曲线段", segmentID)
                             )
                             .interpolationMethod(.linear)
                             .foregroundStyle(
@@ -1233,7 +1278,8 @@ struct TodayBatteryLevelChart: View {
 
                             LineMark(
                                 x: .value("时间", sample.timestamp),
-                                y: .value("电量", sample.percent)
+                                y: .value("电量", sample.percent),
+                                series: .value("曲线段", segmentID)
                             )
                             .interpolationMethod(.linear)
                             .foregroundStyle(DesignTokens.dataBlue)
@@ -1762,13 +1808,15 @@ struct TodayMetricChart: View {
                     .frame(height: 120)
             } else {
                 Chart {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    ForEach(Array(segments.enumerated()), id: \.offset) { segmentIndex, segment in
+                        let segmentID = segment.first?.id.uuidString ?? "segment-\(segmentIndex)"
                         ForEach(segment) { sample in
                             if let value = metricKind.value(from: sample) {
                                 AreaMark(
                                     x: .value("时间", sample.timestamp),
                                     yStart: .value("下界", plotYAxis.domain.lowerBound),
-                                    yEnd: .value(metricTitle, value)
+                                    yEnd: .value(metricTitle, value),
+                                    series: .value("曲线段", segmentID)
                                 )
                                 .interpolationMethod(.linear)
                                 .foregroundStyle(
@@ -1781,7 +1829,8 @@ struct TodayMetricChart: View {
 
                                 LineMark(
                                     x: .value("时间", sample.timestamp),
-                                    y: .value(metricTitle, value)
+                                    y: .value(metricTitle, value),
+                                    series: .value("曲线段", segmentID)
                                 )
                                 .interpolationMethod(.linear)
                                 .foregroundStyle(DesignTokens.dataBlue)
