@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Keep full-resolution history for statistics and hover lookup while bounding Chart marks.
 enum HistoryChartRendering {
-    static let maximumDisplayedSamples = 240
+    static let maximumDisplayedSamples = 800
 
     /// Select local minima and maxima so narrow peaks survive chart-only downsampling.
     static func downsamplePreservingExtrema(
@@ -69,6 +69,62 @@ enum HistoryChartRendering {
         }
 
         return selectedIndices.sorted().map { samples[$0] }
+    }
+
+    /// Downsample each continuous run independently so the spacing between chosen points
+    /// is never mistaken for a real data gap by the chart renderer.
+    static func downsampleSegmentsPreservingExtrema(
+        _ segments: [[HistorySample]],
+        limit: Int,
+        value: (HistorySample) -> Double?
+    ) -> [[HistorySample]] {
+        let nonempty = segments.filter { !$0.isEmpty }
+        guard limit > 0 else { return [] }
+        let totalCount = nonempty.reduce(0) { $0 + $1.count }
+        guard totalCount > limit else { return nonempty }
+
+        // A one-point run cannot form a line. Keep its original sample when the whole
+        // input fits, but spend the limited rendering budget on drawable runs otherwise.
+        let drawable = nonempty.filter { $0.count > 1 }
+        guard limit > 1, !drawable.isEmpty else { return [] }
+        if drawable.count * 2 >= limit {
+            let runBudget = limit / 2
+            guard runBudget > 0 else { return [] }
+            return (0..<runBudget).map { index in
+                let sourceIndex = runBudget == 1
+                    ? 0
+                    : Int((Double(index) * Double(drawable.count - 1) / Double(runBudget - 1)).rounded())
+                let segment = drawable[sourceIndex]
+                return [segment[0], segment[segment.count - 1]]
+            }
+        }
+
+        let extraBudget = limit - drawable.count * 2
+        let totalExtraCapacity = drawable.reduce(0) { $0 + $1.count - 2 }
+        guard extraBudget > 0, totalExtraCapacity > 0 else {
+            return drawable.map { [$0[0], $0[$0.count - 1]] }
+        }
+
+        var targets = Array(repeating: 2, count: drawable.count)
+        var remainders: [(index: Int, value: Double)] = []
+        for (index, segment) in drawable.enumerated() {
+            let capacity = segment.count - 2
+            let share = Double(extraBudget) * Double(capacity) / Double(totalExtraCapacity)
+            let whole = min(capacity, Int(share.rounded(.down)))
+            targets[index] += whole
+            remainders.append((index, share - Double(whole)))
+        }
+
+        var unallocated = limit - targets.reduce(0, +)
+        for remainder in remainders.sorted(by: { $0.value > $1.value }) where unallocated > 0 {
+            guard targets[remainder.index] < drawable[remainder.index].count else { continue }
+            targets[remainder.index] += 1
+            unallocated -= 1
+        }
+
+        return drawable.enumerated().map { index, segment in
+            downsamplePreservingExtrema(segment, limit: targets[index], value: value)
+        }
     }
 }
 
@@ -151,7 +207,7 @@ final class TodaySamplesCache {
     }
 }
 
-/// 功率曲线数据记忆化：仅在样本集合变化时重建（绘图最多 240 点）。
+/// 功率曲线数据记忆化：仅在样本集合变化时重建（绘图最多 800 点）。
 final class PowerChartDataCache {
     private var cached: PowerChartData?
     private var lastCount = -1
@@ -179,7 +235,7 @@ final class PowerChartDataCache {
     private var cachedSleepIntervals: [SleepInterval] = []
 }
 
-/// 电量曲线数据记忆化：仅在样本集合变化时重建（绘图最多 240 点）。
+/// 电量曲线数据记忆化：仅在样本集合变化时重建（绘图最多 800 点）。
 final class BatteryLevelChartDataCache {
     private var cached: BatteryLevelChartData?
     private var lastCount = -1
@@ -1165,14 +1221,15 @@ struct TodayBatteryLevelChart: View {
         for window: ChartZoomWindow,
         in domain: ClosedRange<Date>
     ) -> [[HistorySample]] {
-        let source = window.isZoomed
-            ? ChartViewport.visibleSamples(
-                samples,
-                in: domain,
-                maximum: HistoryChartRendering.maximumDisplayedSamples
+        if window.isZoomed {
+            let visible = ChartViewport.visibleSamples(samples, in: domain)
+            return HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+                PowerChartSegmentation.splitByGaps(visible),
+                limit: HistoryChartRendering.maximumDisplayedSamples,
+                value: { $0.percent }
             )
-            : chartData.displayedSamples
-        return PowerChartSegmentation.splitByGaps(source)
+        }
+        return chartData.displayedSegments
     }
 
     var body: some View {
@@ -1433,6 +1490,8 @@ struct TodayMetricChartData {
     let samples: [HistorySample]
     /// 抽样后的渲染样本，最多 `maximumDisplayedSamples` 条。
     let displayedSamples: [HistorySample]
+    /// 按原始采样缺口切开的渲染段，避免降采样间距触发错误断线。
+    let displayedSegments: [[HistorySample]]
     /// 由全量样本预计算的 Y 轴域（抽样可能丢极值，故不能用抽样集计算）。
     let valueDomain: ClosedRange<Double>
     /// Y 轴域内的整齐刻度与标签小数位。
@@ -1453,19 +1512,24 @@ struct TodayMetricChartData {
         self.valueDomain = domain
         self.axisTicks = MetricValueAxis.ticks(in: domain)
 
-        guard maximumDisplayedSamples > 1, valid.count > maximumDisplayedSamples else {
+        let sourceSegments = PowerChartSegmentation.splitByGaps(valid)
+        guard maximumDisplayedSamples > 1 else {
+            self.displayedSegments = sourceSegments
             self.displayedSamples = valid
             return
         }
-        self.displayedSamples = HistoryChartRendering.downsamplePreservingExtrema(
-            valid,
+
+        let displayedSegments = HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+            sourceSegments,
             limit: maximumDisplayedSamples,
             value: { metric.value(from: $0) }
         )
+        self.displayedSegments = displayedSegments
+        self.displayedSamples = displayedSegments.flatMap { $0 }
     }
 }
 
-/// 今日温压曲线数据记忆化：仅在样本集合或所选指标变化时重建（绘图最多 240 点）。
+/// 今日温压曲线数据记忆化：仅在样本集合或所选指标变化时重建（绘图最多 800 点）。
 final class TodayMetricChartDataCache {
     private var cached: TodayMetricChartData?
     private var lastMetric: TodayMetric?
@@ -1698,14 +1762,15 @@ struct TodayMetricChart: View {
         for window: ChartZoomWindow,
         in domain: ClosedRange<Date>
     ) -> [[HistorySample]] {
-        let source = window.isZoomed
-            ? ChartViewport.visibleSamples(
-                chartData.samples,
-                in: domain,
-                maximum: HistoryChartRendering.maximumDisplayedSamples
+        if window.isZoomed {
+            let visible = ChartViewport.visibleSamples(chartData.samples, in: domain)
+            return HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+                PowerChartSegmentation.splitByGaps(visible),
+                limit: HistoryChartRendering.maximumDisplayedSamples,
+                value: { activeMetric.value(from: $0) }
             )
-            : chartData.displayedSamples
-        return PowerChartSegmentation.splitByGaps(source)
+        }
+        return chartData.displayedSegments
     }
 
     var body: some View {
@@ -1992,9 +2057,10 @@ struct PowerChartData {
         )
         self.timeline = PowerChartTimeline(segments: validSegments)
         self.fullSegments = validSegments
-        let plotSegments = Self.downsampleSegments(
-            validSegments,
-            maximumDisplayedSamples: maximumDisplayedSamples
+        let plotSegments = HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+            validSegments.filter { $0.count > 1 },
+            limit: maximumDisplayedSamples,
+            value: { $0.consumptionPowerW }
         )
         let plotSamples = validSegments.flatMap { $0 }
         self.plotSegments = plotSegments
@@ -2013,60 +2079,6 @@ struct PowerChartData {
         )
     }
 
-    private static func downsampleSegments(
-        _ segments: [[HistorySample]],
-        maximumDisplayedSamples: Int
-    ) -> [[HistorySample]] {
-        let drawable = segments.filter { $0.count > 1 }
-        guard maximumDisplayedSamples > 1, !drawable.isEmpty else { return [] }
-
-        let totalCount = drawable.reduce(0) { $0 + $1.count }
-        guard totalCount > maximumDisplayedSamples else { return drawable }
-
-        // Keep both endpoints of each run so downsampling never joins across a no-power gap.
-        if drawable.count * 2 >= maximumDisplayedSamples {
-            let runBudget = maximumDisplayedSamples / 2
-            guard runBudget > 0 else { return [] }
-            return (0..<runBudget).map { index in
-                let sourceIndex = runBudget == 1
-                    ? 0
-                    : Int((Double(index) * Double(drawable.count - 1) / Double(runBudget - 1)).rounded())
-                let segment = drawable[sourceIndex]
-                return [segment[0], segment[segment.count - 1]]
-            }
-        }
-
-        let extraBudget = maximumDisplayedSamples - drawable.count * 2
-        let totalExtraCapacity = drawable.reduce(0) { $0 + $1.count - 2 }
-        guard extraBudget > 0, totalExtraCapacity > 0 else {
-            return drawable.map { [$0[0], $0[$0.count - 1]] }
-        }
-
-        var targets = Array(repeating: 2, count: drawable.count)
-        var remainders: [(index: Int, value: Double)] = []
-        for (index, segment) in drawable.enumerated() {
-            let capacity = segment.count - 2
-            let share = Double(extraBudget) * Double(capacity) / Double(totalExtraCapacity)
-            let whole = min(capacity, Int(share.rounded(.down)))
-            targets[index] += whole
-            remainders.append((index, share - Double(whole)))
-        }
-
-        var unallocated = maximumDisplayedSamples - targets.reduce(0, +)
-        for remainder in remainders.sorted(by: { $0.value > $1.value }) where unallocated > 0 {
-            guard targets[remainder.index] < drawable[remainder.index].count else { continue }
-            targets[remainder.index] += 1
-            unallocated -= 1
-        }
-
-        return drawable.enumerated().map { index, segment in
-            HistoryChartRendering.downsamplePreservingExtrema(
-                segment,
-                limit: targets[index],
-                value: { $0.consumptionPowerW }
-            )
-        }
-    }
 }
 
 struct PowerChartBreak: Equatable {
@@ -2137,6 +2149,8 @@ struct BatteryLevelChartData {
     let samples: [HistorySample]
     /// 抽样后的渲染样本，最多 `maximumDisplayedSamples` 条。
     let displayedSamples: [HistorySample]
+    /// 按原始采样缺口切开的渲染段，避免降采样间距触发错误断线。
+    let displayedSegments: [[HistorySample]]
     /// 由全量样本预计算的 Y 轴域（抽样可能丢极值，故不能用抽样集计算）。
     let percentDomain: ClosedRange<Double>
 
@@ -2145,17 +2159,20 @@ struct BatteryLevelChartData {
         self.samples = valid
         self.percentDomain = BatteryLevelAxis.yDomain(for: valid.map(\.percent))
 
-        guard maximumDisplayedSamples > 1,
-              valid.count > maximumDisplayedSamples else {
+        let sourceSegments = PowerChartSegmentation.splitByGaps(valid)
+        guard maximumDisplayedSamples > 1 else {
+            self.displayedSegments = sourceSegments
             self.displayedSamples = valid
             return
         }
 
-        self.displayedSamples = HistoryChartRendering.downsamplePreservingExtrema(
-            valid,
+        let displayedSegments = HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+            sourceSegments,
             limit: maximumDisplayedSamples,
             value: { $0.percent }
         )
+        self.displayedSegments = displayedSegments
+        self.displayedSamples = displayedSegments.flatMap { $0 }
     }
 }
 

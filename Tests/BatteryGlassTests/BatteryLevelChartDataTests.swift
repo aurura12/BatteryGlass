@@ -39,6 +39,26 @@ final class BatteryLevelChartDataTests: XCTestCase {
         XCTAssertEqual(data.displayedSamples.last?.timestamp, samples.last?.timestamp)
     }
 
+    func testDownsampledDailySeriesKeepsItsOriginalContinuousRun() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let samples = (0..<1_440).map { index in
+            sample(
+                at: first.addingTimeInterval(Double(index) * 60),
+                percent: Double(50 + index % 5)
+            )
+        }
+
+        let data = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 240)
+
+        XCTAssertEqual(data.displayedSamples.count, 240)
+        XCTAssertEqual(data.displayedSegments.count, 1)
+        // The selected points are more than five minutes apart, so re-running gap detection
+        // on the downsampled array would incorrectly turn this real continuous run into dots.
+        XCTAssertGreaterThan(PowerChartSegmentation.splitByGaps(data.displayedSamples).count, 1)
+        XCTAssertEqual(data.displayedSegments[0].first?.timestamp, samples.first?.timestamp)
+        XCTAssertEqual(data.displayedSegments[0].last?.timestamp, samples.last?.timestamp)
+    }
+
     func testKeepsAllSamplesUnderLimit() {
         let first = Date(timeIntervalSince1970: 1_000)
         let samples = (0..<5).map { index in

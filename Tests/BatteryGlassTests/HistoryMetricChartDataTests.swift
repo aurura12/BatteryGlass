@@ -44,6 +44,36 @@ final class HistoryMetricChartDataTests: XCTestCase {
         XCTAssertEqual(data.displayedSamples.last?.timestamp, samples.last?.timestamp)
     }
 
+    func testDownsampledDailySeriesKeepsItsOriginalContinuousRun() {
+        let samples = (0..<1_440).map { index in
+            sample(offset: Double(index) * 60, temperature: Double(30 + index % 5))
+        }
+
+        let data = TodayMetricChartData(
+            samples: samples,
+            metric: .temperature,
+            maximumDisplayedSamples: 240
+        )
+
+        XCTAssertEqual(data.displayedSamples.count, 240)
+        XCTAssertEqual(data.displayedSegments.count, 1)
+        // The selected points are more than five minutes apart, but the source had no gap.
+        XCTAssertGreaterThan(PowerChartSegmentation.splitByGaps(data.displayedSamples).count, 1)
+        XCTAssertEqual(data.displayedSegments[0].first?.timestamp, samples.first?.timestamp)
+        XCTAssertEqual(data.displayedSegments[0].last?.timestamp, samples.last?.timestamp)
+    }
+
+    func testDefaultRenderingBudgetUsesEightHundredSamples() {
+        let samples = (0..<1_440).map { index in
+            sample(offset: Double(index) * 60, temperature: Double(30 + index % 5))
+        }
+
+        let data = TodayMetricChartData(samples: samples, metric: .temperature)
+
+        XCTAssertEqual(HistoryChartRendering.maximumDisplayedSamples, 800)
+        XCTAssertEqual(data.displayedSamples.count, 800)
+    }
+
     func testChartDataEmptyWhenNoMetricValues() {
         let data = TodayMetricChartData(samples: [sample(offset: 0)], metric: .temperature)
 
