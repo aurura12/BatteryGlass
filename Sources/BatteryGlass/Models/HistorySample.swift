@@ -8,8 +8,6 @@ struct HistorySample: Codable, Identifiable, Equatable, Sendable {
     var percent: Double
     var cycleCount: Int
     var healthPercent: Double?
-    /// 新增于 payload v6；旧样本缺键解码为 nil。
-    var temperatureCelsius: Double? = nil
 
     init(
         id: UUID = UUID(),
@@ -18,8 +16,7 @@ struct HistorySample: Codable, Identifiable, Equatable, Sendable {
         consumptionPowerW: Double? = nil,
         percent: Double,
         cycleCount: Int,
-        healthPercent: Double?,
-        temperatureCelsius: Double? = nil
+        healthPercent: Double?
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -28,7 +25,6 @@ struct HistorySample: Codable, Identifiable, Equatable, Sendable {
         self.percent = percent
         self.cycleCount = cycleCount
         self.healthPercent = healthPercent
-        self.temperatureCelsius = temperatureCelsius
     }
 }
 

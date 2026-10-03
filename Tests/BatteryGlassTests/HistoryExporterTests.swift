@@ -27,26 +27,17 @@ final class HistoryExporterTests: XCTestCase {
 
         XCTAssertEqual(
             header,
-            "类型,时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%),耗电量(kWh),平均功率(W),最大功率(W),最小功率(W),样本数,温度(°C)"
+            "类型,时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%),耗电量(kWh),平均功率(W),最大功率(W),最小功率(W),样本数"
         )
     }
 
-    func testCSVIncludesTemperatureColumn() {
-        let sample = HistorySample(
-            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
-            power: 12.34,
-            consumptionPowerW: 12.3,
-            percent: 87.6,
-            cycleCount: 42,
-            healthPercent: 95.5,
-            temperatureCelsius: 35.5
-        )
-        let csv = HistoryExporter.csvString(samples: [sample], dailySummaries: [])
+    func testCSVHasNoTemperatureColumn() {
+        let csv = HistoryExporter.csvString(samples: [makeSample()], dailySummaries: [])
         let fields = csv.split(separator: "\n")[1]
             .split(separator: ",", omittingEmptySubsequences: false)
 
-        XCTAssertEqual(fields.count, 13)
-        XCTAssertEqual(fields[12], "35.5")
+        XCTAssertEqual(fields.count, 12)
+        XCTAssertFalse(csv.contains("温度"))
     }
 
     func testCSVLeavesNilFieldsEmpty() {
@@ -127,7 +118,7 @@ final class HistoryExporterTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try? decoder.decode(ExportPayloadFixture.self, from: data)
-        XCTAssertEqual(decoded?.version, 7)
+        XCTAssertEqual(decoded?.version, 8)
         XCTAssertEqual(decoded?.samples.count, 1)
         XCTAssertEqual(decoded?.samples.first?.cycleCount, 42)
         XCTAssertEqual(decoded?.dailySummaries.count, 1)

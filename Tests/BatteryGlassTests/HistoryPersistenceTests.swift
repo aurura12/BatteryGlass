@@ -458,7 +458,7 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertTrue(store.sleepSegments.isEmpty)
     }
 
-    func testRecordPersistsTemperatureOnSample() throws {
+    func testRecordDoesNotPersistTemperatureOnSample() throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
         let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
@@ -482,19 +482,23 @@ final class HistoryPersistenceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let payload = try decoder.decode(PersistedHistory.self, from: data)
-
-        XCTAssertEqual(payload.samples.last?.temperatureCelsius ?? 0, 35.2, accuracy: 0.0001)
+        XCTAssertNotNil(payload.samples.last)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let samples = try XCTUnwrap(json["samples"] as? [[String: Any]])
+        XCTAssertNil(samples.last?["temperatureCelsius"])
     }
 
-    func testLegacySampleWithoutTemperatureDecodesToNil() throws {
+    func testLegacyTemperatureFieldIsDiscardedWhenSampleIsReencoded() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
         let sampleJSON = """
-        {"id":"00000000-0000-0000-0000-000000000001","timestamp":"2026-08-27T10:00:00Z","power":-20,"consumptionPowerW":24,"percent":50,"cycleCount":1,"healthPercent":100}
+        {"id":"00000000-0000-0000-0000-000000000001","timestamp":"2026-08-27T10:00:00Z","power":-20,"consumptionPowerW":24,"percent":50,"cycleCount":1,"healthPercent":100,"temperatureCelsius":35.2}
         """
         let sample = try decoder.decode(HistorySample.self, from: Data(sampleJSON.utf8))
-        XCTAssertNil(sample.temperatureCelsius)
+        let encoded = try JSONEncoder().encode(sample)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(json["temperatureCelsius"])
     }
 
     private struct PersistedHistory: Decodable {

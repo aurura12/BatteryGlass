@@ -1,10 +1,9 @@
 import SwiftUI
 
-/// 可在独立窗口放大查看的曲线（窗口内即为 3 个标签页）。
+/// 可在独立窗口放大查看的曲线。
 enum ExpandedChart: String, CaseIterable, Identifiable {
     case power
     case level
-    case temperature
 
     var id: String { rawValue }
 
@@ -13,7 +12,6 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
         switch self {
         case .power: "功率曲线"
         case .level: "电量曲线"
-        case .temperature: "温度曲线"
         }
     }
 
@@ -22,7 +20,6 @@ enum ExpandedChart: String, CaseIterable, Identifiable {
         switch self {
         case .power: "功率"
         case .level: "电量"
-        case .temperature: "温度"
         }
     }
 
@@ -186,12 +183,6 @@ struct ChartDetailView: View {
         case .level:
             TodayBatteryLevelChart(
                 chartData: levelChartCache.data(for: samples),
-                day: day,
-                plotHeight: nil
-            )
-        case .temperature:
-            TodayMetricChart(
-                samples: samples,
                 day: day,
                 plotHeight: nil
             )

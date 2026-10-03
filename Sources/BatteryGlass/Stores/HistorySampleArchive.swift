@@ -83,6 +83,58 @@ struct HistorySampleArchive: Sendable {
         }
     }
 
+    /// One-time rewrite of archived JSON rows. Decoding with the current `HistorySample`
+    /// ignores the retired temperature field, and encoding removes it from stored blobs.
+    func removeTemperatureHistory() throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        let database = try open(writable: true)
+        defer { sqlite3_close(database) }
+
+        try execute("BEGIN IMMEDIATE", in: database)
+        do {
+            if try userVersion(in: database) >= 1 {
+                try execute("COMMIT", in: database)
+                return
+            }
+
+            guard try hasSamplesTable(in: database) else {
+                try execute("PRAGMA user_version = 1", in: database)
+                try execute("COMMIT", in: database)
+                return
+            }
+
+            let samples = try archivedSamples(in: database)
+            let statement = try prepare("UPDATE samples SET payload = ? WHERE minute = ?", in: database)
+            defer { sqlite3_finalize(statement) }
+
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            for (minute, sample) in samples {
+                let data = try encoder.encode(sample)
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                let bindResult = data.withUnsafeBytes { bytes in
+                    sqlite3_bind_blob(
+                        statement,
+                        1,
+                        bytes.baseAddress,
+                        Int32(bytes.count),
+                        unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+                    )
+                }
+                guard bindResult == SQLITE_OK else { throw failure(in: database) }
+                sqlite3_bind_int64(statement, 2, minute)
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw failure(in: database) }
+            }
+
+            try execute("PRAGMA user_version = 1", in: database)
+            try execute("COMMIT", in: database)
+        } catch {
+            try? execute("ROLLBACK", in: database)
+            throw error
+        }
+    }
+
     private func readSamples(from start: Date?, to end: Date?) throws -> [HistorySample] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
         let database = try open(writable: false)
@@ -121,6 +173,45 @@ struct HistorySampleArchive: Sendable {
         }
         sqlite3_busy_timeout(database, 5_000)
         return database
+    }
+
+    private func userVersion(in database: OpaquePointer) throws -> Int32 {
+        let statement = try prepare("PRAGMA user_version", in: database)
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw failure(in: database) }
+        return sqlite3_column_int(statement, 0)
+    }
+
+    private func hasSamplesTable(in database: OpaquePointer) throws -> Bool {
+        let statement = try prepare(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'samples' LIMIT 1",
+            in: database
+        )
+        defer { sqlite3_finalize(statement) }
+        let result = sqlite3_step(statement)
+        if result == SQLITE_ROW { return true }
+        if result == SQLITE_DONE { return false }
+        throw failure(in: database)
+    }
+
+    private func archivedSamples(in database: OpaquePointer) throws -> [(Int64, HistorySample)] {
+        let statement = try prepare("SELECT minute, payload FROM samples ORDER BY timestamp", in: database)
+        defer { sqlite3_finalize(statement) }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var samples: [(Int64, HistorySample)] = []
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { return samples }
+            guard result == SQLITE_ROW,
+                  let bytes = sqlite3_column_blob(statement, 1) else {
+                throw failure(in: database)
+            }
+            let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 1)))
+            let sample = try decoder.decode(HistorySample.self, from: data)
+            samples.append((sqlite3_column_int64(statement, 0), sample))
+        }
     }
 
     private func prepare(_ sql: String, in database: OpaquePointer) throws -> OpaquePointer {

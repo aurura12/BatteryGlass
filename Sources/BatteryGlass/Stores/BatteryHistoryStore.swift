@@ -145,8 +145,7 @@ final class BatteryHistoryStore {
             consumptionPowerW: snapshot.consumptionPowerW,
             percent: snapshot.percent,
             cycleCount: snapshot.cycleCount,
-            healthPercent: snapshot.healthPercent,
-            temperatureCelsius: snapshot.temperatureCelsius
+            healthPercent: snapshot.healthPercent
         )
 
         samples.append(sample)
@@ -325,12 +324,20 @@ final class BatteryHistoryStore {
         var sleepSegments: [SleepSegment]?
         // v4 新增；可选以兼容 v2/v3 旧文件。
         var sleepIntervals: [SleepInterval]?
-        // v6 新增 HistorySample.temperatureCelsius，为可选、旧文件缺键解码为 nil，
-        // 无需额外迁移分支。（电压已不再写入历史；旧文件里多出的 voltage 键会被合成
-        // Codable 忽略，不影响加载。）
+        // v8 删除历史温度字段；旧文件里的 temperatureCelsius 会被 Codable 忽略。
     }
 
     private func load() {
+        do {
+            try Self.removeTemperatureHistoryFromLegacyBackup(at: Self.legacyBackupURL(for: fileURL))
+        } catch {
+            NSLog("BatteryGlass: 清理旧温度备份失败 - %@", error.localizedDescription)
+        }
+        do {
+            try archive.removeTemperatureHistory()
+        } catch {
+            NSLog("BatteryGlass: 清理旧温度曲线失败 - %@", error.localizedDescription)
+        }
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         guard let data = BoundedFileReader.read(
             at: fileURL,
@@ -342,8 +349,9 @@ final class BatteryHistoryStore {
         guard HistoryLoadLimits.acceptsHistory(
             sampleCount: payload.samples.count,
             summaryCount: payload.dailySummaries.count
-        ), payload.version <= 7 else { canPersist = false; return }
+        ), payload.version <= 8 else { canPersist = false; return }
         needsLegacyBackup = payload.version < 7
+        let temperatureHistoryNeedsRemoval = payload.version < 8
         samples = payload.samples
         if payload.version >= 2 {
             // 统一按日期升序，保证依赖顺序的 suffix/UI 取最近 N 天正确。
@@ -391,7 +399,7 @@ final class BatteryHistoryStore {
         pruneHistory()
 
         if recovery.didChange || summariesChanged || qualityBackfilled
-            || sleepEnergyRestored || samplingGapsBackfilled {
+            || sleepEnergyRestored || samplingGapsBackfilled || temperatureHistoryNeedsRemoval {
             flush()
         }
     }
@@ -416,7 +424,7 @@ final class BatteryHistoryStore {
 
     private func makePayload() -> HistoryPayload {
         HistoryPayload(
-            version: 7,
+            version: 8,
             samples: samples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,
@@ -426,6 +434,27 @@ final class BatteryHistoryStore {
 
     nonisolated private static func legacyBackupURL(for fileURL: URL) -> URL {
         fileURL.deletingPathExtension().appendingPathExtension("legacy.json")
+    }
+
+    nonisolated private static func removeTemperatureHistoryFromLegacyBackup(at url: URL) throws {
+        guard let data = BoundedFileReader.read(
+            at: url,
+            maximumBytes: HistoryLoadLimits.maxHistoryFileBytes
+        ), data.range(of: Data("\"temperatureCelsius\"".utf8)) != nil else { return }
+        guard var payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var samples = payload["samples"] as? [[String: Any]] else { return }
+
+        var changed = false
+        for index in samples.indices {
+            if samples[index].removeValue(forKey: "temperatureCelsius") != nil {
+                changed = true
+            }
+        }
+        guard changed else { return }
+
+        payload["samples"] = samples
+        let cleaned = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        try cleaned.write(to: url, options: .atomic)
     }
 
     nonisolated private static func liveSamples(_ samples: [HistorySample], today: Date) -> [HistorySample] {
@@ -449,6 +478,7 @@ final class BatteryHistoryStore {
                 if !FileManager.default.fileExists(atPath: backup.path) {
                     try FileManager.default.copyItem(at: fileURL, to: backup)
                 }
+                try removeTemperatureHistoryFromLegacyBackup(at: backup)
             }
             // Commit archival rows before replacing the live snapshot. A crash between the
             // two writes is safe: the next attempt upserts the same minute buckets.
