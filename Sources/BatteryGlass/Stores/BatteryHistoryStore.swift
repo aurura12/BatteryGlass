@@ -33,6 +33,9 @@ final class BatteryHistoryStore {
     private var sleepIntervalStartedObserver: NSObjectProtocol?
     private var sleepIntervalEndedObserver: NSObjectProtocol?
     private var activeSleepStart: Date?
+    /// 按日累计的「未被积分覆盖的时长」，按成因分开记；跨天区间按比例拆分。
+    /// 只有 `needsWarning` 成立才把当天标为采样断点。
+    private var unaccountedByDay: [String: EnergyCalculator.DailyUnaccountedTime] = [:]
     private var lastRecord = Date.distantPast
     private var lastCycleCount = -1
     private var lastHealth: Double?
@@ -163,8 +166,8 @@ final class BatteryHistoryStore {
             let overlapsKnownSleep = excludedIntervals.contains {
                 $0.overlaps(previous.timestamp, sample.timestamp)
             }
-            if duration > EnergyCalculator.maximumGap, !overlapsKnownSleep {
-                markSamplingGap(from: previous.timestamp, to: sample.timestamp)
+            if duration > 0, !overlapsKnownSleep {
+                recordUnaccountedTime(from: previous, to: sample)
             }
         }
         lastRecordedSample = sample
@@ -276,6 +279,7 @@ final class BatteryHistoryStore {
         dailySummaries = []
         sleepSegments = []
         sleepIntervals = []
+        unaccountedByDay = [:]
         activeSleepStart = nil
         lastRecordedSample = nil
         lastSamplesPrunedDay = nil
@@ -360,7 +364,6 @@ final class BatteryHistoryStore {
         dailySummaries = sanitizedSummaries
         let qualityBackfilled = markLegacyEnergyQualityUnknown()
         let sleepEnergyRestored = restoreMissingSleepEnergyFromSegments()
-        let samplingGapsBackfilled = markKnownSamplingGaps(in: samples)
 
         let recovery = HistorySampleRecovery.backfillConsumptionPower(
             in: samples,
@@ -379,6 +382,9 @@ final class BatteryHistoryStore {
                 restoreSleepEnergy(forToday: currentDate())
             }
         }
+        // Check gaps after diagnostics recovery so a sample that was successfully restored
+        // does not leave a stale "incomplete" warning on today's summary.
+        let samplingGapsBackfilled = applyTodaySamplingGapQuality(in: samples)
 
         lastRecordedSample = samples.max { $0.timestamp < $1.timestamp }
         lastSamplesPrunedDay = nil
@@ -624,32 +630,58 @@ final class BatteryHistoryStore {
         return true
     }
 
-    @discardableResult
-    private func markSamplingGap(from start: Date, to end: Date) -> Bool {
-        var changed = false
-        for dayKey in EnergyCalculator.dayKeys(from: start, to: end) {
-            changed = updateEnergyQuality(for: dayKey) { $0.hasSamplingGaps = true } || changed
+    /// 累计一段未被积分覆盖的时长（断点或任一端缺功率读数）。
+    /// 达到成因对应的门槛才把日期标为采样断点——单次几秒的读数缺失对日合计没有实质影响。
+    private func recordUnaccountedTime(from previous: HistorySample, to sample: HistorySample) {
+        let duration = sample.timestamp.timeIntervalSince(previous.timestamp)
+        guard duration > 0 else { return }
+        let accountsForEnergy = duration <= EnergyCalculator.maximumGap
+            && EnergyCalculator.isValidPower(previous.consumptionPowerW)
+            && EnergyCalculator.isValidPower(sample.consumptionPowerW)
+        guard !accountsForEnergy else { return }
+
+        let isGap = duration > EnergyCalculator.maximumGap
+        for segment in EnergyCalculator.daySegments(
+            from: previous.timestamp,
+            to: sample.timestamp
+        ) {
+            addUnaccounted(segment.seconds, isGap: isGap, to: segment.dayKey)
         }
-        return changed
     }
 
-    private func markKnownSamplingGaps(in samples: [HistorySample]) -> Bool {
-        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
-        // 往日样本已降到 1 分钟一条，相邻间隔最长可达约 119 秒，会被误判成「采样断点」。
-        // 只有以今天结尾的间隔才做判定；今天的原生精度不变，当天真实断点仍会被标记。
-        let todayStart = Calendar.current.startOfDay(for: currentDate())
-        var changed = false
-        for pair in zip(sorted, sorted.dropFirst()) {
-            let start = pair.0.timestamp
-            let end = pair.1.timestamp
-            guard end >= todayStart,
-                  end.timeIntervalSince(start) > EnergyCalculator.maximumGap,
-                  !sleepIntervals.contains(where: { $0.overlaps(start, end) }) else {
-                continue
-            }
-            changed = markSamplingGap(from: start, to: end) || changed
+    private func addUnaccounted(_ seconds: TimeInterval, isGap: Bool, to dayKey: String) {
+        var value = unaccountedByDay[dayKey] ?? EnergyCalculator.DailyUnaccountedTime()
+        if isGap {
+            value.gapSeconds += seconds
+        } else {
+            value.missingReadingSeconds += seconds
         }
-        return changed
+        unaccountedByDay[dayKey] = value
+        guard value.needsWarning else { return }
+        updateEnergyQuality(for: dayKey) { $0.hasSamplingGaps = true }
+    }
+
+    /// 用回填后的样本重算「今天」未被积分覆盖的时长。
+    ///
+    /// 只判定今天：往日样本已降到 1 分钟一条，间隔本身就接近甚至超过 `maximumGap`，
+    /// 据此重算会把往日全部误判成断点。今天始终保持原生精度，因此这里的结论是权威值——
+    /// 既避免诊断回填前把已恢复的样本误标成缺口，也让当天状态能随样本补齐而自动消除。
+    private func applyTodaySamplingGapQuality(in samples: [HistorySample]) -> Bool {
+        let report = EnergyCalculator.unaccountedSecondsByDay(
+            samples: samples,
+            excludedIntervals: sleepIntervals
+        )
+        let todayKey = BatteryFormatters.dayKey(for: currentDate())
+        // 只保留今天的累计值：往日没有全精度样本，不能据此继续累加。
+        let today = report[todayKey] ?? EnergyCalculator.DailyUnaccountedTime()
+        unaccountedByDay = [todayKey: today]
+        // 没有缺口、当天也没有汇总时不要为了「清除标志」凭空造一条空 summary。
+        guard today.needsWarning || dailySummaries.contains(where: { $0.dayKey == todayKey }) else {
+            return false
+        }
+        return updateEnergyQuality(for: todayKey) { quality in
+            quality.hasSamplingGaps = today.needsWarning
+        }
     }
 
     private func markSleepEnergyQuality(_ segment: SleepSegment, for dayKey: String) {

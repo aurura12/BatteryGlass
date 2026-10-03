@@ -53,6 +53,21 @@ struct DailyEnergyQuality: Codable, Equatable, Sendable {
         self.hasLowerBoundSleepEnergy = hasLowerBoundSleepEnergy
         self.hasUnknownHistoricalCoverage = hasUnknownHistoricalCoverage
     }
+
+    /// 数值可能偏离真实值（采样断点 / 睡眠估算 / 未校准计数器 / 只统计到可观测来源）。
+    /// 这类原因会让日合计「偏低或有偏差」，用橙色告警。
+    var hasAccuracyWarning: Bool {
+        hasSamplingGaps
+            || hasEstimatedSleepEnergy
+            || hasUncalibratedCounterEnergy
+            || hasLowerBoundSleepEnergy
+    }
+
+    /// 旧版本记录，统计口径未知。数值本身不一定偏低，因此不并入 `hasAccuracyWarning`，
+    /// 避免整段历史一起变橙、把真正的缺口淹没掉。
+    var hasUnknownProvenance: Bool {
+        hasUnknownHistoricalCoverage
+    }
 }
 
 struct DailySummary: Codable, Identifiable, Equatable, Sendable {
@@ -69,4 +84,17 @@ struct DailySummary: Codable, Identifiable, Equatable, Sendable {
     var energyQuality: DailyEnergyQuality? = nil
 
     var id: String { dayKey }
+}
+
+extension DailySummary {
+    /// 「有可用且合法的日耗电量」。缺值、NaN、负值都不算，
+    /// 与 `EnergyCalculator` 积分时的有效性判断共用同一个谓词，避免两处漂移。
+    var hasValidEnergy: Bool {
+        EnergyCalculator.isValidPower(energyKWh)
+    }
+
+    /// 该日需要橙色告警：没有可用值，或存在会让数值偏低/有偏差的记录。
+    var needsEnergyAttention: Bool {
+        !hasValidEnergy || (energyQuality?.hasAccuracyWarning ?? false)
+    }
 }

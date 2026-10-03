@@ -293,6 +293,91 @@ final class EnergyConsumptionTests: XCTestCase {
         XCTAssertTrue(snapshot.displayPowerText.hasPrefix("-24"))
     }
 
+    func testDisplayPowerFollowsConsumptionFallbackWhenGaugeFreezes() {
+        // 面板必须与能耗计量一致：电量计冻结读 0 时显示系统侧回退值而不是 0.0 W。
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.adapterConnected = false
+        snapshot.voltage = 12
+        snapshot.current = 0
+        snapshot.systemPowerW = 26.57
+
+        XCTAssertEqual(snapshot.displayPower, -26.57, accuracy: 0.0001)
+        XCTAssertTrue(snapshot.displayPowerText.hasPrefix("-26.6"))
+    }
+
+    func testDisplayPowerKeepsRawReadingWhenEveryFallbackIsInvalid() {
+        // 所有回退都失效时保持原始读数，不回退成 0。
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.adapterConnected = false
+        snapshot.voltage = 12
+        snapshot.current = 8.85 / 12
+        snapshot.systemPowerW = -8.85
+
+        XCTAssertEqual(snapshot.displayPower, 8.85, accuracy: 0.0001)
+    }
+
+    // MARK: - consumptionPowerW（能耗计量口径的回退）
+
+    func testConsumptionPowerFallsBackToSystemLoadWhenGaugeFreezesAtZero() {
+        // 拔电瞬间电量计冻结读 0，但 SystemLoad 仍有效（实测 26.57 W 与拔电前一致）。
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.adapterConnected = false
+        snapshot.voltage = 12
+        snapshot.current = 0
+        snapshot.systemPowerW = 26.57
+
+        XCTAssertNil(snapshot.batteryDischargePowerW)
+        XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 26.57, accuracy: 0.0001)
+    }
+
+    func testConsumptionPowerPrefersBatteryReadingOverSystemLoad() {
+        // 电量计有效时仍以电池侧读数为准，SystemLoad 只作回退。
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.voltage = 12
+        snapshot.current = -2
+        snapshot.systemPowerW = 100
+
+        XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 24, accuracy: 0.0001)
+    }
+
+    func testConsumptionPowerStaysNilWhenEveryReadingIsInvalid() {
+        // 拔电时若电量计残留充电值、SystemLoad 也已翻负，则没有任何可信读数，
+        // 必须保持 nil 让上层标记为读数缺失，不能用估计值填补。
+        var snapshot = BatterySnapshot()
+        snapshot.state = .discharging
+        snapshot.adapterConnected = false
+        snapshot.voltage = 12
+        snapshot.current = 8.85 / 12
+        snapshot.systemPowerW = -8.85
+
+        XCTAssertNil(snapshot.batteryDischargePowerW)
+        XCTAssertNil(snapshot.consumptionPowerW)
+    }
+
+    func testConsumptionPowerCountsDischargeDuringStaleStateTransition() {
+        // 适配器已拔但状态尚未切到放电（拔插瞬态）：电池读数明确指向放电时仍应计量。
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.adapterConnected = false
+        snapshot.voltage = 12
+        snapshot.current = -35.23 / 12
+
+        XCTAssertEqual(snapshot.consumptionPowerW ?? 0, 35.23, accuracy: 0.01)
+    }
+
+    func testConsumptionPowerStaysNilWhenBatteryAbsent() {
+        // 状态未知且未接入适配器时不应凭空产生功率。
+        var snapshot = BatterySnapshot()
+        snapshot.state = .unknown
+        snapshot.adapterConnected = false
+
+        XCTAssertNil(snapshot.consumptionPowerW)
+    }
+
     func testHistorySampleDecodesWithoutEnergyField() throws {
         let data = #"{"id":"00000000-0000-0000-0000-000000000001","timestamp":0,"power":-20,"percent":50,"cycleCount":1,"healthPercent":100}"#.data(using: .utf8)!
 
@@ -316,7 +401,8 @@ final class EnergyConsumptionTests: XCTestCase {
             previousAdapterConnected: true
         )
 
-        // 放电时 SystemPowerIn 含电池补充的电量，不能用它覆盖系统功耗。
+        // 放电时适配器输入只覆盖适配器这一路（电池补充的部分不在其中），
+        // 因此不能用它覆盖系统功耗，应回退到电池放电功率。
         XCTAssertEqual(result.systemPowerW ?? 0, 24, accuracy: 0.0001)
         XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
     }
@@ -353,6 +439,63 @@ final class EnergyConsumptionTests: XCTestCase {
 
         XCTAssertEqual(result.systemPowerW ?? 0, 36, accuracy: 0.0001)
         XCTAssertEqual(result.adapterInputPowerW ?? 0, 80, accuracy: 0.0001)
+    }
+
+    func testConfirmedHybridUsesSourceSumEvenWhenSystemLoadIsAvailable() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 28_519,
+            adapterConnected: true,
+            state: .charging,
+            systemPowerInMW: 28_770,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: -240,
+            electricalPowerW: -0.24,
+            previous: 28.77,
+            previousAdapterConnected: true,
+            batteryDischargingWhilePlugged: true
+        )
+
+        // 已确认混合供电时必须用「适配器输入 + 电池放电」（与 consumptionPowerW 同口径），
+        // 不能退回 SystemLoad——它不是本应用的主指标。
+        XCTAssertEqual(result.systemPowerW ?? 0, 29.01, accuracy: 0.0001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 28.77, accuracy: 0.0001)
+    }
+
+    func testConfirmedHybridFallsBackToSourceSumWithoutSystemLoad() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 0,
+            adapterConnected: true,
+            state: .pluggedIn,
+            systemPowerInMW: 28_770,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: -180,
+            electricalPowerW: -0.18,
+            previous: 28.77,
+            previousAdapterConnected: true,
+            batteryDischargingWhilePlugged: true
+        )
+
+        XCTAssertEqual(result.systemPowerW ?? 0, 28.95, accuracy: 0.0001)
+        XCTAssertEqual(result.adapterInputPowerW ?? 0, 28.77, accuracy: 0.0001)
+    }
+
+    func testConfirmedHybridWithoutAdapterInputUsesBatteryDischargeOnly() {
+        let result = BatteryMonitor.resolvedSystemPowerW(
+            systemLoadMW: 0,
+            adapterConnected: true,
+            state: .charging,
+            systemPowerInMW: 0,
+            chargingPowerW: nil,
+            telemetryBatteryPowerMW: 0,
+            electricalPowerW: -12,
+            previous: 12,
+            previousAdapterConnected: true,
+            batteryDischargingWhilePlugged: true
+        )
+
+        // 没有适配器输入可加，只能保留可观测的电池放电，不能凭空放大。
+        XCTAssertEqual(result.systemPowerW ?? 0, 12, accuracy: 0.0001)
+        XCTAssertNil(result.adapterInputPowerW)
     }
 
     func testSystemPowerUsesAdapterInputMinusChargeWhenPlugged() {

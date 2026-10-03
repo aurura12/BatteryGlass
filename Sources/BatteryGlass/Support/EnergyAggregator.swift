@@ -39,29 +39,46 @@ struct EnergyAggregate: Identifiable, Equatable {
     var periodStart: Date
     var title: String
     var energyKWh: Double
+    /// 该周期内「没有可用值」或「存在会让数值偏低/有偏差的记录」的天数。
+    var incompleteDayCount: Int = 0
 
     var id: Date { periodStart }
 }
 
 /// 把每日能耗汇总按日/周/月聚合（纯函数，便于单元测试）。
 enum EnergyAggregator {
+    private struct PeriodValue {
+        var energyKWh = 0.0
+        var hasEnergy = false
+        var incompleteDayCount = 0
+    }
+
     static func aggregate(
         summaries: [DailySummary],
         grouping: EnergyGrouping,
         calendar: Calendar = .current
     ) -> [EnergyAggregate] {
-        var merged: [Date: Double] = [:]
+        var merged: [Date: PeriodValue] = [:]
         for summary in summaries {
-            guard let energy = summary.energyKWh else { continue }
             let localDate = date(forDayKey: summary.dayKey, calendar: calendar) ?? summary.date
             let start = periodStart(for: localDate, grouping: grouping, calendar: calendar)
-            merged[start, default: 0] += energy
+            var value = merged[start, default: PeriodValue()]
+            if summary.hasValidEnergy, let energy = summary.energyKWh {
+                value.energyKWh += energy
+                value.hasEnergy = true
+            }
+            if summary.needsEnergyAttention {
+                value.incompleteDayCount += 1
+            }
+            merged[start] = value
         }
-        return merged.keys.sorted().map { start in
-            EnergyAggregate(
+        return merged.keys.sorted().compactMap { start in
+            guard let value = merged[start], value.hasEnergy else { return nil }
+            return EnergyAggregate(
                 periodStart: start,
                 title: title(for: start, grouping: grouping, calendar: calendar),
-                energyKWh: merged[start] ?? 0
+                energyKWh: value.energyKWh,
+                incompleteDayCount: value.incompleteDayCount
             )
         }
     }

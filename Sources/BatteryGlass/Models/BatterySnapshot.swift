@@ -47,7 +47,7 @@ struct BatterySnapshot: Equatable, Sendable {
     /// The positive battery-side contribution when the signed reading confirms discharge.
     var batteryDischargePowerW: Double? {
         let batteryPower = power
-        guard batteryPower.isFinite, batteryPower < -0.01 else { return nil }
+        guard batteryPower.isFinite, batteryPower < -BatteryPowerThresholds.minimumDischargeW else { return nil }
         return -batteryPower
     }
 
@@ -80,9 +80,14 @@ struct BatterySnapshot: Equatable, Sendable {
     }
 
     /// 用于每日能耗统计的统一功率：适配器输入或电池放电功率。
+    ///
+    /// 放电分支在电量计读数不可用时回退到 `systemPowerW`：拔插电源瞬间电量计会冻结在
+    /// 0 或残留的充电值上数十秒，而同期 SystemLoad 依然有效。实测放电状态下两者中位
+    /// 误差仅 1 mW，且拔电前后 SystemLoad 保持同一数值，因此回退值能与拔电前无缝衔接；
+    /// 不回退会把这几十秒的功率整个丢掉（实测每天 2~3 次，合计 0.4~1.5 Wh）。
     var consumptionPowerW: Double? {
         if state == .discharging {
-            return batteryDischargePowerW
+            return batteryDischargePowerW ?? positiveSystemPowerW
         }
 
         if adapterConnected {
@@ -92,7 +97,18 @@ struct BatterySnapshot: Equatable, Sendable {
             return adapterInputPowerW
                 + (batteryDischargingWhilePlugged ? (batteryDischargePowerW ?? 0) : 0)
         }
-        return nil
+        // 未接入适配器、状态尚未切到放电（拔插瞬间的状态残留）：电池侧读数若已明确指向
+        // 放电，仍应计量。此处原先返回 nil，会让这类瞬态窗口同样丢功率。
+        return batteryDischargePowerW
+    }
+
+    /// 放电时可用于替代电池读数的系统侧功率（W）。
+    ///
+    /// 放电状态下 `systemPowerW` 由 SystemLoad 得出、恒为正，是电池输出的独立观测；
+    /// 缺失或不合法时返回 nil，交由上层标记为读数缺失。
+    private var positiveSystemPowerW: Double? {
+        guard let systemPowerW, systemPowerW.isFinite, systemPowerW > 0 else { return nil }
+        return systemPowerW
     }
 
     var temperatureCelsius: Double?
@@ -114,11 +130,22 @@ struct BatterySnapshot: Equatable, Sendable {
 
     /// 展示功率取值：与主面板"实时功率"卡保持一致——适配器供电（充电/已接通电源）时
     /// 优先显示适配器输出功率（适配器输入 → 系统功耗 → 电池功率 逐级回退），否则显示电池充放电功率。
+    ///
+    /// 放电时若电池读数不可用则显示系统侧观测，而不是冻结的 0.0 W：面板数值与
+    /// `consumptionPowerW` 记入的能量必须出自同一观测，否则会出现"面板显示 0 W、
+    /// 当日能耗却在增长"。两个口径的取值链各自独立（见设计文档
+    /// `docs/superpowers/plans/2026-09-06-precision-energy-accounting.md`），此处只是
+    /// 让显示在读数失效时也有回退，不改变任一方的定义。
     var displayPower: Double {
         switch state {
         case .charging, .pluggedIn:
             return adapterInputPowerW ?? systemPowerW ?? power
-        case .discharging, .unknown:
+        case .discharging:
+            if let fallback = batteryDischargePowerW ?? positiveSystemPowerW {
+                return -fallback
+            }
+            return power
+        case .unknown:
             return power
         }
     }

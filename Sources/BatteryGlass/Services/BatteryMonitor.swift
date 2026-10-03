@@ -185,7 +185,8 @@ final class BatteryMonitor {
             telemetryBatteryPowerMW: io.telemetryBatteryPowerMW,
             electricalPowerW: s.power,
             previous: snapshot.systemPowerW,
-            previousAdapterConnected: snapshot.adapterConnected
+            previousAdapterConnected: snapshot.adapterConnected,
+            batteryDischargingWhilePlugged: s.batteryDischargingWhilePlugged
         )
         s.systemPowerW = resolved.systemPowerW
         s.adapterInputPowerW = resolved.adapterInputPowerW
@@ -705,7 +706,7 @@ final class BatteryMonitor {
         telemetryBatteryPowerMW: Double,
         electricalPowerW: Double
     ) -> Double? {
-        if electricalPowerW.isFinite, electricalPowerW < -0.01 {
+        if electricalPowerW.isFinite, electricalPowerW < -BatteryPowerThresholds.minimumDischargeW {
             return abs(electricalPowerW)
         }
         // BatteryPower 在部分 Apple Silicon 机型上会相对 IsCharging 滞后；
@@ -720,11 +721,11 @@ final class BatteryMonitor {
     ///
     /// 返回值：
     /// - `adapterInputPowerW`：仅在接入适配器且存在 SystemPowerIn 遥测时非 nil；
-    /// - `systemPowerW`：优先取"适配器输入 − 充电功率"（电池非放电时），
-    ///   其次 SystemLoad，再次电池放电功率，最后仅在供电方式未变化时沿用上次值。
+    /// - `systemPowerW`：电池非放电时取"适配器输入 − 充电功率"；已确认混合供电时取
+    ///   "适配器输入 + 电池放电功率"（与 `consumptionPowerW` 同一口径）；其次 SystemLoad；
+    ///   再次电池放电功率；最后仅在供电方式未变化时沿用上次值。
     ///
-    /// 放电状态下不使用适配器总输入覆盖：此时 SystemPowerIn 包含了电池补充的电量，
-    /// 直接用会让"系统功耗"偏低，应改用 SystemLoad 或电池放电功率。
+    /// 放电状态下不单独用适配器总输入覆盖：此时它只覆盖适配器这一路，缺少电池补充的部分。
     nonisolated static func resolvedSystemPowerW(
         systemLoadMW: Double,
         adapterConnected: Bool,
@@ -734,14 +735,15 @@ final class BatteryMonitor {
         telemetryBatteryPowerMW: Double,
         electricalPowerW: Double,
         previous: Double?,
-        previousAdapterConnected: Bool
+        previousAdapterConnected: Bool,
+        batteryDischargingWhilePlugged: Bool = false
     ) -> (systemPowerW: Double?, adapterInputPowerW: Double?) {
         let adapterInput = adapterConnected && systemPowerInMW.isFinite && systemPowerInMW > 0
             ? systemPowerInMW / 1000
             : nil
-        // 充电状态以 IsCharging/电气功率为准，不让滞后的 BatteryPower 覆盖；
-        // 已接通但未充电时才允许负功率遥测触发放电回退。
+        // 已确认的插电放电优先于 IsCharging 状态；未确认的充电遥测仍沿用原口径。
         let batteryIsDischarging = state == .discharging ||
+            batteryDischargingWhilePlugged ||
             (state == .pluggedIn && dischargingSystemPowerW(
                 telemetryBatteryPowerMW: telemetryBatteryPowerMW,
                 electricalPowerW: electricalPowerW
@@ -749,6 +751,17 @@ final class BatteryMonitor {
 
         if let adapterInput, state != .discharging, !batteryIsDischarging {
             return (max(0, adapterInput - (chargingPowerW ?? 0)), adapterInput)
+        }
+        // 已确认混合供电：两个可观测电源来源相加，必须先于 SystemLoad 判定——SystemLoad 是
+        // 机器内部负载口径（在部分机型上还与 BatteryPower 耦合），按设计文档它不是主指标，
+        // 排在前面会让这一支在上述机型上永远走不到。
+        if batteryDischargingWhilePlugged,
+           let adapterInput,
+           let batteryDischarge = dischargingSystemPowerW(
+               telemetryBatteryPowerMW: telemetryBatteryPowerMW,
+               electricalPowerW: electricalPowerW
+           ) {
+            return (adapterInput + batteryDischarge, adapterInput)
         }
         if systemLoadMW.isFinite && systemLoadMW > 0 {
             return (systemLoadMW / 1000, adapterInput)

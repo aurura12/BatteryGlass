@@ -2,6 +2,17 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-10-03]
+
+### 修改
+- 提高插电混合供电的能量计量准确性：`BatteryDischargeConfirmation` 的“插电同时放电”确认从**只认 `.pluggedIn`** 扩到 `.charging`（macOS 在适配器供不上时会长时间停留在“充电中”而电池仍在放电，此前这段时间只记适配器输入、漏掉电池放电贡献），并把进入门槛由 0.01 W 提到 `confirmedDischargeW`（0.1 W，滤掉电量计零点漂移），`.pluggedIn` 需连续 2 个样本、`.charging` 需 6 个（该状态下的负读数可能只是状态切换滞后）；新增**滞回**（进入 0.1 W / 维持 0.01 W）与**状态切换重置计数**，避免读数在 0.01~0.1 W 抖动时面板在「电池放电 / 给电池 0.0 W」之间跳变、能耗里反复摘掉电池贡献。阈值统一到新增 `Models/BatteryPowerThresholds.swift`（`minimumDischargeW` / `confirmedDischargeW`），`BatterySnapshot.batteryDischargePowerW` 与 `BatteryMonitor.dischargingSystemPowerW` 一并改用，避免两处数字漂移。`BatteryMonitor.resolvedSystemPowerW` 的混合供电分支改为**先于 SystemLoad 判定**并取「适配器输入 + 电池放电」（与 `consumptionPowerW` 同口径，SystemLoad 是内部负载口径、不是本应用主指标，此前排在后面导致该分支在有 SystemLoad 的机型上永远走不到）。（`Models/BatteryDischargeConfirmation.swift`、`Models/BatteryPowerThresholds.swift`、`Models/BatterySnapshot.swift`、`Services/BatteryMonitor.swift`、`Views/LiveDashboardView.swift`）
+- 采样断点判定改为**按当日累计「未计入积分的时长」并区分成因**（新增 `EnergyCalculator.unaccountedSecondsByDay` / `daySegments` 与 `DailyUnaccountedTime`：`gapSeconds` = 间隔 > `maximumGap`，`missingReadingSeconds` = 间距正常但任一端缺有效 `consumptionPowerW`；睡眠区间内不计，跨午夜按比例拆天）。`needsWarning` = 存在真实断点，或读数缺失累计 ≥ 600 秒（10 分钟）——实测读数缺失集中在**拔插电源前后约 1 分钟**（`state` 已切到电池供电而电量计仍读 0），一天 2~3 次、合计约 3.6 分钟（约 1.5 Wh、占日合计 0.4%），量级不足「日合计偏低」，而原先的逐段判定会让**单次几秒的缺失**把整天永久标成「耗电量可能偏低」（告警只置位、从不回退），同时也补上了「功率读数缺失导致能量没积上却毫无提示」这一漏洞。加载时改用 `applyTodaySamplingGapQuality(in:)` 在**诊断回填之后**重算今天（只判定今天：往日样本已降到 1 分钟一条、间隔本身就接近 `maximumGap`），使当天状态可随样本补齐自动消除；当天没有缺口也没有汇总时不再凭空创建空 summary。（`Models/EnergyCalculator.swift`、`Stores/BatteryHistoryStore.swift`）
+- 能耗质量告警分层：`DailyEnergyQuality.hasWarning` 拆为 `hasAccuracyWarning`（采样断点 / 睡眠估算 / 未校准计数器 / 只统计到可观测来源 → 橙色告警）与 `hasUnknownProvenance`（旧版本记录、口径未知 → 低强度提示）。原先旧口径也计入告警，实测 37 天里 33 天被判为不完整，日视图几乎全橙、真实缺口被淹没；提示文案也把「口径未知」误述成「汇总可能偏低」。图表橙柱与覆盖提示改用统一谓词 `DailySummary.needsEnergyAttention`，旧口径日另起一行次要提示。（`Models/HistorySample.swift`、`Support/EnergyAggregator.swift`、`Views/HistoryView.swift`）
+- **修复放电时电量计冻结导致功率被整段丢弃**：`BatterySnapshot.consumptionPowerW` 的放电分支在电池读数不可用时回退到 `systemPowerW`（放电状态下它由 SystemLoad 得来、恒为正，是电池输出的独立观测）——实测放电样本中 `systemPowerW` 3910/3910 为正、与 `|batteryPowerW|` 中位误差仅 **1 mW**，且 13:05 拔电前后它始终是同一个 26.57 W，能无缝衔接；此前的行为直接返回 nil，让拔电后电量计冻结（读 0 或残留充电值）的那几十秒功率全部丢失（实测每天 2~3 次）。同时把「未接入适配器但状态尚未切到放电」（拔插瞬态）的兜底由 `nil` 改为 `batteryDischargePowerW`——电池读数已明确指向放电时仍应计量。`displayPower` 的放电分支同步在读数失效时回退（否则面板会显示 0.0 W 而当日能耗仍在增长），两者取值链各自独立、互不改变定义。**用当日真实日志回放：修复后当日新增计入 0.464 Wh（占 0.3868 kWh 的 0.12%），13:05 段 45 个缺失样本全部补回。** 拔电时三类读数同时符号翻转的情况（`batP` / `telemetry` 同为正、`systemLoad` 为负）仍保持 nil 并标记为读数缺失，不用估计值填补。（`Models/BatterySnapshot.swift`）
+
+### 新增
+- 新增测试：`BatteryDischargeConfirmationTests`（进入门槛与样本数、滞回维持与退出、状态切换重置、拔电/非有限读数清零——此前该类型零覆盖）、`SamplingGapAccountingTests`（纯函数：缺失读数累计、长断点、睡眠排除、跨午夜拆天、`daySegments`）、`SamplingGapQualityTests`（`BatteryHistoryStore` 端到端：短缺失不点亮、长断点点亮、加载时重算清掉陈旧标志）；`EnergyConsumptionTests` 补混合供电三分支（有 SystemLoad 时仍用相加、无 SystemLoad 回退、无适配器输入只保留电池放电），`EnergyAggregatorTests` 补 `incompleteDayCount` 只统计真实告警日；`EnergyConsumptionTests` 另补 6 个用例覆盖 `consumptionPowerW` 的放电回退链（电量计冻结读 0 时回退 SystemLoad、电量计有效时仍优先电池读数、全部读数失效时保持 nil、适配器已拔但状态未切换时仍计量、无电池时不凭空产生功率）与 `displayPower` 的同口径回退。
+
 ## [2026-10-02]
 
 ### 修改

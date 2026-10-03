@@ -10,7 +10,11 @@ final class EnergyAggregatorTests: XCTestCase {
         return calendar
     }()
 
-    private func summary(dayKey: String, energyKWh: Double?) -> DailySummary {
+    private func summary(
+        dayKey: String,
+        energyKWh: Double?,
+        quality: DailyEnergyQuality? = nil
+    ) -> DailySummary {
         DailySummary(
             dayKey: dayKey,
             date: BatteryFormatters.dayKeyDate(dayKey) ?? Date(),
@@ -20,7 +24,8 @@ final class EnergyAggregatorTests: XCTestCase {
             energyKWh: energyKWh,
             averagePower: 0,
             maxPower: 0,
-            minPower: 0
+            minPower: 0,
+            energyQuality: quality
         )
     }
 
@@ -73,6 +78,34 @@ final class EnergyAggregatorTests: XCTestCase {
 
         XCTAssertEqual(aggregates.count, 1)
         XCTAssertEqual(aggregates[0].energyKWh, 0.5, accuracy: 0.0001)
+    }
+
+    func testIncompleteDayCountTracksAccuracyWarningsOnly() {
+        let summaries = [
+            summary(dayKey: "2026-08-29", energyKWh: 0.1),
+            summary(
+                dayKey: "2026-08-30",
+                energyKWh: 0.2,
+                quality: DailyEnergyQuality(hasSamplingGaps: true)
+            ),
+            summary(dayKey: "2026-08-31", energyKWh: nil),
+            summary(
+                dayKey: "2026-09-01",
+                energyKWh: 0.4,
+                quality: DailyEnergyQuality(hasUnknownHistoricalCoverage: true)
+            )
+        ]
+
+        let aggregates = EnergyAggregator.aggregate(
+            summaries: summaries,
+            grouping: .day,
+            calendar: calendar
+        )
+
+        // 08-31 没有可用值 → 不产出周期；旧口径那一天仍计入合计，但不进 incompleteDayCount，
+        // 否则整段历史变橙会把真正的采样缺口淹没。
+        XCTAssertEqual(aggregates.count, 3)
+        XCTAssertEqual(aggregates.map(\.incompleteDayCount), [0, 1, 0])
     }
 
     func testNearestAggregateSelectsClosestPeriod() {
