@@ -1,11 +1,82 @@
 import Charts
 import SwiftUI
 
+/// Keep full-resolution history for statistics and hover lookup while bounding Chart marks.
+enum HistoryChartRendering {
+    static let maximumDisplayedSamples = 240
+
+    /// Select local minima and maxima so narrow peaks survive chart-only downsampling.
+    static func downsamplePreservingExtrema(
+        _ samples: [HistorySample],
+        limit: Int,
+        value: (HistorySample) -> Double?
+    ) -> [HistorySample] {
+        guard limit > 0 else { return [] }
+        guard samples.count > limit else { return samples }
+        guard limit > 1 else { return [samples[samples.count / 2]] }
+        guard limit > 2 else { return [samples[0], samples[samples.count - 1]] }
+
+        let interiorCount = samples.count - 2
+        let interiorBudget = limit - 2
+        let pairedBucketCount = interiorBudget / 2
+        var selectedIndices: Set<Int> = [0, samples.count - 1]
+
+        for bucket in 0..<pairedBucketCount {
+            let lower = 1 + bucket * interiorCount / pairedBucketCount
+            let upper = 1 + (bucket + 1) * interiorCount / pairedBucketCount
+            guard lower < upper else { continue }
+
+            var minimumIndex: Int?
+            var maximumIndex: Int?
+            var minimumValue = Double.infinity
+            var maximumValue = -Double.infinity
+            for index in lower..<upper {
+                guard let sampleValue = value(samples[index]), sampleValue.isFinite else { continue }
+                if sampleValue < minimumValue {
+                    minimumIndex = index
+                    minimumValue = sampleValue
+                }
+                if sampleValue > maximumValue {
+                    maximumIndex = index
+                    maximumValue = sampleValue
+                }
+            }
+            if let minimumIndex { selectedIndices.insert(minimumIndex) }
+            if let maximumIndex { selectedIndices.insert(maximumIndex) }
+        }
+
+        // An odd interior budget gets one global peak in addition to the local min/max pairs.
+        if !interiorBudget.isMultiple(of: 2), interiorCount > 0 {
+            let peakIndex = (1..<(samples.count - 1)).compactMap { index -> (Int, Double)? in
+                guard let sampleValue = value(samples[index]), sampleValue.isFinite else { return nil }
+                return (index, sampleValue)
+            }.max { $0.1 < $1.1 }?.0
+            if let peakIndex { selectedIndices.insert(peakIndex) }
+        }
+
+        // Fill slots left by constant-value buckets, distributed across the remainder.
+        let candidates = (1..<(samples.count - 1)).filter { !selectedIndices.contains($0) }
+        let needed = min(limit - selectedIndices.count, candidates.count)
+        if needed == 1 {
+            selectedIndices.insert(candidates[candidates.count / 2])
+        } else if needed > 1 {
+            for slot in 0..<needed {
+                let offset = Int(
+                    (Double(slot) * Double(candidates.count - 1) / Double(needed - 1)).rounded()
+                )
+                selectedIndices.insert(candidates[offset])
+            }
+        }
+
+        return selectedIndices.sorted().map { samples[$0] }
+    }
+}
+
 struct HistoryView: View {
     @Environment(BatteryHistoryStore.self) private var history
     @Environment(ChartWindowController.self) private var chartWindow
     @State private var energyRange: EnergyHistoryRange = .fourteen
-    // 面板以 2Hz 重渲染；用记忆化避免每次重算今日样本与曲线数据。
+    // 历史页只随历史样本更新；缓存避免每次更新都重复扫描当天数据。
     @State private var todayCache = TodaySamplesCache()
     @State private var chartCache = PowerChartDataCache()
     @State private var levelChartCache = BatteryLevelChartDataCache()
@@ -80,7 +151,7 @@ final class TodaySamplesCache {
     }
 }
 
-/// 功率曲线数据记忆化：仅在样本集合变化时重建（抽样到 800 点是 O(n) 开销）。
+/// 功率曲线数据记忆化：仅在样本集合变化时重建（绘图最多 240 点）。
 final class PowerChartDataCache {
     private var cached: PowerChartData?
     private var lastCount = -1
@@ -96,7 +167,7 @@ final class PowerChartDataCache {
         let data = PowerChartData(
             samples: samples,
             sleepIntervals: sleepIntervals,
-            maximumDisplayedSamples: 800
+            maximumDisplayedSamples: HistoryChartRendering.maximumDisplayedSamples
         )
         cached = data
         lastCount = samples.count
@@ -108,7 +179,7 @@ final class PowerChartDataCache {
     private var cachedSleepIntervals: [SleepInterval] = []
 }
 
-/// 电量曲线数据记忆化：仅在样本集合变化时重建（抽样到 800 点是 O(n) 开销）。
+/// 电量曲线数据记忆化：仅在样本集合变化时重建（绘图最多 240 点）。
 final class BatteryLevelChartDataCache {
     private var cached: BatteryLevelChartData?
     private var lastCount = -1
@@ -118,7 +189,10 @@ final class BatteryLevelChartDataCache {
         if let cached, lastCount == samples.count, lastID == samples.last?.id {
             return cached
         }
-        let data = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 800)
+        let data = BatteryLevelChartData(
+            samples: samples,
+            maximumDisplayedSamples: HistoryChartRendering.maximumDisplayedSamples
+        )
         cached = data
         lastCount = samples.count
         lastID = samples.last?.id
@@ -855,7 +929,7 @@ struct TodayPowerChart: View {
     }
 
     /// 只画正功率样本；无读数点、长缺口和系统睡眠都会切成独立曲线段。
-    /// 放大后改用未抽样的完整段，避免 800 点抽样在窄窗口内过于稀疏。
+    /// 放大后改用未抽样的完整段，避免整日降采样影响局部细节。
     private func displaySegments(
         isZoomed: Bool,
         in dateDomain: ClosedRange<Date>
@@ -987,7 +1061,7 @@ struct TodayBatteryLevelChart: View {
         BatteryFormatters.historyDayLabel(day)
     }
 
-    /// 以最后一条样本时间收尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
+    /// 以最后一条样本时间收尾，避免父视图重绘时按 `Date()` 改变缩放范围。
     /// 往日展示整天并收在当天最后一条样本处。
     private var fullDomain: ClosedRange<Date> {
         BatteryLevelAxis.xDomain(
@@ -1036,7 +1110,11 @@ struct TodayBatteryLevelChart: View {
         in domain: ClosedRange<Date>
     ) -> [[HistorySample]] {
         let source = window.isZoomed
-            ? ChartViewport.visibleSamples(samples, in: domain, maximum: 800)
+            ? ChartViewport.visibleSamples(
+                samples,
+                in: domain,
+                maximum: HistoryChartRendering.maximumDisplayedSamples
+            )
             : chartData.displayedSamples
         return PowerChartSegmentation.splitByGaps(source)
     }
@@ -1304,7 +1382,11 @@ struct TodayMetricChartData {
     /// Y 轴域内的整齐刻度与标签小数位。
     let axisTicks: AxisTickScale
 
-    init(samples: [HistorySample], metric: TodayMetric, maximumDisplayedSamples: Int = 800) {
+    init(
+        samples: [HistorySample],
+        metric: TodayMetric,
+        maximumDisplayedSamples: Int = HistoryChartRendering.maximumDisplayedSamples
+    ) {
         self.metric = metric
         let valid = samples.filter { sample in
             guard let value = metric.value(from: sample) else { return false }
@@ -1319,14 +1401,15 @@ struct TodayMetricChartData {
             self.displayedSamples = valid
             return
         }
-        let step = Double(valid.count - 1) / Double(maximumDisplayedSamples - 1)
-        self.displayedSamples = (0..<maximumDisplayedSamples).map { index in
-            valid[Int((Double(index) * step).rounded())]
-        }
+        self.displayedSamples = HistoryChartRendering.downsamplePreservingExtrema(
+            valid,
+            limit: maximumDisplayedSamples,
+            value: { metric.value(from: $0) }
+        )
     }
 }
 
-/// 今日温压曲线数据记忆化：仅在样本集合或所选指标变化时重建（抽样到 800 点是 O(n) 开销）。
+/// 今日温压曲线数据记忆化：仅在样本集合或所选指标变化时重建（绘图最多 240 点）。
 final class TodayMetricChartDataCache {
     private var cached: TodayMetricChartData?
     private var lastMetric: TodayMetric?
@@ -1508,7 +1591,7 @@ struct TodayMetricChart: View {
         cache.data(for: samples, metric: activeMetric)
     }
 
-    /// 以最后一条样本时间收尾（数据驱动），避免 2Hz 重渲染下按 `Date()` 每 0.5s 重新缩放抖动。
+    /// 以最后一条样本时间收尾，避免父视图重绘时按 `Date()` 重新缩放抖动。
     /// 往日展示整天并收在当天最后一条样本处。
     private var fullDomain: ClosedRange<Date> {
         BatteryLevelAxis.xDomain(
@@ -1560,7 +1643,11 @@ struct TodayMetricChart: View {
         in domain: ClosedRange<Date>
     ) -> [[HistorySample]] {
         let source = window.isZoomed
-            ? ChartViewport.visibleSamples(chartData.samples, in: domain, maximum: 800)
+            ? ChartViewport.visibleSamples(
+                chartData.samples,
+                in: domain,
+                maximum: HistoryChartRendering.maximumDisplayedSamples
+            )
             : chartData.displayedSamples
         return PowerChartSegmentation.splitByGaps(source)
     }
@@ -1821,7 +1908,7 @@ struct PowerChartData {
     let plotSamples: [HistorySample]
     /// Renderable runs split at no-power samples before downsampling.
     let plotSegments: [[HistorySample]]
-    /// 未抽样的完整连续段：放大到窄窗口时用它渲染，避免 800 点抽样在细节区间过稀。
+    /// 未抽样的完整连续段：放大到窄窗口时用它渲染，避免整日降采样影响局部细节。
     let fullSegments: [[HistorySample]]
 
     let energySamples: [HistorySample]
@@ -1863,10 +1950,11 @@ struct PowerChartData {
             return
         }
 
-        let step = Double(energySamples.count - 1) / Double(maximumDisplayedSamples - 1)
-        self.chartSamples = (0..<maximumDisplayedSamples).map { index in
-            energySamples[Int((Double(index) * step).rounded())]
-        }
+        self.chartSamples = HistoryChartRendering.downsamplePreservingExtrema(
+            energySamples,
+            limit: maximumDisplayedSamples,
+            value: { $0.consumptionPowerW }
+        )
     }
 
     private static func downsampleSegments(
@@ -1916,17 +2004,11 @@ struct PowerChartData {
         }
 
         return drawable.enumerated().map { index, segment in
-            Self.evenlySampled(segment, count: targets[index])
-        }
-    }
-
-    private static func evenlySampled(_ samples: [HistorySample], count: Int) -> [HistorySample] {
-        guard count > 1, samples.count > count else { return samples }
-        return (0..<count).map { index in
-            let sourceIndex = Int(
-                (Double(index) * Double(samples.count - 1) / Double(count - 1)).rounded()
+            HistoryChartRendering.downsamplePreservingExtrema(
+                segment,
+                limit: targets[index],
+                value: { $0.consumptionPowerW }
             )
-            return samples[sourceIndex]
         }
     }
 }
@@ -1993,7 +2075,7 @@ struct PowerChartTimeline {
 }
 
 /// 今日电量曲线数据：不做 `consumptionPowerW` 过滤（那会丢掉合法电量点），
-/// 只按 `percent` 有效性做防御过滤，并预计算 Y 轴域供 2Hz 渲染直接取用。
+/// 只按 `percent` 有效性做防御过滤，并预计算 Y 轴域供曲线渲染直接取用。
 struct BatteryLevelChartData {
     /// 今日全量样本，供悬停吸附使用。
     let samples: [HistorySample]
@@ -2013,10 +2095,11 @@ struct BatteryLevelChartData {
             return
         }
 
-        let step = Double(valid.count - 1) / Double(maximumDisplayedSamples - 1)
-        self.displayedSamples = (0..<maximumDisplayedSamples).map { index in
-            valid[Int((Double(index) * step).rounded())]
-        }
+        self.displayedSamples = HistoryChartRendering.downsamplePreservingExtrema(
+            valid,
+            limit: maximumDisplayedSamples,
+            value: { $0.percent }
+        )
     }
 }
 
@@ -2024,7 +2107,7 @@ struct BatteryLevelChartData {
 enum BatteryLevelAxis {
     /// X 轴域：`day` 当天 00:00 起，至少 60s 宽（避免刚过午夜时域退化）。
     ///
-    /// - 今天：到 `now`（调用方传最后一条样本时间，数据驱动以避免 2Hz 重渲染抖动）。
+    /// - 今天：到 `now`（调用方传最后一条样本时间，避免父视图重绘造成范围抖动）。
     /// - 往日：到当天最后一刻；有样本时收在当天最后一条样本处，不留大片空白。
     static func xDomain(
         day: Date,

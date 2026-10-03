@@ -9,9 +9,6 @@ enum PanelTab: String, CaseIterable, Identifiable {
 }
 
 struct DashboardView: View {
-    @Environment(BatteryMonitor.self) private var monitor
-    @Environment(BatteryHistoryStore.self) private var history
-    @Environment(AppSettings.self) private var settings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
     @State private var showingQuitConfirmation = false
@@ -24,7 +21,7 @@ struct DashboardView: View {
     var body: some View {
         GlassContainerIfAvailable {
             VStack(spacing: DashboardLayout.sectionSpacing) {
-                header
+                DashboardHeader()
 
                 AnimatedSegmentedControl(
                     items: PanelTab.allCases,
@@ -62,11 +59,7 @@ struct DashboardView: View {
             }
             .padding(DashboardLayout.panelPadding)
             .background {
-                FluidGlassBackground(
-                    colors: BatteryStyling.gradient(for: monitor.snapshot),
-                    intensity: settings.animationIntensity,
-                    speed: settings.animationSpeed
-                )
+                DashboardPanelBackground(isAnimated: tab == .live)
             }
             .panelGlassSurface(cornerRadius: DesignTokens.cornerRadiusPanel)
         }
@@ -94,7 +87,32 @@ struct DashboardView: View {
         tab == .live ? .trailing : .leading
     }
 
-    private var header: some View {
+    private var footer: some View {
+        HStack {
+            SettingsLink {
+                Label("设置", systemImage: "gearshape")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Spacer()
+
+            Button {
+                showingQuitConfirmation = true
+            } label: {
+                Label("退出", systemImage: "power")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+}
+
+/// Keeps 2 Hz battery observations inside the header instead of invalidating the page host.
+private struct DashboardHeader: View {
+    @Environment(BatteryMonitor.self) private var monitor
+
+    var body: some View {
         HStack(spacing: DesignTokens.spacingS) {
             AppMarkView(snapshot: monitor.snapshot)
 
@@ -144,25 +162,21 @@ struct DashboardView: View {
         }
         return "未检测到电池"
     }
+}
 
-    private var footer: some View {
-        HStack {
-            SettingsLink {
-                Label("设置", systemImage: "gearshape")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+/// Battery changes update the backdrop locally, leaving the history chart subtree untouched.
+private struct DashboardPanelBackground: View {
+    @Environment(BatteryMonitor.self) private var monitor
+    @Environment(AppSettings.self) private var settings
+    let isAnimated: Bool
 
-            Spacer()
-
-            Button {
-                showingQuitConfirmation = true
-            } label: {
-                Label("退出", systemImage: "power")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
+    var body: some View {
+        FluidGlassBackground(
+            colors: BatteryStyling.gradient(for: monitor.snapshot),
+            intensity: settings.animationIntensity,
+            speed: settings.animationSpeed,
+            isAnimated: isAnimated
+        )
     }
 }
 

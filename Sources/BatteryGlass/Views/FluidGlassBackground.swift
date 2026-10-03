@@ -4,14 +4,15 @@ struct FluidGlassBackground: View {
     var colors: [Color]
     var intensity: Double
     var speed: Double
+    var isAnimated = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
-            if reduceMotion {
+            if reduceMotion || !isAnimated {
                 fluid(phase: 0, intensity: intensity)
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                     let phase = context.date.timeIntervalSinceReferenceDate * speed
                     fluid(phase: phase, intensity: intensity)
                 }
