@@ -319,22 +319,6 @@ struct DailyEnergyComparisonChart: View {
         aggregateCache.aggregates(summaries: summaries, grouping: grouping)
     }
 
-    /// 需要橙色告警的天数：没有可用值，或存在会让数值偏低/有偏差的记录。
-    private var incompleteEnergyDayCount: Int {
-        summaries.filter(\.needsEnergyAttention).count
-    }
-
-    /// 旧版本记录（统计口径未知）另计：只做低强度提示，不参与橙色告警，
-    /// 否则整段历史一起变橙会把真正的采样缺口淹没掉。
-    private var legacyProvenanceDayCount: Int {
-        summaries.filter { $0.energyQuality?.hasUnknownProvenance ?? false }.count
-    }
-
-    private var includesToday: Bool {
-        let todayKey = BatteryFormatters.dayKey(for: Date())
-        return summaries.contains { $0.dayKey == todayKey }
-    }
-
     /// 柱图从 0 起算：Y 域取 0…峰值×1.1（至少 0.1 kWh），刻度走整齐步长 + 自适应小数位
     /// （固定 %.1f 会让 0.0x kWh 量级的刻度全塌成 "0.0"）。
     private var energyAxis: AxisTickScale {
@@ -376,9 +360,7 @@ struct DailyEnergyComparisonChart: View {
                         x: .value("日期", aggregate.periodStart),
                         y: .value("耗电量", aggregate.energyKWh)
                     )
-                    .foregroundStyle(
-                        aggregate.incompleteDayCount > 0 ? Color.orange : DesignTokens.dataBlue
-                    )
+                    .foregroundStyle(DesignTokens.dataBlue.gradient)
                     .cornerRadius(4)
                 }
                 .chartYScale(domain: energyAxis.domain)
@@ -440,8 +422,6 @@ struct DailyEnergyComparisonChart: View {
                 comparisonMetrics
             }
 
-            energyCoverageNotice
-
             if !summaries.isEmpty {
                 dailyDetails
             }
@@ -454,38 +434,7 @@ struct DailyEnergyComparisonChart: View {
     private var energyAccessibilitySummary: String {
         guard !aggregates.isEmpty else { return "暂无数据" }
         let total = aggregates.map(\.energyKWh).reduce(0, +)
-        let coverage = incompleteEnergyDayCount > 0
-            ? "，\(incompleteEnergyDayCount) 天数据不完整或含估算"
-            : ""
-        return "共 \(aggregates.count) 个周期，总计 \(BatteryFormatters.energyKWh(total))\(coverage)"
-    }
-
-    @ViewBuilder
-    private var energyCoverageNotice: some View {
-        if incompleteEnergyDayCount > 0 {
-            Label(
-                "所选范围有 \(incompleteEnergyDayCount) 天存在采样缺口、睡眠估算或缺少可用值，汇总可能偏低或有偏差。",
-                systemImage: "exclamationmark.triangle"
-            )
-            .font(.system(size: 9))
-            .foregroundStyle(.orange)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        if legacyProvenanceDayCount > 0 {
-            Label(
-                "另有 \(legacyProvenanceDayCount) 天为旧版本记录，统计口径未知。",
-                systemImage: "questionmark.circle"
-            )
-            .font(.system(size: 9))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        if includesToday {
-            Label("今日数值截至当前时刻，尚未统计完整的一天。", systemImage: "clock")
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        return "共 \(aggregates.count) 个周期，总计 \(BatteryFormatters.energyKWh(total))"
     }
 
     private func updateHover(
@@ -547,12 +496,6 @@ struct DailyEnergyComparisonChart: View {
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(DesignTokens.dataBlue)
-
-            if aggregate.incompleteDayCount > 0 {
-                Text("本周期 \(aggregate.incompleteDayCount) 天数据不完整或含估算")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.orange)
-            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -705,26 +648,22 @@ struct DailyEnergyComparisonChart: View {
 
     /// 生成日能耗质量角标的原因文案；多条原因按标记顺序以「；」拼接。
     private func energyQualityWarning(for summary: DailySummary) -> String? {
+        guard let quality = summary.energyQuality else { return nil }
         var reasons: [String] = []
-        if summary.energyKWh == nil {
-            reasons.append("没有足够的连续功率样本，无法计算当日耗电量")
+        if quality.hasSamplingGaps {
+            reasons.append("当天存在超过 60 秒的采样断点，耗电量可能偏低")
         }
-        if let quality = summary.energyQuality {
-            if quality.hasSamplingGaps {
-                reasons.append("当天有较长时间未能计入积分（采样断点或功率读数缺失），耗电量可能偏低")
-            }
-            if quality.hasEstimatedSleepEnergy {
-                reasons.append("睡眠段为估算值（无可用计数器或未校准）")
-            }
-            if quality.hasUncalibratedCounterEnergy {
-                reasons.append("睡眠段使用未校准的遥测计数器，数值可能有系统性偏差")
-            }
-            if quality.hasLowerBoundSleepEnergy {
-                reasons.append("睡眠边界供电状态变化，仅统计到可观测来源，实际值不低于此")
-            }
-            if quality.hasUnknownHistoricalCoverage {
-                reasons.append("旧版本记录，统计口径未知")
-            }
+        if quality.hasEstimatedSleepEnergy {
+            reasons.append("睡眠段为估算值（无可用计数器或未校准）")
+        }
+        if quality.hasUncalibratedCounterEnergy {
+            reasons.append("睡眠段使用未校准的遥测计数器，数值可能有系统性偏差")
+        }
+        if quality.hasLowerBoundSleepEnergy {
+            reasons.append("睡眠边界供电状态变化，仅统计到可观测来源，实际值不低于此")
+        }
+        if quality.hasUnknownHistoricalCoverage {
+            reasons.append("旧版本记录，统计口径未知")
         }
         return reasons.isEmpty ? nil : reasons.joined(separator: "；")
     }
