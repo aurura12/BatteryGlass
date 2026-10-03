@@ -18,6 +18,29 @@ struct BatterySnapshot: Equatable, Sendable {
     var percent = 0.0
     var isCharged = false
     var isFinishingCharge = false
+    var powerDisplayStatus: PowerDisplayStatus = .ready
+
+    /// 过渡期先显示已检测到的供电方式，避免沿用旧的充电标志。
+    var displayState: PowerState {
+        guard powerDisplayStatus != .ready, state != .unknown else { return state }
+        return adapterConnected ? .pluggedIn : .discharging
+    }
+
+    var displayStatusText: String {
+        if let message = powerDisplayStatus.message {
+            return "\(displayState.rawValue) · \(message)"
+        }
+        switch state {
+        case .charging: return isFinishingCharge ? "正在涓流充电" : "正在充电"
+        case .pluggedIn: return isCharged ? "已接通电源 · 电池已充满" : "已接通电源"
+        case .discharging: return "电池供电中"
+        case .unknown: return "未检测到电池"
+        }
+    }
+
+    var displayTimeRemaining: TimeInterval? {
+        powerDisplayStatus == .ready ? timeRemaining : nil
+    }
 
     // 容量（mAh）
     var currentCapacityMAh = 0.0
@@ -153,6 +176,7 @@ struct BatterySnapshot: Equatable, Sendable {
     /// 展示功率文本：适配器供电时显示无符号适配器输出功率，电池供电时保留正负号；
     /// 未检测到电池（unknown）时无数据，显示 "--"。
     var displayPowerText: String {
+        if let placeholder = powerDisplayStatus.placeholder { return placeholder }
         switch state {
         case .charging, .pluggedIn:
             return String(format: "%.1f W", displayPower)

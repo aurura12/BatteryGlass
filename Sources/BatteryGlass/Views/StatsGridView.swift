@@ -34,6 +34,7 @@ struct MetricsGrid: View {
     }
 
     private var systemPowerText: String {
+        if let placeholder = snapshot.powerDisplayStatus.placeholder { return placeholder }
         guard let systemPower = snapshot.systemPowerW, systemPower > 0 else { return "--" }
         return String(format: "%.1f W", systemPower)
     }

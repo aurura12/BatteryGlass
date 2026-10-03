@@ -86,7 +86,8 @@ final class LongTermHistoryTests: XCTestCase {
         let context = try Context()
         defer { context.cleanup() }
         let oldest = Calendar.current.date(byAdding: .day, value: -200, to: Calendar.current.startOfDay(for: context.now))!
-        let count = HistoryLoadLimits.maxHistorySamples + 100
+        // 样本字段精简后每条记录更小，需留足余量同时跨过旧文件大小和样本数限制。
+        let count = HistoryLoadLimits.maxHistorySamples * 2
         let points = (0..<count).map { sample(at: oldest.addingTimeInterval(Double($0) * 60)) }
         try context.archive.store(points)
         let size = try FileManager.default.attributesOfItem(atPath: context.archive.fileURL.path)[.size] as! NSNumber

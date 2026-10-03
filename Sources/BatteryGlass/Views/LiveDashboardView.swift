@@ -18,7 +18,7 @@ struct LiveDashboardView: View {
                 HealthKpiCard(snapshot: monitor.snapshot)
             }
 
-            if monitor.snapshot.adapterConnected, monitor.snapshot.state != .discharging {
+            if monitor.snapshot.adapterConnected, monitor.snapshot.displayState != .discharging {
                 AdapterSplitCard(snapshot: monitor.snapshot)
             }
 
@@ -55,7 +55,8 @@ struct AdapterSplitCard: View {
                 splitItem(
                     title: "系统直供",
                     icon: "laptopcomputer",
-                    value: snapshot.directSupplyPowerW.map { String(format: "%.1f W", $0) } ?? "--",
+                    value: snapshot.powerDisplayStatus.placeholder
+                        ?? snapshot.directSupplyPowerW.map { String(format: "%.1f W", $0) } ?? "--",
                     tint: DesignTokens.dataBlue
                 )
                 Divider()
@@ -63,7 +64,8 @@ struct AdapterSplitCard: View {
                 splitItem(
                     title: "适配器输出",
                     icon: "cable.connector",
-                    value: snapshot.adapterOutputPowerW.map { String(format: "%.1f W", $0) } ?? "--",
+                    value: snapshot.powerDisplayStatus.placeholder
+                        ?? snapshot.adapterOutputPowerW.map { String(format: "%.1f W", $0) } ?? "--",
                     tint: .primary
                 )
             }
@@ -76,6 +78,9 @@ struct AdapterSplitCard: View {
     /// 电池侧分配：充电显示充入功率；插电但连续确认电池仍在放电时显示放电功率，
     /// 避免把真实的电池放电误显示成「+0.0 W」。
     private var batterySplit: (title: String, icon: String, value: String, tint: Color) {
+        if let placeholder = snapshot.powerDisplayStatus.placeholder {
+            return ("给电池", "battery.100percent.bolt", placeholder, .secondary)
+        }
         if snapshot.batteryDischargingWhilePlugged, let discharge = snapshot.batteryDischargePowerW {
             return ("电池放电", "battery.25percent", String(format: "-%.1f W", discharge), DesignTokens.statusRed)
         }
@@ -191,8 +196,8 @@ struct BatteryPercentCard: View {
     }
 
     private var remainingText: String {
-        guard let remaining = snapshot.timeRemaining else { return "——" }
-        if snapshot.state == .charging {
+        guard let remaining = snapshot.displayTimeRemaining else { return "——" }
+        if snapshot.displayState == .charging {
             return "充满还需 " + BatteryFormatters.timeRemaining(remaining)
         }
         return "剩余 " + BatteryFormatters.timeRemaining(remaining)
@@ -205,7 +210,7 @@ struct PowerKpiCard: View {
     let snapshot: BatterySnapshot
 
     private var isOnAdapter: Bool {
-        snapshot.state == .charging || snapshot.state == .pluggedIn
+        snapshot.displayState == .charging || snapshot.displayState == .pluggedIn
     }
 
     private var displayPower: Double {
@@ -223,7 +228,7 @@ struct PowerKpiCard: View {
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(accent)
-                if snapshot.state != .unknown {
+                if snapshot.displayState != .unknown, snapshot.powerDisplayStatus == .ready {
                     Text("W")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -236,7 +241,7 @@ struct PowerKpiCard: View {
     }
 
     private var directionIcon: String {
-        switch snapshot.state {
+        switch snapshot.displayState {
         case .charging, .pluggedIn: return "cpu"
         case .discharging: return "arrow.up.right"
         default: return "waveform.path.ecg"
@@ -244,7 +249,10 @@ struct PowerKpiCard: View {
     }
 
     private var directionText: String {
-        switch snapshot.state {
+        if let message = snapshot.powerDisplayStatus.message {
+            return "\(snapshot.displayState.rawValue) · \(message)"
+        }
+        switch snapshot.displayState {
         case .charging, .pluggedIn: return "适配器供电 · 适配器输出功率"
         case .discharging: return "电池供电 · 能量流出电池"
         default: return "暂无数据"
@@ -252,6 +260,7 @@ struct PowerKpiCard: View {
     }
 
     private var valueText: String {
+        if let placeholder = snapshot.powerDisplayStatus.placeholder { return placeholder }
         // 适配器供电时显示无符号适配器输出功率；电池供电时保留正负号（充电+/放电-）。
         // 未检测到电池时无数据，显示 "--"。
         guard snapshot.state != .unknown else { return "--" }
@@ -387,6 +396,9 @@ struct PowerTrendCard: View {
     }
 
     private var directionCaption: String {
+        if let message = snapshot.powerDisplayStatus.message {
+            return "\(message) · 显示最近 2 分钟记录"
+        }
         if !hasSamples { return "暂无有效功率数据" }
         switch snapshot.state {
         case .charging: return "适配器供电 · 适配器输出功率"

@@ -163,7 +163,7 @@ struct DesktopWidgetView: View {
     }
 
     private var statusText: String {
-        switch snapshot.state {
+        switch snapshot.displayState {
         case .charging: return "充电中"
         case .discharging: return "电池供电"
         case .pluggedIn: return "已接通电源"
@@ -172,12 +172,13 @@ struct DesktopWidgetView: View {
     }
 
     private var detailText: String {
-        if snapshot.state == .charging {
-            if let remaining = snapshot.timeRemaining {
+        if let message = snapshot.powerDisplayStatus.message { return message }
+        if snapshot.displayState == .charging {
+            if let remaining = snapshot.displayTimeRemaining {
                 return "充满还需 " + BatteryFormatters.timeRemaining(remaining)
             }
-        } else if snapshot.state == .discharging {
-            if let remaining = snapshot.timeRemaining {
+        } else if snapshot.displayState == .discharging {
+            if let remaining = snapshot.displayTimeRemaining {
                 return "剩余 " + BatteryFormatters.timeRemaining(remaining)
             }
         }

@@ -16,6 +16,7 @@ final class BatteryMonitor {
     private var lowBatteryNotified = false
     private var lastAdapterConnected: Bool?
     private var pluggedDischargeConfirmation = BatteryDischargeConfirmation()
+    private var powerDisplayTransition = PowerDisplayTransition()
     private let recentSampleLimit = 420
 
     /// 睡眠/唤醒补测的诊断通道。睡眠窗口没有实时采样，只能靠这几个端点值人工核对
@@ -190,6 +191,10 @@ final class BatteryMonitor {
         )
         s.systemPowerW = resolved.systemPowerW
         s.adapterInputPowerW = resolved.adapterInputPowerW
+        s.powerDisplayStatus = powerDisplayTransition.update(
+            snapshot: s,
+            batteryUpdateTime: io.batteryUpdateTime
+        )
 
         if settings.powerDiagnosticsLoggingEnabled {
             let diagnosticSample = PowerDiagnosticsSample(
@@ -778,6 +783,7 @@ final class BatteryMonitor {
     }
 
     private struct SmartBatteryData {
+        var batteryUpdateTime: TimeInterval?
         var batteryInstalled = false
         var externalConnected = false
         var isCharging = false
@@ -824,6 +830,7 @@ final class BatteryMonitor {
         }
 
         data.batteryInstalled = Self.boolValue(dict["BatteryInstalled"])
+        data.batteryUpdateTime = Self.numberValue(dict["UpdateTime"]).nilIfZero
         data.externalConnected = Self.boolValue(dict["ExternalConnected"])
         data.isCharging = Self.boolValue(dict["IsCharging"])
         data.isCharged = Self.boolValue(dict["FullyCharged"])

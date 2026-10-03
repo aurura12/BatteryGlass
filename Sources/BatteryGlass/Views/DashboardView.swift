@@ -141,26 +141,11 @@ private struct DashboardHeader: View {
     }
 
     private var stateShortLabel: String {
-        switch monitor.snapshot.state {
-        case .charging: return "充电中"
-        case .discharging: return "电池供电"
-        case .pluggedIn: return "已接通电源"
-        case .unknown: return "未知"
-        }
+        monitor.snapshot.displayState.rawValue
     }
 
     private var statusText: String {
-        let s = monitor.snapshot
-        if s.state == .charging {
-            return s.isFinishingCharge ? "正在涓流充电" : "正在充电"
-        }
-        if s.state == .pluggedIn {
-            return s.isCharged ? "已接通电源 · 电池已充满" : "已接通电源"
-        }
-        if s.state == .discharging {
-            return "电池供电中"
-        }
-        return "未检测到电池"
+        monitor.snapshot.displayStatusText
     }
 }
 

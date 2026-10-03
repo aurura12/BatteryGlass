@@ -45,7 +45,7 @@ struct MenuBarLabel: View {
         case .percent:
             return monitor.snapshot.state == .unknown ? "--" : monitor.snapshot.percentText
         case .timeRemaining:
-            return BatteryFormatters.menuBarTimeRemaining(monitor.snapshot.timeRemaining)
+            return BatteryFormatters.menuBarTimeRemaining(monitor.snapshot.displayTimeRemaining)
         }
     }
 }
@@ -56,7 +56,10 @@ struct MenuBarLabel: View {
 enum MenuBarAccessibility {
     static func label(for snapshot: BatterySnapshot) -> String {
         let percent = snapshot.percentText
-        switch snapshot.state {
+        if let message = snapshot.powerDisplayStatus.message {
+            return "BatteryGlass，电池电量 \(percent)，\(snapshot.displayState.rawValue)，\(message)"
+        }
+        switch snapshot.displayState {
         case .charging:
             return "BatteryGlass，电池电量 \(percent)，正在充电"
         case .discharging:

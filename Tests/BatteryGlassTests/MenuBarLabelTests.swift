@@ -3,6 +3,18 @@ import XCTest
 @testable import BatteryGlass
 
 final class MenuBarLabelTests: XCTestCase {
+    func testAccessibilityAnnouncesExternalPowerWhileChargingReadingsAreUpdating() {
+        var snapshot = BatterySnapshot()
+        snapshot.state = .charging
+        snapshot.percent = 100
+        snapshot.adapterConnected = true
+        snapshot.powerDisplayStatus = .updating
+
+        XCTAssertEqual(
+            MenuBarAccessibility.label(for: snapshot),
+            "BatteryGlass，电池电量 100%，已接通电源，功率更新中"
+        )
+    }
     func testBatteryIconUsesShorterMenuBarHeight() {
         var snapshot = BatterySnapshot()
         snapshot.state = .discharging
