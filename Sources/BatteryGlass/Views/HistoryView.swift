@@ -732,6 +732,7 @@ struct TodayPowerChart: View {
             : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
         let marks = axisMarks(in: dateDomain, unit: tickUnit, chartDomain: chartDomain)
         let segments = displaySegments(isZoomed: activeWindow.isZoomed, in: dateDomain)
+        let connections = chartData.timeline.connections.filter { chartDomain.contains($0.position) }
         let sliderRange = panRange(for: activeWindow)
 
         return VStack(alignment: .leading, spacing: 8) {
@@ -795,6 +796,16 @@ struct TodayPowerChart: View {
                                 .foregroundStyle(DesignTokens.dataBlue)
                                 .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
                             }
+                        }
+
+                        ForEach(connections) { connection in
+                            RuleMark(
+                                x: .value("时间", connection.position),
+                                yStart: .value("功率", connection.startPowerW),
+                                yEnd: .value("功率", connection.endPowerW)
+                            )
+                            .foregroundStyle(DesignTokens.dataBlue)
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
                         }
 
                         if let hoveredSample,
@@ -1595,6 +1606,14 @@ struct PowerChartBreak: Equatable {
     var duration: TimeInterval { end.timeIntervalSince(start) }
 }
 
+/// 仅用于绘图：在压缩后的缺口位置竖直连接两端实测功率，不补造历史样本。
+struct PowerChartConnection: Identifiable {
+    var id: UUID
+    var position: Double
+    var startPowerW: Double
+    var endPowerW: Double
+}
+
 struct PowerChartAxisMark: Identifiable {
     var position: Double
     var date: Date?
@@ -1604,16 +1623,35 @@ struct PowerChartAxisMark: Identifiable {
 
 struct PowerChartTimeline {
     let breaks: [PowerChartBreak]
+    let connections: [PowerChartConnection]
 
     init(segments: [[HistorySample]]) {
-        self.breaks = zip(segments, segments.dropFirst()).compactMap { previous, next in
+        var breaks: [PowerChartBreak] = []
+        var connections: [PowerChartConnection] = []
+        var removedDuration: TimeInterval = 0
+        for (previous, next) in zip(segments, segments.dropFirst()) {
             guard let last = previous.last,
                   let first = next.first,
                   first.timestamp > last.timestamp else {
-                return nil
+                continue
             }
-            return PowerChartBreak(start: last.timestamp, end: first.timestamp)
+            let interval = PowerChartBreak(start: last.timestamp, end: first.timestamp)
+            breaks.append(interval)
+            if let startPower = last.consumptionPowerW,
+               let endPower = first.consumptionPowerW,
+               startPower.isFinite, startPower > 0,
+               endPower.isFinite, endPower > 0 {
+                connections.append(PowerChartConnection(
+                    id: last.id,
+                    position: last.timestamp.timeIntervalSinceReferenceDate - removedDuration,
+                    startPowerW: startPower,
+                    endPowerW: endPower
+                ))
+            }
+            removedDuration += interval.duration
         }
+        self.breaks = breaks
+        self.connections = connections
     }
 
     /// Maps wall-clock time onto a chart axis where no-power intervals take no width.
