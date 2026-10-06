@@ -346,12 +346,6 @@ struct DailyEnergyComparisonChart: View {
             .pickerStyle(.segmented)
             .controlSize(.mini)
 
-            if summaries.contains(where: { $0.energyQuality?.hasUnmeasuredSleepEnergy == true }) {
-                Label("部分睡眠时段未计入耗电，总计可能偏低", systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-
             if aggregates.isEmpty {
                 ChartEmptyPlaceholder("暂无可用每日耗电量数据")
                     .frame(height: 138)
