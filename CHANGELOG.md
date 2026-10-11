@@ -5,6 +5,8 @@
 ## [2026-10-11]
 
 ### 修改
+- 修复面板关闭后仍持续占用 CPU 的问题（实测约 21%）。`FluidGlassBackground` 的 `TimelineView(.animation)` 只在选中「实时」页时始终运行，而 `MenuBarExtra(.window)` 的面板关闭后内容视图仍然存活、布局不受窗口可见性门控，导致已离屏的窗口被 30fps 动画反复触发布局。新增 `Views/PanelVisibilityObserver.swift`（`NSViewRepresentable`，监听承载窗口的 order/occlusion 通知）上报面板真实可见性，`DashboardView` 据此把动画门控为 `tab == .live && panelVisible`，面板关闭时改为静态背景。（`Views/PanelVisibilityObserver.swift`、`Views/DashboardView.swift`、`README.md`）
+- `DashboardView` 用 `dynamicTypeSize > .large` 的单分支判断替换 `ViewThatFits(in: .vertical)`：`ViewThatFits` 每个布局周期都会测量全部候选（实时面板与 `ScrollView` 包裹的实时面板），在固定 392×672 面板上等于把每次失效的成本翻倍。现在标准字号直接展示，仅在系统字体放大时才用滚动版本。（`Views/DashboardView.swift`）
 - 同步 `CODEBUDDY.md` 至当前工作树：历史图表描述对齐「温度/电压历史曲线已移除」——`HistoryView.swift` 行数（~2,360 → ~2,020）、删除不存在的 `TodayMetricChartDataCache`/`TodayMetric`/`MetricValueAxis`/`TodayTemperatureStats` 与「今日温度曲线」，补入 `AxisTickScale`/`EnergyAxisScale`、`PowerChartConnection`、`HistoryChartRendering`（降采样）、`DailyEnergyComparisonChart`、`ExpandedChart`/`ChartDetailModel`，并把「三张曲线」改为「两条曲线」（`TodayPowerChart`/`TodayBatteryLevelChart`）。
 - `CODEBUDDY.md` 新增 `PowerDisplayTransition`（插拔过渡期实时展示状态：`ready`/`updating`/`unavailable`，只控制展示、不改动量与能耗取值）到项目结构与「电源状态判定」小节，测试地图补 `PowerDisplayTransitionTests`。
 - `CODEBUDDY.md` 修正 App 初始化顺序，补 `PowerTelemetryCalibrationStore` 与 `ChartWindowController`，并更正行号引用（`@main` :49→:51、登录项回写 :68-69→:72-73）及两个 Scene 的环境注入清单；持久化 v8 迁移链补「移除历史温度」（`HistorySample` 现仅存 id/timestamp/power/consumptionPowerW/percent/cycleCount/healthPercent，加载时清除备份与归档中残留的 `temperatureCelsius`）。

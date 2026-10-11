@@ -10,13 +10,21 @@ enum PanelTab: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
     @State private var showingQuitConfirmation = false
+    /// 承载面板的窗口是否真正可见。面板关闭后 MenuBarExtra 只把窗口 order out，
+    /// 内容视图仍存活，需要据此暂停持续动画，否则离屏窗口会被反复布局（见 `PanelVisibilityObserver`）。
+    @State private var panelVisible = false
 
     private var tab: PanelTab {
         get { PanelTab(rawValue: tabRaw) ?? .live }
         nonmutating set { tabRaw = newValue.rawValue }
     }
+
+    /// 面板尺寸固定 392×672：标准字号下直接展示完整内容，仅当系统字体放大到可能放不下时
+    /// 才回退到滚动版本。相比 `ViewThatFits`（每个布局周期都会测量两个分支），这里只测量一个。
+    private var usesScrollFallback: Bool { dynamicTypeSize > .large }
 
     var body: some View {
         GlassContainerIfAvailable {
@@ -35,17 +43,19 @@ struct DashboardView: View {
 
                 ZStack {
                     if tab == .live {
-                        // 标准字号下直接展示完整实时面板，避免出现右侧滚动进度。
-                        // 字体被系统放大导致空间不足时，自动回退到可滚动版本。
-                        ViewThatFits(in: .vertical) {
-                            LiveDashboardView()
-                                .padding(.vertical, DashboardLayout.contentInset)
-
-                            ScrollView {
+                        // 标准字号下直接展示完整实时面板，避免出现右侧滚动进度；
+                        // 字体被系统放大导致空间不足时才回退到可滚动版本。
+                        Group {
+                            if usesScrollFallback {
+                                ScrollView {
+                                    LiveDashboardView()
+                                        .padding(.vertical, DashboardLayout.contentInset)
+                                }
+                                .scrollIndicators(.hidden)
+                            } else {
                                 LiveDashboardView()
                                     .padding(.vertical, DashboardLayout.contentInset)
                             }
-                            .scrollIndicators(.hidden)
                         }
                         .transition(pageTransition)
                     } else {
@@ -59,7 +69,12 @@ struct DashboardView: View {
             }
             .padding(DashboardLayout.panelPadding)
             .background {
-                DashboardPanelBackground(isAnimated: tab == .live)
+                DashboardPanelBackground(isAnimated: tab == .live && panelVisible)
+            }
+            .background {
+                PanelVisibilityObserver { panelVisible = $0 }
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
             }
             .panelGlassSurface(cornerRadius: DesignTokens.cornerRadiusPanel)
         }

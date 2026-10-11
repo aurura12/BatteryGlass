@@ -134,7 +134,7 @@ design-system/batteryglass/  # ui-ux-pro-max 设计系统（MASTER.md）
 | `blur(radius: 56)` | 流体柔化程度 |
 | `0.55 + 0.25 × intensity` | 流体层透明度 |
 
-调节建议：想让玻璃更"液态"可提高 `intensity` 并减小 blur；想要更沉稳可把 `speed` 调到 0.5 左右。60 fps 动画只在面板可见时运行（`TimelineView` 生命周期），面板关闭后零开销。
+调节建议：想让玻璃更"液态"可提高 `intensity` 并减小 blur；想要更沉稳可把 `speed` 调到 0.5 左右。流体动画按 30 fps 运行，并且只在面板真正可见时运行：`MenuBarExtra` 的面板关闭后内容视图仍然存活、`TimelineView` 不会自动停止，因此由 `PanelVisibilityObserver` 监听承载窗口的可见性，面板关闭时把背景切回静态，避免离屏窗口被反复布局（实测空闲 CPU 由约 21% 降到约 4%）。
 
 ## 已知说明
 
