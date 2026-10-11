@@ -2,6 +2,14 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-10-11]
+
+### 修改
+- 同步 `CODEBUDDY.md` 至当前工作树：历史图表描述对齐「温度/电压历史曲线已移除」——`HistoryView.swift` 行数（~2,360 → ~2,020）、删除不存在的 `TodayMetricChartDataCache`/`TodayMetric`/`MetricValueAxis`/`TodayTemperatureStats` 与「今日温度曲线」，补入 `AxisTickScale`/`EnergyAxisScale`、`PowerChartConnection`、`HistoryChartRendering`（降采样）、`DailyEnergyComparisonChart`、`ExpandedChart`/`ChartDetailModel`，并把「三张曲线」改为「两条曲线」（`TodayPowerChart`/`TodayBatteryLevelChart`）。
+- `CODEBUDDY.md` 新增 `PowerDisplayTransition`（插拔过渡期实时展示状态：`ready`/`updating`/`unavailable`，只控制展示、不改动量与能耗取值）到项目结构与「电源状态判定」小节，测试地图补 `PowerDisplayTransitionTests`。
+- `CODEBUDDY.md` 修正 App 初始化顺序，补 `PowerTelemetryCalibrationStore` 与 `ChartWindowController`，并更正行号引用（`@main` :49→:51、登录项回写 :68-69→:72-73）及两个 Scene 的环境注入清单；持久化 v8 迁移链补「移除历史温度」（`HistorySample` 现仅存 id/timestamp/power/consumptionPowerW/percent/cycleCount/healthPercent，加载时清除备份与归档中残留的 `temperatureCelsius`）。
+- `CODEBUDDY.md` 测试地图以 `AxisTickScaleTests` 替换已不存在的 `HistoryMetricChartDataTests`。
+
 ## [2026-10-04]
 
 ### 修改
