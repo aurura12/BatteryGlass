@@ -92,10 +92,12 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 
 ### 数据流
 
-1. `BatteryMonitor.refresh()` 每 0.5 秒（2 Hz，`Timer` 挂在 RunLoop `.common` 模式）从两个 IOKit 源读取并合并：
+1. `BatteryMonitor.refresh()` 按可见性分档从两个 IOKit 源读取并合并（面板可见 0.5 秒 / 2 Hz，其余 1 秒 / 1 Hz；`Timer` 挂 RunLoop `.common` 并设 `tolerance` 让系统合并唤醒）：
    - `readSmartBattery()`：`AppleSmartBattery` 注册表（容量/循环/温度/电气参数/AdapterDetails/PowerTelemetryData）
    - `readPowerSources()`：`IOPowerSources` IOPS 描述（容量/状态/剩余时间/适配器）
 2. 合并后的 `BatterySnapshot` 通过通知发布（`userInfo["snapshot"]`）。全部通知名集中定义于 `Support/Extensions.swift`：`batterySnapshotUpdated`、`sleepSegmentRecorded`、`sleepIntervalStarted`、`sleepIntervalEnded`、`desktopWidgetVisibilityChanged`、`resetDesktopWidgetPosition`、`desktopWidgetStyleChanged`。
+   - **采样 ≠ 界面刷新**：通知每拍都发（历史/诊断/状态判定一律走它），但 `@Observable` 的 `snapshot` / `recentPower` 只在 `shouldPublish(previous:next:mode:...)` 通过时才更新。三档 `UIPublishMode`：`.live`（面板可见，每拍发布）、`.widget`（仅桌面小组件可见，最多 1 秒一次）、`.background`（都不可见，只在菜单栏百分比/供电状态/剩余时间文本变化或 30 秒心跳时发布）。原因：`MenuBarExtra` 面板关闭后内容视图仍存活，每次 `snapshot` 变化都会让离屏面板完整重算视图图（实测占应用空闲 CPU 的 95%）。可见性由 `PanelVisibilityObserver`（面板）与 `DesktopWidgetController.setVisible`（小组件）上报。测试 `BatteryMonitorPublishPolicyTests`。
+   - 内部最新快照为 `latest`（`@ObservationIgnored`），睡眠基线、维持功耗采样、`resolvedSystemPowerW` 的「上次值」都读它，因此降低发布频率不影响任何计量。
 3. `BatteryHistoryStore` 观察 `batterySnapshotUpdated`、`sleepSegmentRecorded` 及 `sleepIntervalStarted/Ended`（睡眠边界）做记录；`DesktopWidgetController` 观察 widget 显隐/重置/风格通知。
 4. 待机（睡眠）补测：`BatteryMonitor` 监听 `NSWorkspace.willSleep/didWake`（见 `Services/BatteryMonitor.swift`「待机（睡眠）监听」段）。睡眠前记录基线并发 `sleepIntervalStarted`，唤醒后发 `sleepIntervalEnded` 建立边界，随后约 30 秒内每 5 秒采样一次系统直供功率取最小值，再按睡眠前供电状态归属成 `SleepSegment`，发 `sleepSegmentRecorded` 通知供能耗计量使用。
 

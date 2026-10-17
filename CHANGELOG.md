@@ -2,6 +2,14 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-10-17]
+
+### 优化
+- 修复面板关闭后仍持续占用约 5.2% CPU 的问题：`BatteryMonitor` 原本每 0.5 秒无条件更新 `@Observable` 的 `snapshot` / `recentPower`，`MenuBarExtra` 面板虽已离屏、内容视图仍存活，于是整棵视图图（`LiveDashboardView` 各卡片）被反复重算——采样（`sample` 5 秒）显示主线程 95% 的空闲时间都在 `NSHostingView.layout → ViewGraphRootValueUpdater.render`，而 IOKit 读取实测只占 0.16%。现在把「采样」与「界面发布」拆开：内部快照 `latest` 仍每拍更新（通知照发，历史/诊断/睡眠结算/能耗口径全部不变），对外 `snapshot` 走 `shouldPublish` 三档策略——`.live` 面板可见每拍发布、`.widget` 仅桌面小组件可见时最多每秒一次、`.background` 都不在屏幕上时只在菜单栏百分比/供电状态/剩余时间文本变化或 30 秒心跳时发布。可见性由 `PanelVisibilityObserver`（面板）与 `DesktopWidgetController.setVisible`（小组件）上报。实测空闲 CPU 5.2% → 0.50%（小组件关闭）/ 1.43%（小组件在桌面上，剩余开销主要是 `ultraThinMaterial` 每秒重绘一次毛玻璃）。（`Services/BatteryMonitor.swift`、`Views/DashboardView.swift`、`Services/DesktopWidgetController.swift`）
+- 采样频率按可见性分档：面板可见 2 Hz、其余 1 Hz（历史仍是 5 秒一条，2 Hz 本来就是 10 倍过采样）；两处 `Timer` 补 `tolerance`（间隔的 20%），让系统把唤醒与其它定时器合并，减少 standby 期间的 package 唤醒。
+- 定时器回调不再每拍 `Task { @MainActor }`（2 Hz 下约 17 万个/天的任务分配），改用 `MainActor.assumeIsolated`；`latestTelemetryCounters` 加等值判断，值没变时不触发校准页观察者。
+- 新增 `Tests/BatteryGlassTests/BatteryMonitorPublishPolicyTests.swift`（10 条）覆盖三档发布策略：可见每拍、离屏忽略功率抖动、整数百分比跳变、插拔跃迁、过渡状态变化、剩余时间分钟粒度、心跳兜底。
+
 ## [2026-10-11]
 
 ### 修改
