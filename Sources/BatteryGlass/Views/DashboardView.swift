@@ -9,6 +9,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
 }
 
 struct DashboardView: View {
+    @Environment(BatteryMonitor.self) private var monitor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
@@ -72,9 +73,13 @@ struct DashboardView: View {
                 DashboardPanelBackground(isAnimated: tab == .live && panelVisible)
             }
             .background {
-                PanelVisibilityObserver { panelVisible = $0 }
-                    .frame(width: 0, height: 0)
-                    .allowsHitTesting(false)
+                PanelVisibilityObserver { visible in
+                    panelVisible = visible
+                    // 采样频率与界面发布频率跟随可见性：离屏时不再 2 Hz 重算视图图。
+                    monitor.setPanelVisible(visible)
+                }
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
             }
             .panelGlassSurface(cornerRadius: DesignTokens.cornerRadiusPanel)
         }

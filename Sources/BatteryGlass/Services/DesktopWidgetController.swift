@@ -66,12 +66,14 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
     func setVisible(_ visible: Bool) {
         guard visible else {
             window?.orderOut(nil)
+            monitor.setDesktopWidgetVisible(false)
             return
         }
         if window == nil {
             createWindow()
         }
         window?.orderFrontRegardless()
+        monitor.setDesktopWidgetVisible(true)
     }
 
     func resetPosition() {

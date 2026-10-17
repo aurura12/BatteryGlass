@@ -7,8 +7,29 @@ import OSLog
 @MainActor
 @Observable
 final class BatteryMonitor {
+    /// 供界面消费的快照。只有「界面真的看得见」或菜单栏需要刷新时才更新，
+    /// 详见 `shouldPublish` 与 `setPanelVisible(_:)`。
     private(set) var snapshot = BatterySnapshot()
     private(set) var recentPower: [PowerSample] = []
+
+    /// 内部最新快照：每个采样周期都会更新，历史记录、诊断日志、睡眠结算与状态判定
+    /// 一律读它，因此降低界面发布频率不会丢数据。
+    @ObservationIgnored private var latest = BatterySnapshot()
+    /// 界面的发布节流。`latest` 每拍都变，`snapshot` 只在有意义的字段变化时才跟。
+    @ObservationIgnored private var lastPublishAt = Date.distantPast
+    /// 面板（MenuBarExtra 窗口）是否真正在屏幕上，由 `PanelVisibilityObserver` 上报。
+    @ObservationIgnored private var panelVisible = false
+    /// 桌面小组件窗口是否在屏幕上，由 `DesktopWidgetController` 上报。
+    @ObservationIgnored private var desktopWidgetVisible = false
+
+    /// 可见时的采样间隔：面板/小组件在屏幕上，2 Hz 保持数值平滑。
+    nonisolated static let activeRefreshInterval: TimeInterval = 0.5
+    /// 不可见时的采样间隔：历史是 5 秒一条，1 Hz 已经把界面驱动降到最低而数据无损。
+    nonisolated static let idleRefreshInterval: TimeInterval = 1.0
+    /// 仅桌面小组件可见时的最低发布间隔（小组件带毛玻璃材质，重绘成本不低）。
+    nonisolated static let widgetRefreshInterval: TimeInterval = 1.0
+    /// 不可见时仍定期发布一次，兜底视图里与时间相关的文案（剩余时间等）。
+    nonisolated static let hiddenPublishHeartbeat: TimeInterval = 30
 
     private let settings: AppSettings
     private let telemetryCalibrationStore: PowerTelemetryCalibrationStore
@@ -18,6 +39,8 @@ final class BatteryMonitor {
     private var pluggedDischargeConfirmation = BatteryDischargeConfirmation()
     private var powerDisplayTransition = PowerDisplayTransition()
     private let recentSampleLimit = 420
+    /// 每拍都追加的原始功率环形缓冲；`recentPower` 只在发布时与它同步一次。
+    @ObservationIgnored private var powerBuffer: [PowerSample] = []
 
     /// 睡眠/唤醒补测的诊断通道。睡眠窗口没有实时采样，只能靠这几个端点值人工核对
     /// （用 `./script/build_and_run.sh --telemetry` 跟随）。
@@ -72,14 +95,7 @@ final class BatteryMonitor {
         self.settings = settings
         self.telemetryCalibrationStore = telemetryCalibrationStore ?? PowerTelemetryCalibrationStore()
         refresh()
-
-        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refresh()
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        scheduleRefreshTimer(interval: Self.idleRefreshInterval)
 
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         workspaceCenter.addObserver(
@@ -102,10 +118,132 @@ final class BatteryMonitor {
         }
     }
 
+    // MARK: - 采样节拍与界面可见性
+
+    /// 按当前是否需要高频界面更新重建采样定时器。
+    ///
+    /// 定时器带 `tolerance`：2 Hz 本身对数据没有精度要求，允许系统把唤醒和其它
+    /// 定时器合并，减少 standby 期间的 package 唤醒次数。
+    private func scheduleRefreshTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            // 定时器挂在主 RunLoop 上，回调必定在主线程；用 assumeIsolated 省掉
+            // 每拍一次的 Task 分配与 actor 跳转。
+            MainActor.assumeIsolated {
+                self?.refresh()
+            }
+        }
+        timer.tolerance = interval * 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    /// 界面刷新档位：决定采样与发布节拍。
+    ///
+    /// 三档的取舍来自实测：面板打开时需要数值平滑（2 Hz）；桌面小组件挂在桌面上、
+    /// 只看一眼，1 Hz 足够；两者都不在屏幕上时完全没有理由按帧刷新，只在内容变化时发布。
+    nonisolated enum UIPublishMode: Equatable {
+        /// 菜单栏弹窗在屏幕上：每拍都发布。
+        case live
+        /// 仅桌面小组件在屏幕上：最多每秒发布一次（小组件带毛玻璃材质，重绘不便宜）。
+        case widget
+        /// 界面上什么都不在：只在菜单栏相关字段变化时发布。
+        case background
+    }
+
+    private var publishMode: UIPublishMode {
+        if panelVisible { return .live }
+        if desktopWidgetVisible { return .widget }
+        return .background
+    }
+
+    private var samplingInterval: TimeInterval {
+        panelVisible ? Self.activeRefreshInterval : Self.idleRefreshInterval
+    }
+
+    /// 面板（菜单栏弹窗）可见性变化。由 `PanelVisibilityObserver` 上报。
+    func setPanelVisible(_ visible: Bool) {
+        guard panelVisible != visible else { return }
+        panelVisible = visible
+        handleVisibilityChange()
+    }
+
+    /// 桌面小组件可见性变化。由 `DesktopWidgetController` 上报。
+    func setDesktopWidgetVisible(_ visible: Bool) {
+        guard desktopWidgetVisible != visible else { return }
+        desktopWidgetVisible = visible
+        handleVisibilityChange()
+    }
+
+    private func handleVisibilityChange() {
+        // 变可见时立刻用最新内部快照刷一次，避免面板打开后先显示一拍旧值；
+        // 变不可见时无需额外动作，下一次 `shouldPublish` 自然会拒绝发布。
+        if publishMode != .background { publish(latest) }
+        scheduleRefreshTimer(interval: samplingInterval)
+    }
+
+    /// 决定这一拍的内部快照要不要同步给界面。
+    ///
+    /// 面板离屏时 SwiftUI 仍会完整重算视图图，因此「采样频率」不能等于「界面刷新频率」。
+    /// 背景档只在用户看得见的东西变化时发布：菜单栏的百分比 / 供电状态 / 剩余时间文本、
+    /// 以及插拔电源这类状态跃迁；另加一个低频心跳兜底。
+    nonisolated static func shouldPublish(
+        previous: BatterySnapshot,
+        next: BatterySnapshot,
+        mode: UIPublishMode,
+        menuBarMode: MenuBarDisplayMode,
+        secondsSinceLastPublish: TimeInterval,
+        heartbeat: TimeInterval = hiddenPublishHeartbeat
+    ) -> Bool {
+        switch mode {
+        case .live:
+            return true
+        case .widget:
+            // 毛玻璃材质的小组件按秒刷新已足够，其余时间仍走下面的变化判定。
+            if secondsSinceLastPublish >= widgetRefreshInterval { return true }
+        case .background:
+            break
+        }
+        if secondsSinceLastPublish >= heartbeat { return true }
+        if previous.isPresent != next.isPresent { return true }
+        if previous.state != next.state { return true }
+        if previous.adapterConnected != next.adapterConnected { return true }
+        if previous.displayState != next.displayState { return true }
+        if previous.powerDisplayStatus != next.powerDisplayStatus { return true }
+        // 菜单栏百分比图标与文字都只依赖整数百分比。
+        if previous.percentText != next.percentText { return true }
+        if menuBarMode == .timeRemaining {
+            let previousText = BatteryFormatters.menuBarTimeRemaining(previous.displayTimeRemaining)
+            let nextText = BatteryFormatters.menuBarTimeRemaining(next.displayTimeRemaining)
+            if previousText != nextText { return true }
+        }
+        return false
+    }
+
+    private func publish(_ s: BatterySnapshot) {
+        lastPublishAt = s.timestamp
+        snapshot = s
+        recentPower = powerBuffer
+    }
+
+    private func publishIfNeeded(_ s: BatterySnapshot) {
+        let elapsed = s.timestamp.timeIntervalSince(lastPublishAt)
+        guard Self.shouldPublish(
+            previous: snapshot,
+            next: s,
+            mode: publishMode,
+            menuBarMode: settings.menuBarDisplayMode,
+            secondsSinceLastPublish: elapsed
+        ) else { return }
+        publish(s)
+    }
+
     func refresh() {
         let io = readSmartBattery()
         let ps = readPowerSources()
-        latestTelemetryCounters = io.telemetryCounters
+        if io.telemetryCounters != latestTelemetryCounters {
+            latestTelemetryCounters = io.telemetryCounters
+        }
 
         var s = BatterySnapshot(timestamp: Date())
         s.isPresent = io.batteryInstalled || ps.isPresent
@@ -185,8 +323,8 @@ final class BatteryMonitor {
             chargingPowerW: s.chargingPowerW,
             telemetryBatteryPowerMW: io.telemetryBatteryPowerMW,
             electricalPowerW: s.power,
-            previous: snapshot.systemPowerW,
-            previousAdapterConnected: snapshot.adapterConnected,
+            previous: latest.systemPowerW,
+            previousAdapterConnected: latest.adapterConnected,
             batteryDischargingWhilePlugged: s.batteryDischargingWhilePlugged
         )
         s.systemPowerW = resolved.systemPowerW
@@ -254,10 +392,12 @@ final class BatteryMonitor {
             state: s.state
         )
 
-        snapshot = s
+        latest = s
+        // 历史、诊断与状态判定都消费上面这条通知，因此界面发布可以独立节流。
         recordPowerSample(s)
         checkLowBattery(s)
         checkAdapterChange(s)
+        publishIfNeeded(s)
 
         NotificationCenter.default.post(
             name: .batterySnapshotUpdated,
@@ -289,23 +429,23 @@ final class BatteryMonitor {
         finishPendingSleepEnergy()
         cancelMaintenanceSampling()
         sleepBaseline = (
-            date: snapshot.timestamp,
-            capacityMAh: snapshot.currentCapacityMAh,
-            voltageV: snapshot.voltage,
-            adapterConnected: snapshot.adapterConnected,
-            batteryDischargingBefore: snapshot.batteryDischargingWhilePlugged,
+            date: latest.timestamp,
+            capacityMAh: latest.currentCapacityMAh,
+            voltageV: latest.voltage,
+            adapterConnected: latest.adapterConnected,
+            batteryDischargingBefore: latest.batteryDischargingWhilePlugged,
             telemetryCounters: latestTelemetryCounters
         )
         NotificationCenter.default.post(
             name: .sleepIntervalStarted,
             object: self,
-            userInfo: ["start": snapshot.timestamp]
+            userInfo: ["start": latest.timestamp]
         )
         let state = Self.describeSleepState(
-            adapterConnected: snapshot.adapterConnected,
-            batteryDischarging: snapshot.batteryDischargingWhilePlugged,
-            capacityMAh: snapshot.currentCapacityMAh,
-            voltageV: snapshot.voltage,
+            adapterConnected: latest.adapterConnected,
+            batteryDischarging: latest.batteryDischargingWhilePlugged,
+            capacityMAh: latest.currentCapacityMAh,
+            voltageV: latest.voltage,
             wallCounter: latestTelemetryCounters.accumulatedWallEnergyEstimate
         )
         Self.sleepLogger.notice("睡眠开始 \(state, privacy: .public)")
@@ -315,10 +455,10 @@ final class BatteryMonitor {
         guard let baseline = sleepBaseline else { return }
         refresh()
         wakeBaseline = (
-            date: snapshot.timestamp,
-            capacityMAh: snapshot.currentCapacityMAh,
-            voltageV: snapshot.voltage,
-            adapterConnected: snapshot.adapterConnected,
+            date: latest.timestamp,
+            capacityMAh: latest.currentCapacityMAh,
+            voltageV: latest.voltage,
+            adapterConnected: latest.adapterConnected,
             telemetryCounters: latestTelemetryCounters
         )
         NotificationCenter.default.post(
@@ -326,17 +466,17 @@ final class BatteryMonitor {
             object: self,
             userInfo: [
                 "start": baseline.date,
-                "end": snapshot.timestamp
+                "end": latest.timestamp
             ]
         )
-        let boundaryChange = baseline.adapterConnected == snapshot.adapterConnected
+        let boundaryChange = baseline.adapterConnected == latest.adapterConnected
             ? "无"
             : (baseline.adapterConnected ? "adapterToBattery" : "batteryToAdapter")
         let wakeState = Self.describeSleepState(
-            adapterConnected: snapshot.adapterConnected,
-            batteryDischarging: snapshot.batteryDischargingWhilePlugged,
-            capacityMAh: snapshot.currentCapacityMAh,
-            voltageV: snapshot.voltage,
+            adapterConnected: latest.adapterConnected,
+            batteryDischarging: latest.batteryDischargingWhilePlugged,
+            capacityMAh: latest.currentCapacityMAh,
+            voltageV: latest.voltage,
             wallCounter: latestTelemetryCounters.accumulatedWallEnergyEstimate
         )
         let beforeCounter = baseline.telemetryCounters.accumulatedWallEnergyEstimate
@@ -352,10 +492,11 @@ final class BatteryMonitor {
     private func startMaintenanceSampling() {
         cancelMaintenanceSampling()
         let timer = Timer(timeInterval: maintenanceSampleInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.sampleMaintenancePower()
             }
         }
+        timer.tolerance = maintenanceSampleInterval * 0.2
         RunLoop.main.add(timer, forMode: .common)
         maintenanceTimer = timer
         sampleMaintenancePower()
@@ -369,11 +510,11 @@ final class BatteryMonitor {
         refresh()
         // 直供功率仅插电场景有意义；不插电（电池供电）时无直供样本也照常推进采样计数，
         // 保证采样窗口能结束并生成放电待机区间。
-        if let direct = snapshot.directSupplyPowerW {
+        if let direct = latest.directSupplyPowerW {
             maintenanceSamples.append(max(0, direct))
         }
-        if let adapterInput = snapshot.adapterInputPowerW,
-           snapshot.adapterConnected,
+        if let adapterInput = latest.adapterInputPowerW,
+           latest.adapterConnected,
            adapterInput.isFinite,
            adapterInput > 0 {
             maintenanceAdapterInputSamples.append(adapterInput)
@@ -523,9 +664,9 @@ final class BatteryMonitor {
 
     private func recordPowerSample(_ s: BatterySnapshot) {
         guard let sample = PowerSample(snapshot: s) else { return }
-        recentPower.append(sample)
-        if recentPower.count > recentSampleLimit {
-            recentPower.removeFirst(recentPower.count - recentSampleLimit)
+        powerBuffer.append(sample)
+        if powerBuffer.count > recentSampleLimit {
+            powerBuffer.removeFirst(powerBuffer.count - recentSampleLimit)
         }
     }
 
