@@ -5,6 +5,7 @@
 ## [2026-10-17]
 
 ### 修改
+- 电量曲线用细连接线跨过采样缺口：待机期间应用只能在每次维护唤醒时记录 1–2 分钟样本，相邻片段间隔 15–20 分钟，超过 `splitByGaps(maximumGap: 300)` 的断线阈值后曲线被切成大量孤立短段（日视图上表现为断续的点/竖线）。现在保留缺口两侧的实测样本，用 1pt、45% 透明度的连线跨过缺口，既不画出断口也不补造数据点；填充区域改为整日一条连续 `AreaMark` 序列，解决稀疏段区域窄到看不见而出现的「有的曲线下有浅蓝色底色、有的没有」。（`Views/HistoryView.swift` 的 `TodayBatteryLevelChart`、`HistoryChartRendering.gapBridges`）
 - 更新 `CODEBUDDY.md`：修正 `AppDelegate` 职责描述（除设置 accessory 策略外还调用 `NotificationService.installForegroundPresenter()`）；测试类地图补 `BatteryMonitorPublishPolicyTests`、`ChartZoomWindowTests`、`ChartTimeAxisTests`、`ChartViewportTests`、`HistoryDaySelectionTests`，并把误置于「Views / UI」末尾的统计边界测试说明并入测试地图；补充 bundle 元数据由 `script/build_and_run.sh` 内联生成 Info.plist、`Package.swift` 链接 `IOKit`/`ServiceManagement`，以及源码/测试类变更时同步本文件的维护约定。
 - 修复电量曲线在密集样本下被画成"梳齿"竖条的问题：`TodayBatteryLevelChart` 的 `AreaMark` 从三参 `x:yStart:yEnd:`（每个 mark 都给常量 yStart）改为两参 `x:y:` 形式，与 `TodayPowerChart` 对齐；Swift Charts 在密集 Date 样本下不会把三参形式按 `series` 合并成一条连续填充区域，相邻样本之间留下竖条空隙。视觉上仍由 y 轴 `plotYDomain.lowerBound` 把填充裁到电量曲线下沿，渐变与连线不变。`BatteryLevelChartDataTests` 新增 `testContinuousDayProducesSingleSegmentForConnectedArea` 锁定整段连续输入必须落到单个 `displayedSegments` 以便 `series` 合并为连续区域。
 

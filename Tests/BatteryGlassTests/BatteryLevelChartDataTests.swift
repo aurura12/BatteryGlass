@@ -123,6 +123,40 @@ final class BatteryLevelChartDataTests: XCTestCase {
         XCTAssertEqual(data.percentDomain, 0...100)
     }
 
+    // MARK: - HistoryChartRendering.gapBridges
+
+    func testGapBridgesConnectAdjacentSegmentsWithRealSamples() {
+        // 待机缺口两侧的实测样本必须成为细连接线的端点，中间不补任何点。
+        let first = Date(timeIntervalSince1970: 1_000)
+        let a = sample(at: first, percent: 84)
+        let b = sample(at: first.addingTimeInterval(60), percent: 84)
+        let c = sample(at: first.addingTimeInterval(1_800), percent: 53)
+        let d = sample(at: first.addingTimeInterval(3_600), percent: 58)
+
+        let bridges = HistoryChartRendering.gapBridges([[a, b], [c, d]])
+
+        XCTAssertEqual(bridges.count, 1)
+        XCTAssertEqual(bridges.first?.start, b)
+        XCTAssertEqual(bridges.first?.end, c)
+    }
+
+    func testGapBridgesIgnoreSingleSegment() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let samples = [sample(at: first, percent: 70), sample(at: first.addingTimeInterval(5), percent: 70)]
+
+        XCTAssertTrue(HistoryChartRendering.gapBridges([samples]).isEmpty)
+        XCTAssertTrue(HistoryChartRendering.gapBridges([]).isEmpty)
+        XCTAssertTrue(HistoryChartRendering.gapBridges([[]]).isEmpty)
+    }
+
+    func testGapBridgesSkipNonAdvancingSegments() {
+        let first = Date(timeIntervalSince1970: 1_000)
+        let a = sample(at: first, percent: 50)
+        let b = sample(at: first, percent: 60)
+
+        XCTAssertTrue(HistoryChartRendering.gapBridges([[a], [b]]).isEmpty)
+    }
+
     // MARK: - BatteryLevelAxis.yDomain
 
     func testYDomainFallsBackToZeroToHundredWhenEmpty() {

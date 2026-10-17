@@ -126,6 +126,24 @@ enum HistoryChartRendering {
             downsamplePreservingExtrema(segment, limit: targets[index], value: value)
         }
     }
+
+    /// 一条跨缺口的连接线：首尾是缺口两侧的实测样本，中间不补任何数据点。
+    struct GapBridge: Equatable {
+        var start: HistorySample
+        var end: HistorySample
+    }
+
+    /// 相邻连续段之间的连接对，供曲线以细线跨越采样缺口。
+    static func gapBridges(_ segments: [[HistorySample]]) -> [GapBridge] {
+        var bridges: [GapBridge] = []
+        for (previous, next) in zip(segments, segments.dropFirst()) {
+            guard let start = previous.last,
+                  let end = next.first,
+                  end.timestamp > start.timestamp else { continue }
+            bridges.append(GapBridge(start: start, end: end))
+        }
+        return bridges
+    }
 }
 
 struct HistoryView: View {
@@ -1207,7 +1225,8 @@ struct TodayBatteryLevelChart: View {
         return BatteryLevelAxis.yDomain(for: visible.map(\.percent))
     }
 
-    /// 缺口处断开连线；待机期间不记录样本，故无需再按待机区间过滤。
+    /// 缺口处断开主曲线，再由细连接线跨过缺口（见 `HistoryChartRendering.gapBridges`）；
+    /// 待机期间不记录样本，故无需再按待机区间过滤。
     private func displaySegments(
         for window: ChartZoomWindow,
         in domain: ClosedRange<Date>
@@ -1230,6 +1249,10 @@ struct TodayBatteryLevelChart: View {
         let plotDomain = visibleDomain(for: activeWindow)
         let plotYDomain = yDomain(for: activeWindow, in: plotDomain)
         let segments = displaySegments(for: activeWindow, in: plotDomain)
+        // 填充区域用一整条连续序列，缺口两侧共用同一渐变，避免稀疏段（每次唤醒只有
+        // 一两条样本）因区域窄到看不见而出现「有的有底色、有的没有」。
+        let fillSamples = segments.flatMap { $0 }
+        let bridges = HistoryChartRendering.gapBridges(segments)
         let tickUnit = ChartTimeAxis.unit(
             forSpan: plotDomain.upperBound.timeIntervalSince(plotDomain.lowerBound)
         )
@@ -1267,29 +1290,30 @@ struct TodayBatteryLevelChart: View {
                     .frame(height: 120)
             } else {
                 Chart {
+                    ForEach(fillSamples) { sample in
+                        // 用 2 参 `AreaMark(x:y:)` 而不是 `x:yStart:yEnd:`：Swift Charts
+                        // 对每个 mark 都给常量 yStart 的 3 参形式在密集样本下会按
+                        // 独立竖条渲染，相邻竖条不被插值合并，导致画面呈"梳齿"。
+                        // 不传 `series` 让整日样本连成一条填充区域（缺口也一起填上）。
+                        // 视觉上仍由 y 轴 `plotYDomain.lowerBound` 把区域裁到电
+                        // 量曲线下沿。
+                        AreaMark(
+                            x: .value("时间", sample.timestamp),
+                            y: .value("电量", sample.percent)
+                        )
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    }
+
                     ForEach(Array(segments.enumerated()), id: \.offset) { segmentIndex, segment in
                         let segmentID = segment.first?.id.uuidString ?? "segment-\(segmentIndex)"
                         ForEach(segment) { sample in
-                            // 用 2 参 `AreaMark(x:y:)` 而不是 `x:yStart:yEnd:`：Swift Charts
-                            // 对每个 mark 都给常量 yStart 的 3 参形式在密集样本下会按
-                            // 独立竖条渲染，相邻竖条不被插值合并，导致画面呈"梳齿"。
-                            // 2 参形式配合 `series` 会把同段连成一条连续填充区域。
-                            // 视觉上仍由 y 轴 `plotYDomain.lowerBound` 把区域裁到电
-                            // 量曲线下沿。
-                            AreaMark(
-                                x: .value("时间", sample.timestamp),
-                                y: .value("电量", sample.percent),
-                                series: .value("曲线段", segmentID)
-                            )
-                            .interpolationMethod(.linear)
-                            .foregroundStyle(
-                                LinearGradient(
-                                    colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-
                             LineMark(
                                 x: .value("时间", sample.timestamp),
                                 y: .value("电量", sample.percent),
@@ -1298,6 +1322,22 @@ struct TodayBatteryLevelChart: View {
                             .interpolationMethod(.linear)
                             .foregroundStyle(DesignTokens.dataBlue)
                             .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        }
+                    }
+
+                    // 缺口（待机期间只有零星唤醒样本）用更细、更淡的实测连线跨过，
+                    // 既不再画出断口，也不把推测值画成正式测量。
+                    ForEach(Array(bridges.enumerated()), id: \.offset) { index, bridge in
+                        let bridgeID = "bridge-\(index)"
+                        ForEach([bridge.start, bridge.end]) { sample in
+                            LineMark(
+                                x: .value("时间", sample.timestamp),
+                                y: .value("电量", sample.percent),
+                                series: .value("曲线段", bridgeID)
+                            )
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.45))
+                            .lineStyle(StrokeStyle(lineWidth: 1, lineCap: .round))
                         }
                     }
 
