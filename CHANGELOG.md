@@ -4,6 +4,10 @@
 
 ## [2026-10-17]
 
+### 修改
+- 更新 `CODEBUDDY.md`：修正 `AppDelegate` 职责描述（除设置 accessory 策略外还调用 `NotificationService.installForegroundPresenter()`）；测试类地图补 `BatteryMonitorPublishPolicyTests`、`ChartZoomWindowTests`、`ChartTimeAxisTests`、`ChartViewportTests`、`HistoryDaySelectionTests`，并把误置于「Views / UI」末尾的统计边界测试说明并入测试地图；补充 bundle 元数据由 `script/build_and_run.sh` 内联生成 Info.plist、`Package.swift` 链接 `IOKit`/`ServiceManagement`，以及源码/测试类变更时同步本文件的维护约定。
+- 修复电量曲线在密集样本下被画成"梳齿"竖条的问题：`TodayBatteryLevelChart` 的 `AreaMark` 从三参 `x:yStart:yEnd:`（每个 mark 都给常量 yStart）改为两参 `x:y:` 形式，与 `TodayPowerChart` 对齐；Swift Charts 在密集 Date 样本下不会把三参形式按 `series` 合并成一条连续填充区域，相邻样本之间留下竖条空隙。视觉上仍由 y 轴 `plotYDomain.lowerBound` 把填充裁到电量曲线下沿，渐变与连线不变。`BatteryLevelChartDataTests` 新增 `testContinuousDayProducesSingleSegmentForConnectedArea` 锁定整段连续输入必须落到单个 `displayedSegments` 以便 `series` 合并为连续区域。
+
 ### 优化
 - 修复面板关闭后仍持续占用约 5.2% CPU 的问题：`BatteryMonitor` 原本每 0.5 秒无条件更新 `@Observable` 的 `snapshot` / `recentPower`，`MenuBarExtra` 面板虽已离屏、内容视图仍存活，于是整棵视图图（`LiveDashboardView` 各卡片）被反复重算——采样（`sample` 5 秒）显示主线程 95% 的空闲时间都在 `NSHostingView.layout → ViewGraphRootValueUpdater.render`，而 IOKit 读取实测只占 0.16%。现在把「采样」与「界面发布」拆开：内部快照 `latest` 仍每拍更新（通知照发，历史/诊断/睡眠结算/能耗口径全部不变），对外 `snapshot` 走 `shouldPublish` 三档策略——`.live` 面板可见每拍发布、`.widget` 仅桌面小组件可见时最多每秒一次、`.background` 都不在屏幕上时只在菜单栏百分比/供电状态/剩余时间文本变化或 30 秒心跳时发布。可见性由 `PanelVisibilityObserver`（面板）与 `DesktopWidgetController.setVisible`（小组件）上报。实测空闲 CPU 5.2% → 0.50%（小组件关闭）/ 1.43%（小组件在桌面上，剩余开销主要是 `ultraThinMaterial` 每秒重绘一次毛玻璃）。（`Services/BatteryMonitor.swift`、`Views/DashboardView.swift`、`Services/DesktopWidgetController.swift`）
 - 采样频率按可见性分档：面板可见 2 Hz、其余 1 Hz（历史仍是 5 秒一条，2 Hz 本来就是 10 倍过采样）；两处 `Timer` 补 `tolerance`（间隔的 20%），让系统把唤醒与其它定时器合并，减少 standby 期间的 package 唤醒。

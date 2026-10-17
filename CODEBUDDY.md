@@ -23,9 +23,9 @@ swift scripts/generate_icon.swift                # 重新生成 AppIcon.icns
 ./script/menu_bar_only_test.sh                   # 断言应用保持“纯菜单栏”（不得出现主窗口入口/通知路径）
 ```
 
-`script/install_app.sh` 只被 `build_and_run.sh` source（提供 `install_app` 函数），通常不单独运行。
+`script/install_app.sh` 只被 `build_and_run.sh` source（提供 `install_app` 函数），通常不单独运行。App bundle 的元数据（bundle id、`LSUIElement`、ad-hoc 签名）由 `script/build_and_run.sh` 内联生成 Info.plist（约 :83），没有独立的 plist 文件可改。
 
-仓库**没有** SwiftLint / SwiftFormat / Makefile / pre-commit 等 lint 或格式化配置：质量闸门只有 `swift build` 与 `swift test`。`Package.swift` 为 `swift-tools-version: 5.10`（本机开发基准为 Swift 6.4 / macOS 27 SDK，见 README）。
+仓库**没有** SwiftLint / SwiftFormat / Makefile / pre-commit 等 lint 或格式化配置：质量闸门只有 `swift build` 与 `swift test`。`Package.swift` 为 `swift-tools-version: 5.10`（本机开发基准为 Swift 6.4 / macOS 27 SDK，见 README），`defaultLocalization` 为 `zh-Hans`，通过 `linkerSettings` 链接 `IOKit` 与 `ServiceManagement`——新增系统框架需改 manifest。
 
 测试目标依赖可执行目标，`swift test` 会同时编译 app 二进制。访问 `@MainActor` 类型（如 `BatteryMonitor`）的测试类需标注 `@MainActor`。
 
@@ -74,7 +74,7 @@ Sources/BatteryGlass/
 - `AppInstanceGuard`（:12）与 `AppDelegate`（:42）与 `@main BatteryGlassApp`（:51）。
 - `BatteryGlassApp.init` 的固定顺序：**单实例接管 → `AppSettings` → 用系统登录项回写 `launchAtLoginEnabled` → `PowerTelemetryCalibrationStore` → `BatteryMonitor` → `BatteryHistoryStore` → `DesktopWidgetController` → `ChartWindowController`**。前三步顺序不可换（见上文单实例说明）；校准 store 必须早于 `BatteryMonitor` 创建并注入同一实例，设置页改系数后监控立即生效。
 - 两个 Scene：`MenuBarExtra`（`.menuBarExtraStyle(.window)`）→ `DashboardView`（注入 `monitor`/`history`/`settings`/`chartWindow`）；`Settings` → `SettingsView`（注入 `history`/`settings`/`calibrationStore`/`monitor`）。`MenuBarLabel` 只注入 `monitor`/`settings`。
-- `AppDelegate` 只做一件事：`applicationDidFinishLaunching` 里 `NSApp.setActivationPolicy(.accessory)`（不占 Dock）。
+- `AppDelegate` 在 `applicationDidFinishLaunching` 做两件事：`NSApp.setActivationPolicy(.accessory)`（不占 Dock）与 `NotificationService.installForegroundPresenter()`（应用在前台时也展示通知横幅，否则系统会静默丢弃）。
 
 ### 对象图与依赖注入
 
@@ -129,7 +129,7 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 - `BatteryMonitor` 的解析逻辑提取为 `static` 纯函数以支持单元测试：`parsePowerSourceDescription(_:initial:)`、`applyAdapterDetails(_:to:)`、`resolvedPowerState`、`resolvedCapacityMAh`、`resolvedDesignCapacityMAh`、`resolvedFullChargeCapacityMAh`、`resolvedCurrentCapacityMAh`、`resolvedSystemPowerW`、`dischargingSystemPowerW`、`minimumMaintenancePowers`、`parsePowerTelemetryCounters`，以及 `IOPSPowerSourceState` 枚举。测试直接构造 `[String: Any]` 字典调用它们，不 mock IOKit（对应测试类：`BatteryMonitorIOPSParsingTests`、`BatteryMonitorSmartBatteryTests`、`BatteryMonitorStateTests`、`EnergyConsumptionTests`）。新增可验证的决策逻辑时沿用此模式（纯函数提取 + 先写失败测试）。
 - 容量语义：Apple Silicon 上 IOPS 的 Current/Max Capacity 是 0-100 归一化值而非 mAh，快照容量字段经 `resolvedCapacityMAh`（SmartBattery 真 mAh 优先、IOPS 仅量级 >500 时兜底）过滤后恒为真 mAh。
 - 单位约定：电压 mV→V、电流 mA→A（IOPS 与 SmartBattery 两条路径必须一致）；`PowerTelemetryData` 功率为带符号 64 位整数 mW，须经 `signedMW` 按位转换。
-- 测试类地图（`Tests/BatteryGlassTests/`）：解析/状态 `BatteryMonitorIOPSParsingTests`、`BatteryMonitorSmartBatteryTests`、`BatteryMonitorStateTests`、`PowerDisplayTransitionTests`（插拔过渡展示状态机）；能耗 `EnergyConsumptionTests`、`SleepEnergyCalculatorTests`、`PowerTelemetryEnergyTests`、`PowerTelemetryCalibrationTests`、`EnergyAggregatorTests`、`DailyEnergySummaryPolicyTests`、`BatteryDischargeConfirmationTests`、`SamplingGapAccountingTests`（纯函数：断点/缺失读数累计、睡眠排除、跨午夜拆天）、`SamplingGapQualityTests`（`BatteryHistoryStore` 端到端：短缺失不点亮、长断点点亮、加载时重算可自愈）；时间估算 `TimeRemainingEstimatorTests`、`ChargeRateTrackerTests`、`TimeRemainingSmootherTests`；持久化 `HistoryPersistenceTests`、`HistoryRecoveryTests`、`HistoryRetentionTests`、`HistoryExporterTests`、`HistorySampleArchiveTests`（分钟 upsert/时区/DST/失败回滚）、`LongTermHistoryTests`（旧版迁移、跨天归档、重启边界、超大归档按需加载、清空、迁移失败重试）；图表 `PowerChartDataTests`、`PowerChartSegmentationTests`、`PowerChartInteractionTests`、`BatteryLevelChartDataTests`（后者覆盖 `HistoryView.swift` 内的 `BatteryLevelChartData` / `BatteryLevelChartDataCache`）、`AxisTickScaleTests`（`EnergyAxisScale.ticks`/`fractionDigits`：窄域标签唯一、刻度落在域内且升序、退化域不崩溃）；其余 `AppSettingsTests`、`LoginItemServiceTests`、`MenuBarLabelTests`、`BatteryFormattersTests`、`PowerDiagnosticsTests`。
+- 测试类地图（`Tests/BatteryGlassTests/`）：解析/状态 `BatteryMonitorIOPSParsingTests`、`BatteryMonitorSmartBatteryTests`、`BatteryMonitorStateTests`、`PowerDisplayTransitionTests`（插拔过渡展示状态机）、`BatteryMonitorPublishPolicyTests`（采样与界面发布节拍的分档策略）；能耗 `EnergyConsumptionTests`、`SleepEnergyCalculatorTests`、`PowerTelemetryEnergyTests`、`PowerTelemetryCalibrationTests`、`EnergyAggregatorTests`、`DailyEnergySummaryPolicyTests`、`BatteryDischargeConfirmationTests`、`SamplingGapAccountingTests`（纯函数：断点/缺失读数累计、睡眠排除、跨午夜拆天）、`SamplingGapQualityTests`（`BatteryHistoryStore` 端到端：短缺失不点亮、长断点点亮、加载时重算可自愈）；时间估算 `TimeRemainingEstimatorTests`、`ChargeRateTrackerTests`、`TimeRemainingSmootherTests`；持久化 `HistoryPersistenceTests`、`HistoryRecoveryTests`、`HistoryRetentionTests`、`HistoryExporterTests`、`HistorySampleArchiveTests`（分钟 upsert/时区/DST/失败回滚）、`LongTermHistoryTests`（旧版迁移、跨天归档、重启边界、超大归档按需加载、清空、迁移失败重试）；图表 `PowerChartDataTests`、`PowerChartSegmentationTests`、`PowerChartInteractionTests`、`BatteryLevelChartDataTests`（后者覆盖 `HistoryView.swift` 内的 `BatteryLevelChartData` / `BatteryLevelChartDataCache`）、`AxisTickScaleTests`（`EnergyAxisScale.ticks`/`fractionDigits`：窄域标签唯一、刻度落在域内且升序、退化域不崩溃）、`ChartZoomWindowTests`、`ChartTimeAxisTests`、`ChartViewportTests`、`HistoryDaySelectionTests`；统计边界 `HistoryAccountingBoundaryTests`（近 N 个日历日、退出前结算、清空取消与旧事件拦截、已知修复备份清理、长睡眠缺失提示及跨天结算）、`DailyEnergyQualityTests`（`hasUnmeasuredSleepEnergy` 的旧文件兼容解码）、`PowerTrendStatisticsTests`（以当前快照时间计算的 120 秒窗口与过期读数；睡眠缺失提示由 `SleepInterval` 与已结算 `SleepSegment` 核对，仅增加质量说明、不重算旧日耗电）；其余 `AppSettingsTests`、`LoginItemServiceTests`、`MenuBarLabelTests`、`BatteryFormattersTests`、`PowerDiagnosticsTests`。
 
 ### Stores / 持久化
 
@@ -153,10 +153,9 @@ AppSettings ─┬─→ BatteryMonitor ─→ DesktopWidgetController
 - UI 规范以 `design-system/batteryglass/MASTER.md` 为基准。
 - 能耗口径的设计动机与边界见 `docs/superpowers/specs/`（尤其 `2026-09-06-precision-energy-accounting-design.md` 定义"从电源侧消耗了多少电"这一指标口径），配套实施计划在 `docs/superpowers/plans/`。修改能耗相关决策前先读这两处。
 
-- 统计边界回归：`HistoryAccountingBoundaryTests` 覆盖近 N 个日历日、退出前结算、清空取消与旧事件拦截、已知修复备份清理、长睡眠缺失提示及跨天结算；`DailyEnergyQualityTests` 覆盖新增 `hasUnmeasuredSleepEnergy` 的旧文件兼容解码；`PowerTrendStatisticsTests` 覆盖以当前快照时间计算的 120 秒窗口与过期读数。睡眠缺失提示由记录的 `SleepInterval` 与已结算的 `SleepSegment` 核对得出，仅增加质量说明，不重算旧日耗电。
-
 ## 约定
 
 - **每次修改代码/文件后，必须在根目录 `CHANGELOG.md` 顶部（时间倒序）追加记录**，格式参照 Keep a Changelog，分类：新增/修改/修复/重构。未记录变更不算任务完成。
 - 不引入第三方依赖；保持 macOS 14 最低部署版本；不引入沙盒/公证（本地构建为 ad-hoc 签名）。
 - 完成修改后运行完整 `swift test` 并检查 `git diff`，确认无无关变更。
+- 新增/删除源文件或测试类时同步更新本文件的「项目结构」与「测试类地图」，避免清单与正文脱节。

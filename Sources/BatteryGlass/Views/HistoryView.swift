@@ -1270,10 +1270,15 @@ struct TodayBatteryLevelChart: View {
                     ForEach(Array(segments.enumerated()), id: \.offset) { segmentIndex, segment in
                         let segmentID = segment.first?.id.uuidString ?? "segment-\(segmentIndex)"
                         ForEach(segment) { sample in
+                            // 用 2 参 `AreaMark(x:y:)` 而不是 `x:yStart:yEnd:`：Swift Charts
+                            // 对每个 mark 都给常量 yStart 的 3 参形式在密集样本下会按
+                            // 独立竖条渲染，相邻竖条不被插值合并，导致画面呈"梳齿"。
+                            // 2 参形式配合 `series` 会把同段连成一条连续填充区域。
+                            // 视觉上仍由 y 轴 `plotYDomain.lowerBound` 把区域裁到电
+                            // 量曲线下沿。
                             AreaMark(
                                 x: .value("时间", sample.timestamp),
-                                yStart: .value("电量下界", plotYDomain.lowerBound),
-                                yEnd: .value("电量", sample.percent),
+                                y: .value("电量", sample.percent),
                                 series: .value("曲线段", segmentID)
                             )
                             .interpolationMethod(.linear)

@@ -59,6 +59,23 @@ final class BatteryLevelChartDataTests: XCTestCase {
         XCTAssertEqual(data.displayedSegments[0].last?.timestamp, samples.last?.timestamp)
     }
 
+    func testContinuousDayProducesSingleSegmentForConnectedArea() {
+        // 锁定整段连续输入必须落到一个 `displayedSegments`：
+        // `TodayBatteryLevelChart` 的 `AreaMark` / `LineMark` 共享同一 `series`
+        // 才能被 Swift Charts 合并为一条连续填充区域，否则密集样本会被画成
+        // 独立竖条（"梳齿"），见 `HistoryView.swift` TodayBatteryLevelChart
+        // 注释。
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let samples = stride(from: 0.0, to: 43_200, by: 5).map { offset in
+            sample(at: start.addingTimeInterval(offset), percent: 70)
+        }
+
+        let data = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 800)
+
+        XCTAssertEqual(data.displayedSegments.count, 1, "整段连续输入必须落在单个 segment 以便 AreaMark series 合并")
+        XCTAssertEqual(data.displayedSamples.count, 800)
+    }
+
     func testKeepsAllSamplesUnderLimit() {
         let first = Date(timeIntervalSince1970: 1_000)
         let samples = (0..<5).map { index in
