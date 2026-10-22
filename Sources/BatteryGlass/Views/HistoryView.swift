@@ -1295,8 +1295,8 @@ struct TodayBatteryLevelChart: View {
                         // 对每个 mark 都给常量 yStart 的 3 参形式在密集样本下会按
                         // 独立竖条渲染，相邻竖条不被插值合并，导致画面呈"梳齿"。
                         // 不传 `series` 让整日样本连成一条填充区域（缺口也一起填上）。
-                        // 视觉上仍由 y 轴 `plotYDomain.lowerBound` 把区域裁到电
-                        // 量曲线下沿。
+                        // AreaMark 默认填充到 0%，由下方 chartPlotStyle 将其裁在绘图区内，
+                        // 避免动态 Y 轴下界高于 0% 时填充溢出到横轴标签区。
                         AreaMark(
                             x: .value("时间", sample.timestamp),
                             y: .value("电量", sample.percent)
@@ -1356,6 +1356,9 @@ struct TodayBatteryLevelChart: View {
                 }
                 .chartXScale(domain: plotDomain)
                 .chartYScale(domain: plotYDomain)
+                .chartPlotStyle { plot in
+                    plot.clipped()
+                }
                 .chartYAxis {
                     AxisMarks(position: .leading) { value in
                         AxisGridLine()
