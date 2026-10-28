@@ -12,6 +12,7 @@
 - 曲线悬停不再按指针频率重算整图：原先把光标位置写入 `@State`，鼠标每移动一像素就重跑睡眠过滤、断点切分与降采样（10 分钟窗口约 1.4k 样本、每次数万次比较）。现在只在吸附样本切换时更新悬停状态，并把「可见段 / 降采样结果」与「电量图填充 / 缺口连线 / Y 域」分别记忆化为 `PowerChartSegmentCache`、`BatteryLevelSegmentCache`——窗口与样本不变时直接复用，悬停只插入高亮点。切换日期时一并清除悬停状态，修复放大窗口按天回看时 tooltip 仍显示上一天数据的问题。（`Views/HistoryView.swift`）
 
 ### 修复
+- 迁移备份不再被旧备份顶掉、也不因清理失败卡住写入：原先只在 `history.legacy.json` 不存在时创建备份，若上次迁移的备份还在，本次待迁移文件不会被保存就被 v8 覆盖；且备份里温度字段清理抛错会让 `write()` 失败，`needsLegacyBackup` 永远为真，`persist()` 每 15 秒同步重试一次整笔写入。现在内容不同时另存 `history.legacy-<时间戳>.json`（绝不覆盖旧备份），温度清理改为尽力而为、不影响写入；`clearHistory()` 一并清理这些时间戳副本。（`Stores/BatteryHistoryStore.swift`）
 - 用全精度样本重算某日后清除「旧口径」标记：`DailyEnergySummaryPolicy.reconcile` 原先只替换 `energyKWh`、原样带过 `energyQuality`，加载时为旧汇总种下的 `hasUnknownHistoricalCoverage` 会永久跟随该日，橙色提示无法消除。现在被重算覆盖的日期会同时清除该标记；未重算的历史日保持原样。（`Stores/DailyEnergySummaryPolicy.swift`）
 - 归档单条损坏不再让整天曲线空白：`HistorySampleArchive.readSamples` 原先在循环内 `try decoder.decode`，任一 payload 损坏就整日查询失败，而 `BatteryHistoryStore` 的 catch 又会把 `cachedArchiveDay` 置 nil，导致每次进入该日都重新打开 SQLite、全表扫描再失败。现在跳过无法解码的行并记录条数，其余分钟正常展示；读取失败时改为记住该日（空结果），不再反复同步查询。（`Stores/HistorySampleArchive.swift`、`Stores/BatteryHistoryStore.swift`）
 - 清空历史不再忽略删除失败：原先三个删除操作都用 `try?`，归档删不掉时内存已清空、界面显示"已清空"，但重启后旧日期会从 `history.sqlite` 重新读回。现在 `clearHistory()` 返回是否成功，删除全部成功后才清空内存并取消待结算睡眠；任一文件删除失败就记录日志、保留内存数据，设置页弹出「清空历史失败」提示。（`Stores/BatteryHistoryStore.swift`、`Views/SettingsView.swift`）

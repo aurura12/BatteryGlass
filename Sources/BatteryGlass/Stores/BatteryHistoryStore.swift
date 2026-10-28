@@ -379,6 +379,7 @@ final class BatteryHistoryStore {
             return false
         }
         Self.removeRepairBackups(for: fileURL)
+        Self.removeTimestampedLegacyBackups(for: fileURL)
 
         historyClearedAt = currentDate()
         cancelPendingSleepEnergy()
@@ -610,6 +611,38 @@ final class BatteryHistoryStore {
         try cleaned.write(to: url, options: .atomic)
     }
 
+    /// 把迁移前的 `history.json` 另存为 `history.legacy.json`。
+    ///
+    /// 已有备份时不覆盖：若本次待迁移文件与旧备份内容不同（例如上次迁移遗留的备份），
+    /// 另存一份带时间戳的副本，保证任何一次迁移前的原始数据都留得下来。
+    nonisolated private static func createLegacyBackup(from fileURL: URL, to backup: URL) throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        if !FileManager.default.fileExists(atPath: backup.path) {
+            try FileManager.default.copyItem(at: fileURL, to: backup)
+            return
+        }
+        let source = try Data(contentsOf: fileURL)
+        let existing = try Data(contentsOf: backup)
+        guard source != existing else { return }
+        let stamp = Int(Date().timeIntervalSince1970)
+        let extra = fileURL.deletingPathExtension()
+            .appendingPathExtension("legacy-\(stamp).json")
+        guard !FileManager.default.fileExists(atPath: extra.path) else { return }
+        try FileManager.default.copyItem(at: fileURL, to: extra)
+    }
+
+    /// 清理迁移时另存的带时间戳副本（主备份由调用方删除）。
+    nonisolated private static func removeTimestampedLegacyBackups(for fileURL: URL) {
+        let directory = fileURL.deletingLastPathComponent()
+        let prefix = fileURL.deletingPathExtension().lastPathComponent + ".legacy-"
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil
+        ) else { return }
+        for entry in entries where entry.lastPathComponent.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+
     nonisolated private static func liveSamples(_ samples: [HistorySample], today: Date) -> [HistorySample] {
         // The last pre-midnight point is required for energy integration after a restart.
         let previous = samples.last(where: { $0.timestamp < today })
@@ -628,10 +661,14 @@ final class BatteryHistoryStore {
             )
             if backupLegacy {
                 let backup = legacyBackupURL(for: fileURL)
-                if !FileManager.default.fileExists(atPath: backup.path) {
-                    try FileManager.default.copyItem(at: fileURL, to: backup)
+                try createLegacyBackup(from: fileURL, to: backup)
+                do {
+                    try removeTemperatureHistoryFromLegacyBackup(at: backup)
+                } catch {
+                    // 备份本身已建好；清理温度字段失败不该阻止写入，否则
+                    // needsLegacyBackup 永远为真，每 15 秒都同步重试一次整笔写入。
+                    NSLog("BatteryGlass: 旧备份温度字段清理失败 - %@", error.localizedDescription)
                 }
-                try removeTemperatureHistoryFromLegacyBackup(at: backup)
             }
             // Commit archival rows before replacing the live snapshot. A crash between the
             // two writes is safe: the next attempt upserts the same minute buckets.

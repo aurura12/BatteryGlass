@@ -37,6 +37,42 @@ final class LongTermHistoryTests: XCTestCase {
         XCTAssertEqual(payload["version"] as? Int, 8)
     }
 
+    func testExistingLegacyBackupIsKeptAndNewMigrationGetsTimestampedCopy() throws {
+        let context = try Context()
+        defer { context.cleanup() }
+        // 上次迁移留下的备份：不能再被本次迁移覆盖。
+        let stale = Data("{\"version\":1}".utf8)
+        try stale.write(to: context.backupURL)
+
+        let today = Calendar.current.startOfDay(for: context.now)
+        let original = try context.writeLegacy(samples: [sample(at: today.addingTimeInterval(5))])
+        _ = context.makeStore()
+
+        XCTAssertEqual(try Data(contentsOf: context.backupURL), stale)
+        let entries = try FileManager.default.contentsOfDirectory(atPath: context.directory.path)
+        let copies = entries.filter { $0.hasPrefix("history.legacy-") }
+        XCTAssertEqual(copies.count, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: context.directory.appendingPathComponent(copies[0])),
+            original,
+            "本次迁移前的文件必须另存副本"
+        )
+    }
+
+    func testUnreadableLegacyBackupDoesNotBlockMigration() throws {
+        let context = try Context()
+        defer { context.cleanup() }
+        // 含 temperatureCelsius 但整体不是合法 JSON：清理备份会抛错。
+        try Data("{\"samples\": [{\"temperatureCelsius\": 1}".utf8).write(to: context.backupURL)
+
+        let today = Calendar.current.startOfDay(for: context.now)
+        _ = try context.writeLegacy(samples: [sample(at: today.addingTimeInterval(5))])
+        _ = context.makeStore()
+
+        let payload = try JSONSerialization.jsonObject(with: Data(contentsOf: context.fileURL)) as! [String: Any]
+        XCTAssertEqual(payload["version"] as? Int, 8, "备份温度清理失败不应阻止迁移写入")
+    }
+
     func testMidnightArchivesYesterdayAndPreservesFineSamplesAndEnergyAfterRestart() throws {
         let context = try Context()
         defer { context.cleanup() }
