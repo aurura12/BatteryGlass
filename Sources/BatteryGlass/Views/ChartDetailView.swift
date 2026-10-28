@@ -132,6 +132,14 @@ struct ChartDetailView: View {
         .environment(\.themeAccent, settings.themeAccent.color)
     }
 
+    /// 记录不可用时，空图要说明原因而不是提示「应用运行后每 5 秒记录一次」。
+    private var emptyCurveMessage: String? {
+        HistoryRecordingNotice.resolve(
+            recordingEnabled: settings.recordHistory,
+            persistenceIssue: history.persistenceIssue
+        )?.emptyCurveMessage
+    }
+
     /// 异步加载当前日期的样本。窗口不可见时直接返回，关闭状态下不产生任何查询。
     private func reload() async {
         guard model.isVisible else { return }
@@ -155,12 +163,14 @@ struct ChartDetailView: View {
                 chartData: chartCache.data(for: samples, sleepIntervals: history.sleepIntervals),
                 sleepIntervals: history.sleepIntervals,
                 day: day,
+                emptyMessage: emptyCurveMessage ?? "暂无有效功率曲线",
                 plotHeight: nil
             )
         case .level:
             TodayBatteryLevelChart(
                 chartData: levelChartCache.data(for: samples),
                 day: day,
+                emptyMessage: emptyCurveMessage,
                 plotHeight: nil
             )
         }

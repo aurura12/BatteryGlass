@@ -7,6 +7,8 @@ struct TodayPowerChart: View {
     @Environment(\.themeAccent) private var themeAccent
     /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
     let day: Date
+    /// 没有可绘制样本时的提示；记录关闭/暂停时由调用方改成对应原因。
+    let emptyMessage: String
     /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
     let plotHeight: CGFloat?
     /// 非 nil 时在标题栏提供「放大查看」入口。
@@ -29,12 +31,14 @@ struct TodayPowerChart: View {
         chartData: PowerChartData,
         sleepIntervals: [SleepInterval],
         day: Date = Date(),
+        emptyMessage: String = "暂无有效功率曲线",
         plotHeight: CGFloat? = 138,
         onExpand: (() -> Void)? = nil
     ) {
         self.chartData = chartData
         self.sleepIntervals = sleepIntervals
         self.day = day
+        self.emptyMessage = emptyMessage
         self.plotHeight = plotHeight
         self.onExpand = onExpand
     }
@@ -100,7 +104,7 @@ struct TodayPowerChart: View {
             }
 
             if chartData.plotSegments.isEmpty {
-                ChartEmptyPlaceholder("暂无有效功率曲线")
+                ChartEmptyPlaceholder(emptyMessage)
                     .frame(height: 120)
             } else {
                 VStack(spacing: 4) {

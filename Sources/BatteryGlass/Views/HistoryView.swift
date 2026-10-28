@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HistoryView: View {
     @Environment(BatteryHistoryStore.self) private var history
+    @Environment(AppSettings.self) private var settings
     @Environment(ChartWindowController.self) private var chartWindow
     /// 面板是否在屏幕上。关闭后不再读取 `BatteryHistoryStore`：否则每 5 秒一条新样本
     /// 都会让离屏的整页（含两张图和逐样本 mark）重算一遍。
@@ -63,12 +64,32 @@ struct HistoryView: View {
         levelChartCache.data(for: renderedSamples)
     }
 
+    /// 记录不可用时的顶部提示：持久化故障比「用户主动关闭」更严重，优先显示。
+    private var recordingNotice: HistoryRecordingNotice? {
+        HistoryRecordingNotice.resolve(
+            recordingEnabled: settings.recordHistory,
+            persistenceIssue: history.persistenceIssue
+        )
+    }
+
+    /// 空图提示：记录关闭或暂停时说明原因，避免误以为应用没有在采样。
+    private var emptyCurveMessage: String? { recordingNotice?.emptyCurveMessage }
+
+    private var emptyEnergyMessage: String {
+        recordingNotice?.emptyEnergyMessage ?? "暂无可用每日耗电量数据"
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: DesignTokens.spacingM) {
+                if let notice = recordingNotice {
+                    noticeBanner(notice)
+                }
+
                 DailyEnergyComparisonChart(
                     summaries: summaries,
-                    range: $energyRange
+                    range: $energyRange,
+                    emptyMessage: emptyEnergyMessage
                 )
 
                 HStack(spacing: DesignTokens.spacingS) {
@@ -90,6 +111,7 @@ struct HistoryView: View {
                     chartData: chartData,
                     sleepIntervals: sleepIntervals,
                     day: activeDay,
+                    emptyMessage: emptyCurveMessage ?? "暂无有效功率曲线",
                     onExpand: { chartWindow.show(.power) }
                 )
                 // 换日重建视图，重置缩放与悬停。
@@ -98,6 +120,7 @@ struct HistoryView: View {
                 TodayBatteryLevelChart(
                     chartData: levelChartData,
                     day: activeDay,
+                    emptyMessage: emptyCurveMessage,
                     onExpand: { chartWindow.show(.level) }
                 )
             }
@@ -116,6 +139,28 @@ struct HistoryView: View {
         .task(id: reloadKey) {
             await reloadArchivedDayIfNeeded()
         }
+    }
+
+    /// 顶部提示条：记录关闭或持久化故障时解释「为什么没有新数据」。
+    private func noticeBanner(_ notice: HistoryRecordingNotice) -> some View {
+        let tint: Color = notice == .disabled ? .secondary : .orange
+        return HStack(alignment: .top, spacing: 6) {
+            Image(systemName: notice.icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(notice.title)
+                .font(.system(size: 10))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusSmall)
+                .fill(tint.opacity(0.10))
+        )
+        .accessibilityElement(children: .combine)
     }
 
     /// 往日曲线异步加载：切换日期时先清空，避免旧一天的曲线配新一天的时间轴。

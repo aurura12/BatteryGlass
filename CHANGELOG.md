@@ -5,6 +5,7 @@
 ## [2026-10-28]
 
 ### 修复
+- 历史页空态说明「为什么没有数据」：原先关闭「记录充放电历史」或历史文件读取失败（`persistenceIssue`）时，历史页只显示通用的「暂无…」，电量图甚至固定写「应用运行后每 5 秒记录一次」，容易让人以为采样坏了。现在 `HistoryView` 顶部按情况显示提示条（持久化故障优先、橙色；用户主动关闭为次要样式），三张图的空态文案由新增的 `HistoryRecordingNotice` 统一给出；面板与放大窗口共用同一套判断。补 `HistoryRecordingNoticeTests` 覆盖提示优先级与文案。（`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`Views/HistoryPowerChart.swift`、`Views/HistoryBatteryLevelChart.swift`、`Views/HistoryEnergyChart.swift`、`Support/HistoryRecordingNotice.swift`、`Tests/BatteryGlassTests/HistoryRecordingNoticeTests.swift`）
 - 外接电源变化通知开启时不再静默失败：原先只有低电量开关会请求通知授权，如果用户从未开过低电量通知，直接打开「外接电源变化通知」时授权状态仍是 `.notDetermined`，系统既不弹窗也不送达。现在两个开关共用 `requestNotificationAuthorization`，拒绝时回滚开关并提示；提示文案改为同时覆盖两类提醒。（`Views/SettingsView.swift`）
 - 拖动「流动速度」滑块不再让玻璃光斑瞬移：`FluidGlassBackground` 原先用「绝对时间 × 速度」计算相位，速度一变等于把相位整体缩放，`sin`/`cos` 立即跳到任意位置。新增 `FluidGlassPhase`（基准 + 时长 × 速度），速度变化时先把旧速度走过的角度并入基准再重新计时，相位保持连续；补 `FluidGlassPhaseTests` 覆盖单次与连续变速。（`Views/FluidGlassBackground.swift`、`Tests/BatteryGlassTests/FluidGlassPhaseTests.swift`）
 

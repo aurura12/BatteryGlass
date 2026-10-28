@@ -7,6 +7,8 @@ struct TodayBatteryLevelChart: View {
     @Environment(\.themeAccent) private var themeAccent
     /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
     let day: Date
+    /// 没有可绘制样本时的提示；nil 使用「应用运行后每 5 秒记录一次」的默认文案。
+    let emptyMessage: String?
     /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
     let plotHeight: CGFloat?
     /// 非 nil 时在标题栏提供「放大查看」入口。
@@ -28,11 +30,13 @@ struct TodayBatteryLevelChart: View {
     init(
         chartData: BatteryLevelChartData,
         day: Date = Date(),
+        emptyMessage: String? = nil,
         plotHeight: CGFloat? = 138,
         onExpand: (() -> Void)? = nil
     ) {
         self.chartData = chartData
         self.day = day
+        self.emptyMessage = emptyMessage
         self.plotHeight = plotHeight
         self.onExpand = onExpand
     }
@@ -125,7 +129,7 @@ struct TodayBatteryLevelChart: View {
             }
 
             if samples.isEmpty {
-                ChartEmptyPlaceholder("暂无\(dayLabel)数据，应用运行后每 5 秒记录一次")
+                ChartEmptyPlaceholder(emptyMessage ?? "暂无\(dayLabel)数据，应用运行后每 5 秒记录一次")
                     .frame(height: 120)
             } else {
                 Chart {

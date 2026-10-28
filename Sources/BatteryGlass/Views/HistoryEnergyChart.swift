@@ -38,6 +38,8 @@ struct DailyDetailsDisclosureState {
 struct DailyEnergyComparisonChart: View {
     let summaries: [DailySummary]
     @Binding var range: EnergyHistoryRange
+    /// 没有可用日汇总时的提示；记录关闭/暂停时由调用方改成对应原因。
+    var emptyMessage: String = "暂无可用每日耗电量数据"
     @Environment(\.themeAccent) private var themeAccent
     @State private var grouping: EnergyGrouping = .day
     @State private var hoveredAggregate: EnergyAggregate?
@@ -81,7 +83,7 @@ struct DailyEnergyComparisonChart: View {
             .controlSize(.mini)
 
             if aggregates.isEmpty {
-                ChartEmptyPlaceholder("暂无可用每日耗电量数据")
+                ChartEmptyPlaceholder(emptyMessage)
                     .frame(height: 138)
             } else {
                 Chart(aggregates) { aggregate in
