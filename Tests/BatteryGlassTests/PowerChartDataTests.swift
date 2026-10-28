@@ -179,6 +179,58 @@ final class PowerChartDataTests: XCTestCase {
         XCTAssertFalse(timeline.isInsideBreak(first.addingTimeInterval(3_660)))
     }
 
+    func testPowerSegmentCacheReusesResultUntilWindowChanges() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let samples = (0..<100).map {
+            historySample(at: start.addingTimeInterval(Double($0) * 60))
+        }
+        let data = PowerChartData(samples: samples, maximumDisplayedSamples: 800)
+        let cache = PowerChartSegmentCache()
+        let fullDay = start...start.addingTimeInterval(10_000)
+
+        let first = cache.segments(
+            chartData: data, sleepIntervals: [], isZoomed: false, dateDomain: fullDay
+        )
+        let second = cache.segments(
+            chartData: data, sleepIntervals: [], isZoomed: false, dateDomain: fullDay
+        )
+        XCTAssertEqual(
+            first.rendered.map { $0.map(\.id) },
+            second.rendered.map { $0.map(\.id) }
+        )
+        XCTAssertFalse(first.rendered.isEmpty)
+
+        // 窗口变窄后必须重新筛选，不能返回上一次的整日结果。
+        let narrow = start...start.addingTimeInterval(1_200)
+        let zoomed = cache.segments(
+            chartData: data, sleepIntervals: [], isZoomed: true, dateDomain: narrow
+        )
+        XCTAssertLessThan(
+            zoomed.rendered.flatMap { $0 }.count,
+            first.rendered.flatMap { $0 }.count
+        )
+    }
+
+    func testLevelSegmentCacheCachesFillAndBridgesForSameWindow() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let samples = (0..<60).map {
+            historySample(at: start.addingTimeInterval(Double($0) * 60))
+        }
+        let data = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 800)
+        let cache = BatteryLevelSegmentCache()
+        let bounds: ClosedRange<Double> =
+            start.timeIntervalSinceReferenceDate...start.addingTimeInterval(4_000).timeIntervalSinceReferenceDate
+        let window = ChartZoomWindow.fullRange(bounds: bounds, minimumSpan: 60)
+        let domain = start...start.addingTimeInterval(4_000)
+
+        let first = cache.data(chartData: data, window: window, domain: domain)
+        let second = cache.data(chartData: data, window: window, domain: domain)
+        XCTAssertEqual(first.fillSamples.map { $0.id }, second.fillSamples.map { $0.id })
+        XCTAssertEqual(first.bridges, second.bridges)
+        XCTAssertEqual(first.yDomain, second.yDomain)
+        XCTAssertFalse(first.fillSamples.isEmpty)
+    }
+
     private func twoSegmentsSplitByOneHour(from first: Date) -> [[HistorySample]] {
         [
             [

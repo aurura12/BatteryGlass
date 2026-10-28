@@ -269,6 +269,125 @@ final class BatteryLevelChartDataCache {
     }
 }
 
+/// 功率图可见段的记忆化：睡眠过滤、断点切分与降采样只在窗口或数据变化时重做。
+/// 悬停只在吸附样本变化时注入高亮点，不再每移动一像素就重跑整段计算。
+final class PowerChartSegmentCache {
+    private struct Key: Equatable {
+        var isZoomed: Bool
+        var domainLower: Date
+        var domainUpper: Date
+        var sampleCount: Int
+        var lastSampleID: UUID?
+        var segmentCount: Int
+        var sleepIntervals: [SleepInterval]
+    }
+
+    private var key: Key?
+    private var visible: [[HistorySample]] = []
+    private var rendered: [[HistorySample]] = []
+
+    func segments(
+        chartData: PowerChartData,
+        sleepIntervals: [SleepInterval],
+        isZoomed: Bool,
+        dateDomain: ClosedRange<Date>
+    ) -> (visible: [[HistorySample]], rendered: [[HistorySample]]) {
+        let newKey = Key(
+            isZoomed: isZoomed,
+            domainLower: dateDomain.lowerBound,
+            domainUpper: dateDomain.upperBound,
+            sampleCount: chartData.plotSamples.count,
+            lastSampleID: chartData.plotSamples.last?.id,
+            segmentCount: chartData.fullSegments.count,
+            sleepIntervals: sleepIntervals
+        )
+        if newKey == key { return (visible, rendered) }
+
+        let visibleSegments = chartData.fullSegments.flatMap { segment in
+            let visibleSamples = PowerChartWindow.samples(in: dateDomain, from: segment)
+            let filtered = PowerChartSegmentation.excludingSleepIntervals(
+                visibleSamples,
+                sleepIntervals: sleepIntervals
+            )
+            return PowerChartSegmentation.splitByGaps(filtered, breakingAt: sleepIntervals)
+        }
+        // 概览态按可见窗口抽样；放大态保留完整段。
+        let downsampled = isZoomed
+            ? visibleSegments
+            : HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+                visibleSegments,
+                limit: HistoryChartRendering.maximumDisplayedSamples,
+                value: { $0.consumptionPowerW }
+            )
+        key = newKey
+        visible = visibleSegments
+        rendered = downsampled
+        return (visibleSegments, downsampled)
+    }
+}
+
+/// 电量图分段、填充序列、缺口连线与 Y 域的联合记忆化。
+/// 这四项都随窗口与样本集合变化，悬停移动时不必重算。
+final class BatteryLevelSegmentCache {
+    struct Result {
+        var segments: [[HistorySample]]
+        var fillSamples: [HistorySample]
+        var bridges: [HistoryChartRendering.GapBridge]
+        var yDomain: ClosedRange<Double>
+    }
+
+    private struct Key: Equatable {
+        var isZoomed: Bool
+        var domainLower: Date
+        var domainUpper: Date
+        var sampleCount: Int
+        var lastSampleID: UUID?
+    }
+
+    private var key: Key?
+    private var result = Result(segments: [], fillSamples: [], bridges: [], yDomain: 0...100)
+
+    func data(
+        chartData: BatteryLevelChartData,
+        window: ChartZoomWindow,
+        domain: ClosedRange<Date>
+    ) -> Result {
+        let newKey = Key(
+            isZoomed: window.isZoomed,
+            domainLower: domain.lowerBound,
+            domainUpper: domain.upperBound,
+            sampleCount: chartData.samples.count,
+            lastSampleID: chartData.samples.last?.id
+        )
+        if newKey == key { return result }
+
+        let segments: [[HistorySample]]
+        let yDomain: ClosedRange<Double>
+        if window.isZoomed {
+            let visible = ChartViewport.visibleSamples(chartData.samples, in: domain)
+            segments = HistoryChartRendering.downsampleSegmentsPreservingExtrema(
+                PowerChartSegmentation.splitByGaps(visible),
+                limit: HistoryChartRendering.maximumDisplayedSamples,
+                value: { $0.percent }
+            )
+            yDomain = BatteryLevelAxis.yDomain(for: visible.map(\.percent))
+        } else {
+            segments = chartData.displayedSegments
+            yDomain = chartData.percentDomain
+        }
+
+        let built = Result(
+            segments: segments,
+            fillSamples: segments.flatMap { $0 },
+            bridges: HistoryChartRendering.gapBridges(segments),
+            yDomain: yDomain
+        )
+        key = newKey
+        result = built
+        return built
+    }
+}
+
 /// 日/周/月聚合记忆化：仅在汇总集合或分组方式变化时重算（内部需建字典并排序）。
 final class DailyAggregateCache {
     private var cached: [EnergyAggregate] = []
@@ -699,6 +818,8 @@ struct TodayPowerChart: View {
     @State private var window: ChartZoomWindow?
     @State private var hoveredSample: HistorySample?
     @State private var hoverLocation: CGPoint?
+    /// 可见段与降采样结果：窗口/样本不变时直接复用，悬停只注入高亮点。
+    @State private var segmentCache = PowerChartSegmentCache()
     /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
     private let hoverMaximumGap: TimeInterval = 180
     /// 放大下限：1 分钟（5 秒一条时约 12 个点）。
@@ -931,6 +1052,8 @@ struct TodayPowerChart: View {
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
         .onChange(of: day) { _, _ in
             window = nil
+            // 换日后旧的吸附样本已不在时间轴上，必须先清掉，否则 tooltip 会显示上一天的数据。
+            clearHover()
         }
         .onChange(of: bounds.upperBound) { _, _ in
             guard let current = window else { return }
@@ -1015,27 +1138,16 @@ struct TodayPowerChart: View {
         isZoomed: Bool,
         in dateDomain: ClosedRange<Date>
     ) -> [[HistorySample]] {
-        let visibleSegments = chartData.fullSegments.flatMap { segment in
-            let visible = PowerChartWindow.samples(in: dateDomain, from: segment)
-            let filtered = PowerChartSegmentation.excludingSleepIntervals(
-                visible,
-                sleepIntervals: sleepIntervals
-            )
-            return PowerChartSegmentation.splitByGaps(
-                filtered,
-                breakingAt: sleepIntervals
-            )
-        }
-
+        let cached = segmentCache.segments(
+            chartData: chartData,
+            sleepIntervals: sleepIntervals,
+            isZoomed: isZoomed,
+            dateDomain: dateDomain
+        )
+        let visibleSegments = cached.visible
         // Select overview points from the visible window itself. Downsampling the whole
         // day first can leave only a handful of points in the latest two-hour viewport.
-        var renderedSegments = isZoomed
-            ? visibleSegments
-            : HistoryChartRendering.downsampleSegmentsPreservingExtrema(
-                visibleSegments,
-                limit: HistoryChartRendering.maximumDisplayedSamples,
-                value: { $0.consumptionPowerW }
-            )
+        var renderedSegments = cached.rendered
 
         // The tooltip and PointMark use the original sample. Keep that exact sample in
         // the rendered line too, so a hovered point cannot float away from the curve
@@ -1047,14 +1159,15 @@ struct TodayPowerChart: View {
             return renderedSegments
         }
 
-        if let renderedIndex = renderedSegments.firstIndex(where: { segment in
-            segment.first?.id == sourceSegment.first?.id
-                && segment.last?.id == sourceSegment.last?.id
-        }) {
-            guard !renderedSegments[renderedIndex].contains(where: { $0.id == hoveredSample.id }) else {
-                return renderedSegments
-            }
-            let insertionIndex = renderedSegments[renderedIndex].firstIndex {
+        let renderedIndex: Int? = renderedSegments.firstIndex { segment in
+            let sameStart = segment.first?.id == sourceSegment.first?.id
+            let sameEnd = segment.last?.id == sourceSegment.last?.id
+            return sameStart && sameEnd
+        }
+        if let renderedIndex {
+            let alreadyContains = renderedSegments[renderedIndex].contains { $0.id == hoveredSample.id }
+            guard !alreadyContains else { return renderedSegments }
+            let insertionIndex: Int = renderedSegments[renderedIndex].firstIndex {
                 $0.timestamp > hoveredSample.timestamp
             } ?? renderedSegments[renderedIndex].endIndex
             renderedSegments[renderedIndex].insert(hoveredSample, at: insertionIndex)
@@ -1105,21 +1218,26 @@ struct TodayPowerChart: View {
         }
         let timestamp = chartData.timeline.date(for: coordinate)
 
-        hoverLocation = location
         guard let nearest = PowerChartInteraction.nearestSample(
             to: timestamp,
             from: energySamples
         ) else {
             hoveredSample = nil
+            hoverLocation = nil
             return
         }
         // 待机缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
         // 避免把待机前的功率误当成待机期间的测量值。
-        if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+        guard abs(nearest.timestamp.timeIntervalSince(timestamp)) <= hoverMaximumGap else {
             hoveredSample = nil
+            hoverLocation = nil
             return
         }
+        // 指针在同一个吸附点内移动时，标记与 tooltip 内容都不变；写入 @State 只会让
+        // 整张图（含逐样本 mark）重算，因此只在吸附样本切换时更新。
+        guard hoveredSample?.id != nearest.id else { return }
         hoveredSample = nearest
+        hoverLocation = location
     }
 
     private func hoverTooltip(for sample: HistorySample) -> some View {
@@ -1158,6 +1276,8 @@ struct TodayBatteryLevelChart: View {
     @State private var window: ChartZoomWindow?
     @State private var hoveredSample: HistorySample?
     @State private var hoverLocation: CGPoint?
+    /// 分段、填充、缺口连线与 Y 域的联合缓存：悬停不触发重算。
+    @State private var segmentCache = BatteryLevelSegmentCache()
     /// 悬停位置与吸附样本超过该间隔视为"无数据"（待机缺口内不显示 tooltip）。
     private let hoverMaximumGap: TimeInterval = 180
     /// 放大下限：5 分钟。
@@ -1215,44 +1335,23 @@ struct TodayBatteryLevelChart: View {
         return lower...max(lower, upper)
     }
 
-    /// Y 轴域：缩放后按可见样本重算；未缩放时沿用整日预计算域（两者输入集一致）。
-    private func yDomain(
-        for window: ChartZoomWindow,
-        in domain: ClosedRange<Date>
-    ) -> ClosedRange<Double> {
-        guard window.isZoomed else { return chartData.percentDomain }
-        let visible = ChartViewport.visibleSamples(samples, in: domain)
-        return BatteryLevelAxis.yDomain(for: visible.map(\.percent))
-    }
-
-    /// 缺口处断开主曲线，再由细连接线跨过缺口（见 `HistoryChartRendering.gapBridges`）；
-    /// 待机期间不记录样本，故无需再按待机区间过滤。
-    private func displaySegments(
-        for window: ChartZoomWindow,
-        in domain: ClosedRange<Date>
-    ) -> [[HistorySample]] {
-        if window.isZoomed {
-            let visible = ChartViewport.visibleSamples(samples, in: domain)
-            return HistoryChartRendering.downsampleSegmentsPreservingExtrema(
-                PowerChartSegmentation.splitByGaps(visible),
-                limit: HistoryChartRendering.maximumDisplayedSamples,
-                value: { $0.percent }
-            )
-        }
-        return chartData.displayedSegments
-    }
-
     var body: some View {
         // 帧内只算一次：若把 `yDomain` 这类计算属性直接写进逐样本的 ForEach，
         // 每个样本都会重跑一遍 O(样本数) 的筛选，整体退化成 O(n²)（卡顿主因）。
         let activeWindow = effectiveWindow(for: window)
         let plotDomain = visibleDomain(for: activeWindow)
-        let plotYDomain = yDomain(for: activeWindow, in: plotDomain)
-        let segments = displaySegments(for: activeWindow, in: plotDomain)
+        // 分段 / 填充 / 缺口连线 / Y 域一起缓存：窗口与样本不变时直接复用。
+        let cached = segmentCache.data(
+            chartData: chartData,
+            window: activeWindow,
+            domain: plotDomain
+        )
+        let plotYDomain = cached.yDomain
+        let segments = cached.segments
         // 填充区域用一整条连续序列，缺口两侧共用同一渐变，避免稀疏段（每次唤醒只有
         // 一两条样本）因区域窄到看不见而出现「有的有底色、有的没有」。
-        let fillSamples = segments.flatMap { $0 }
-        let bridges = HistoryChartRendering.gapBridges(segments)
+        let fillSamples = cached.fillSamples
+        let bridges = cached.bridges
         let tickUnit = ChartTimeAxis.unit(
             forSpan: plotDomain.upperBound.timeIntervalSince(plotDomain.lowerBound)
         )
@@ -1432,6 +1531,8 @@ struct TodayBatteryLevelChart: View {
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
         .onChange(of: day) { _, _ in
             window = nil
+            // 换日后旧样本不在时间轴上，残留的悬停标记会指向错误日期。
+            clearHover()
         }
     }
 
@@ -1469,21 +1570,25 @@ struct TodayBatteryLevelChart: View {
             return
         }
 
-        hoverLocation = location
         guard let nearest = PowerChartInteraction.nearestSample(
             to: timestamp,
             from: samples
         ) else {
             hoveredSample = nil
+            hoverLocation = nil
             return
         }
         // 缺口内悬停会吸附到缺口两端样本，与实际位置相差过大时不显示，
         // 避免把待机前的电量误当成待机期间的读数。
-        if abs(nearest.timestamp.timeIntervalSince(timestamp)) > hoverMaximumGap {
+        guard abs(nearest.timestamp.timeIntervalSince(timestamp)) <= hoverMaximumGap else {
             hoveredSample = nil
+            hoverLocation = nil
             return
         }
+        // 同一吸附点内移动不刷新视图：标记与 tooltip 内容都不变。
+        guard hoveredSample?.id != nearest.id else { return }
         hoveredSample = nearest
+        hoverLocation = location
     }
 
     private func hoverTooltip(for sample: HistorySample) -> some View {
