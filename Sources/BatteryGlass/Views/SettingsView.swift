@@ -47,15 +47,10 @@ struct SettingsView: View {
             Section("提醒") {
                 Toggle("启用低电量通知", isOn: $settings.lowBatteryNotificationsEnabled)
                     .onChange(of: settings.lowBatteryNotificationsEnabled) { _, enabled in
-                        if enabled {
-                            Task {
-                                let authorized = await NotificationService.shared.requestAuthorizationIfNeeded()
-                                if !authorized {
-                                    settings.lowBatteryNotificationsEnabled =
-                                        NotificationPermissionPolicy.settingValue(afterAuthorization: authorized)
-                                    showingNotificationDeniedAlert = true
-                                }
-                            }
+                        guard enabled else { return }
+                        requestNotificationAuthorization {
+                            settings.lowBatteryNotificationsEnabled =
+                                NotificationPermissionPolicy.settingValue(afterAuthorization: false)
                         }
                     }
 
@@ -74,6 +69,13 @@ struct SettingsView: View {
                 }
 
                 Toggle("外接电源变化通知", isOn: $settings.adapterChangeNotificationsEnabled)
+                    .onChange(of: settings.adapterChangeNotificationsEnabled) { _, enabled in
+                        guard enabled else { return }
+                        requestNotificationAuthorization {
+                            settings.adapterChangeNotificationsEnabled =
+                                NotificationPermissionPolicy.settingValue(afterAuthorization: false)
+                        }
+                    }
             }
 
             Section("外观") {
@@ -201,7 +203,7 @@ struct SettingsView: View {
         .alert("通知权限不可用", isPresented: $showingNotificationDeniedAlert) {
             Button("好", role: .cancel) {}
         } message: {
-            Text("BatteryGlass 的通知权限已被拒绝，低电量提醒将不会送达。请到「系统设置 → 通知」中为 BatteryGlass 开启权限后重试。")
+            Text("BatteryGlass 的通知权限已被拒绝，低电量与插拔电源提醒都不会送达。请到「系统设置 → 通知」中为 BatteryGlass 开启权限后重试。")
         }
         .alert("开机自启动待批准", isPresented: $showingLoginItemApprovalAlert) {
             Button("打开系统设置") {
@@ -272,6 +274,17 @@ struct SettingsView: View {
     /// 系统无法查询登录项状态时禁用开关。
     private var loginItemAvailable: Bool {
         LoginItemService.currentState != .unavailable
+    }
+
+    /// 两个通知开关共用的授权流程：首次开启时请求系统授权，被拒绝就回滚开关并提示，
+    /// 避免出现「开关是开的、通知却永远静默失败」。
+    private func requestNotificationAuthorization(onDenied: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            let authorized = await NotificationService.shared.requestAuthorizationIfNeeded()
+            guard !authorized else { return }
+            onDenied()
+            showingNotificationDeniedAlert = true
+        }
     }
 
     /// 优先读取 bundle 中的正式版本号，取不到时回退到默认值。
