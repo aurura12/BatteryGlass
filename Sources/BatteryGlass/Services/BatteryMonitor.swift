@@ -440,6 +440,10 @@ final class BatteryMonitor {
         finishPendingSleepEnergy()
         cancelMaintenanceSampling()
         cancelWakeValidation()
+        // 定时器可能因 App Nap 被延后，缓存快照会偏早。先读一次最新值再定格起点：
+        // 起点偏早会把睡前正常使用的时间并进睡眠区间、从能耗积分里排除掉，
+        // 也会放大插电待机按 duration 外推的分支。
+        refresh()
         // 没等到唤醒事件就再次入睡（如唤醒通知丢失）时，先用当前时刻关闭上一条区间。
         closeStaleSleepInterval(at: latest.timestamp)
 
