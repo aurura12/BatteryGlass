@@ -94,6 +94,8 @@ enum PowerTelemetryCalibrationSessionResult: Equatable {
     case contextChanged
     /// 输入或计数器差值非法（如实测电量 ≤ 0、差值经校验失败）。
     case invalidInput
+    /// 记录已加入内存，但写入磁盘失败；重启后会丢失。
+    case saveFailed
 }
 
 /// 按机型 + macOS 版本持久化校准记录，并托管进行中的校准会话。
@@ -141,6 +143,11 @@ final class PowerTelemetryCalibrationStore {
         let loaded = Self.load(from: resolvedURL)
         self.records = loaded.records
         self.session = loaded.session
+    }
+
+    private struct LoadResult {
+        var records: [PowerTelemetryCalibrationRecord]
+        var session: PowerTelemetryCalibrationSession?
     }
 
     /// 当前机型 + 系统版本，也是新校准记录的归属上下文。
@@ -236,21 +243,44 @@ final class PowerTelemetryCalibrationStore {
 
         records.append(record)
         self.session = nil
-        save()
+        guard save() else { return .saveFailed }
         return .saved(record)
     }
 
-    private static func load(
-        from fileURL: URL
-    ) -> (records: [PowerTelemetryCalibrationRecord], session: PowerTelemetryCalibrationSession?) {
-        guard let data = try? Data(contentsOf: fileURL) else { return ([], nil) }
+    private static func load(from fileURL: URL) -> LoadResult {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return LoadResult(records: [], session: nil)
+        }
+        guard let data = BoundedFileReader.read(at: fileURL, maximumBytes: 1_048_576) else {
+            NSLog("BatteryGlass: 校准数据无法读取或超过 1 MB，已保留原文件")
+            preserveUnreadableFile(at: fileURL)
+            return LoadResult(records: [], session: nil)
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let payload = try? decoder.decode(Payload.self, from: data) else { return ([], nil) }
-        return (payload.records, payload.session)
+        guard let payload = try? decoder.decode(Payload.self, from: data) else {
+            NSLog("BatteryGlass: 校准数据无法解析，已保留原文件")
+            preserveUnreadableFile(at: fileURL)
+            return LoadResult(records: [], session: nil)
+        }
+        return LoadResult(records: payload.records, session: payload.session)
     }
 
-    private func save() {
+    /// 把读不出来的文件改名留档；失败时仍不覆盖它（`save()` 会照常报错）。
+    private static func preserveUnreadableFile(at fileURL: URL) {
+        let stamp = Int(Date().timeIntervalSince1970)
+        let backup = fileURL.deletingPathExtension()
+            .appendingPathExtension("invalid-\(stamp)-\(UUID().uuidString.prefix(6)).json")
+        do {
+            try FileManager.default.moveItem(at: fileURL, to: backup)
+            NSLog("BatteryGlass: 校准数据已备份为 %@", backup.lastPathComponent)
+        } catch {
+            NSLog("BatteryGlass: 校准数据备份失败 - %@", error.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    private func save() -> Bool {
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
@@ -263,8 +293,10 @@ final class PowerTelemetryCalibrationStore {
                 Payload(version: Self.payloadVersion, records: records, session: session)
             )
             try data.write(to: fileURL, options: .atomic)
+            return true
         } catch {
             NSLog("BatteryGlass: 校准数据保存失败 - %@", error.localizedDescription)
+            return false
         }
     }
 }

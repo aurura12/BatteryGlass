@@ -215,4 +215,45 @@ final class PowerTelemetryCalibrationTests: XCTestCase {
         XCTAssertNotNil(store.session, "invalidInput 应保留会话以便修正后重试")
         XCTAssertFalse(store.isCalibrated)
     }
+
+    func testCorruptCalibrationFileIsPreservedInsteadOfOverwritten() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-calibration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("power-calibration.json")
+        let corrupt = "{ \"records\": [ broken"
+        try corrupt.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = PowerTelemetryCalibrationStore(fileURL: fileURL, context: context)
+        XCTAssertTrue(store.records.isEmpty)
+
+        // 原文件已改名留档，内容未被空记录覆盖。
+        let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        let backup = try XCTUnwrap(entries.first { $0.contains("invalid-") })
+        XCTAssertEqual(
+            try String(contentsOf: directory.appendingPathComponent(backup), encoding: .utf8),
+            corrupt
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    func testSaveFailureIsReportedInsteadOfSucceedingSilently() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-calibration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // 父路径是普通文件：createDirectory 必然失败，用于模拟磁盘不可写。
+        let blocking = directory.appendingPathComponent("blocked")
+        try Data("x".utf8).write(to: blocking)
+        let fileURL = blocking.appendingPathComponent("power-calibration.json")
+
+        let store = PowerTelemetryCalibrationStore(fileURL: fileURL, context: context)
+        XCTAssertTrue(store.startSession(startCounter: 1_000, batteryPercent: nil))
+        XCTAssertEqual(
+            store.completeSession(endCounter: 1_250, measuredEnergyKWh: 0.2),
+            .saveFailed
+        )
+        XCTAssertEqual(store.records.count, 1, "内存记录仍可用于本次运行，但必须提示未写入磁盘")
+    }
 }

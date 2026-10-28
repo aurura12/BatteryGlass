@@ -313,6 +313,8 @@ private struct CompleteCalibrationSheet: View {
             errorMessage = "会话期间系统版本发生变化，请重新开始校准。"
         case .invalidInput:
             errorMessage = "计数器差值为 0 或输入无效，请检查后重试。"
+        case .saveFailed:
+            errorMessage = "校准结果无法写入磁盘，重启后会丢失。请检查磁盘空间与文件权限后重试。"
         }
     }
 
