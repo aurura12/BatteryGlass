@@ -451,6 +451,38 @@ final class SleepEnergyCalculatorTests: XCTestCase {
         )
     }
 
+    func testZeroWakeCapacityIsRejectedInsteadOfRecordingWholeBatteryDrain() {
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 5000,
+            voltageBeforeV: 12,
+            adapterConnectedBefore: false,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 0,
+            voltageAfterV: 0,
+            adapterConnectedAfter: false,
+            maintenanceDirectPowerW: nil
+        )
+
+        XCTAssertNil(SleepEnergyCalculator.segment(from: input))
+    }
+
+    func testZeroBaselineCapacityIsRejected() {
+        let input = SleepEnergyCalculator.Input(
+            sleepStart: date("2026-08-27 10:00:00"),
+            capacityBeforeMAh: 0,
+            voltageBeforeV: 0,
+            adapterConnectedBefore: false,
+            wakeTime: date("2026-08-27 11:00:00"),
+            capacityAfterMAh: 5000,
+            voltageAfterV: 12,
+            adapterConnectedAfter: false,
+            maintenanceDirectPowerW: nil
+        )
+
+        XCTAssertNil(SleepEnergyCalculator.segment(from: input))
+    }
+
     private func utcCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

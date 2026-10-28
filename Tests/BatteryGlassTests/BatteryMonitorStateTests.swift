@@ -55,6 +55,25 @@ final class BatteryMonitorStateTests: XCTestCase {
         )
     }
 
+    func testSleepEndpointRequiresPresentBatteryWithCapacityAndVoltage() {
+        var snapshot = BatterySnapshot()
+        snapshot.timestamp = Date()
+        XCTAssertFalse(BatteryMonitor.isUsableSleepEndpoint(snapshot))
+
+        snapshot.isPresent = true
+        XCTAssertFalse(BatteryMonitor.isUsableSleepEndpoint(snapshot))
+
+        snapshot.currentCapacityMAh = 5000
+        XCTAssertFalse(BatteryMonitor.isUsableSleepEndpoint(snapshot))
+
+        snapshot.voltage = 12
+        XCTAssertTrue(BatteryMonitor.isUsableSleepEndpoint(snapshot))
+
+        snapshot.currentCapacityMAh = 0
+        snapshot.voltage = 12
+        XCTAssertFalse(BatteryMonitor.isUsableSleepEndpoint(snapshot))
+    }
+
     func testMaintenancePowerSelectionKeepsDirectAndAdapterInputsSeparate() {
         let result = BatteryMonitor.minimumMaintenancePowers(
             directSamples: [4, 2, 3],

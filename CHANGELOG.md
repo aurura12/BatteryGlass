@@ -2,6 +2,14 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-10-28]
+
+### 修复
+- 睡眠端点必须是完整读数：唤醒瞬间电量计若停在旧值（容量或电压为 0），原实现直接用它做容量差，会把整块电池记成一次睡眠耗电（一次可虚增数十 Wh）。现在 `BatteryMonitor` 新增 `isUsableSleepEndpoint` 校验，唤醒后每秒补采、最多 5 次；仍不可用则只关闭睡眠区间并放弃能耗结算（历史层标为「未测量睡眠」，不再被当作采样缺口）。睡眠起点读数不完整时同样只记区间不结算，且区间边界与测量基线分离，避免唤醒事件缺失时把之后的样本永久排除出能耗积分。`SleepEnergyCalculator` 对非正端点容量直接返回 nil。（`Services/BatteryMonitor.swift`、`Models/SleepEnergyCalculator.swift`）
+
+### 修改
+- 更新 `CODEBUDDY.md`：`Views/HistoryView.swift` 行数改为实测约 2,070 行；「Views / UI」补记电量曲线的缺口处理（`HistoryChartRendering.gapBridges` 细线跨断点、填充改为整日单条连续 `AreaMark`）与两条曲线共用 `chartPlotStyle` 裁剪填充的修复；「常用命令」补充 `open Package.swift`（README 提供的 Xcode 运行路径）。
+
 ## [2026-10-22]
 
 ### 修复

@@ -72,6 +72,15 @@ final class BatteryMonitor {
         adapterConnected: Bool,
         telemetryCounters: PowerTelemetryCounters
     )?
+    /// 已开始但尚未关闭的睡眠区间。与 `sleepBaseline` 分开保存：基线读数不可用时
+    /// 仍必须在唤醒后关闭区间，否则历史层会把之后的样本全部当成睡眠排除掉。
+    private var sleepIntervalStart: Date?
+    /// 唤醒端点读数不可用时的补采任务与已尝试次数。
+    private var wakeValidationTask: Task<Void, Never>?
+    private var wakeValidationAttempts = 0
+    /// 唤醒后电量计可能仍停在旧值，最多重试 5 次、每次间隔 2 秒。
+    private let wakeValidationInterval: TimeInterval = 2
+    private let wakeValidationMaxAttempts = 5
     /// 唤醒后延迟采样得到的直供功率样本（W）。
     private var maintenanceSamples: [Double] = []
     /// 唤醒后延迟采样得到的适配器总输入样本（W）。
@@ -417,6 +426,8 @@ final class BatteryMonitor {
     /// 清空历史时丢弃尚未结算的旧睡眠，防止稍后重新写回已删除的记录。
     func cancelPendingSleepEnergy() {
         cancelMaintenanceSampling()
+        cancelWakeValidation()
+        sleepIntervalStart = nil
         sleepBaseline = nil
         wakeBaseline = nil
     }
@@ -428,18 +439,31 @@ final class BatteryMonitor {
         // 否则其能量会被下方的 cancelMaintenanceSampling 连同基线一起丢弃。
         finishPendingSleepEnergy()
         cancelMaintenanceSampling()
-        sleepBaseline = (
-            date: latest.timestamp,
-            capacityMAh: latest.currentCapacityMAh,
-            voltageV: latest.voltage,
-            adapterConnected: latest.adapterConnected,
-            batteryDischargingBefore: latest.batteryDischargingWhilePlugged,
-            telemetryCounters: latestTelemetryCounters
-        )
+        cancelWakeValidation()
+        // 没等到唤醒事件就再次入睡（如唤醒通知丢失）时，先用当前时刻关闭上一条区间。
+        closeStaleSleepInterval(at: latest.timestamp)
+
+        let start = latest.timestamp
+        sleepIntervalStart = start
+        // 启动后立刻入睡时电量计可能还读不到容量/电压：区间边界照常记录，但放弃能耗
+        // 结算，避免用 0 容量做差值得出"整块电池在睡眠中放空"的假能耗。
+        if Self.isUsableSleepEndpoint(latest) {
+            sleepBaseline = (
+                date: start,
+                capacityMAh: latest.currentCapacityMAh,
+                voltageV: latest.voltage,
+                adapterConnected: latest.adapterConnected,
+                batteryDischargingBefore: latest.batteryDischargingWhilePlugged,
+                telemetryCounters: latestTelemetryCounters
+            )
+        } else {
+            sleepBaseline = nil
+            Self.sleepLogger.error("睡眠开始但读数不完整，放弃本次能耗结算")
+        }
         NotificationCenter.default.post(
             name: .sleepIntervalStarted,
             object: self,
-            userInfo: ["start": latest.timestamp]
+            userInfo: ["start": start]
         )
         let state = Self.describeSleepState(
             adapterConnected: latest.adapterConnected,
@@ -452,40 +476,122 @@ final class BatteryMonitor {
     }
 
     private func handleDidWake() {
-        guard let baseline = sleepBaseline else { return }
+        guard sleepIntervalStart != nil || sleepBaseline != nil else { return }
         refresh()
-        wakeBaseline = (
-            date: latest.timestamp,
-            capacityMAh: latest.currentCapacityMAh,
-            voltageV: latest.voltage,
-            adapterConnected: latest.adapterConnected,
-            telemetryCounters: latestTelemetryCounters
-        )
+        // 唤醒瞬间电量计常停在旧值（容量/电压读到 0）。这种端点直接参与容量差会把
+        // 整块电池记成一次睡眠耗电，因此先补采几次再结算。
+        guard Self.isUsableSleepEndpoint(latest) else {
+            startWakeValidation()
+            return
+        }
+        completeWakeMeasurement()
+    }
+
+    /// 用当前 `latest` 作为唤醒端点关闭睡眠区间，并开始维持功耗采样。
+    private func completeWakeMeasurement() {
+        cancelWakeValidation()
+        guard let start = sleepIntervalStart ?? sleepBaseline?.date else { return }
+        let baseline = sleepBaseline
+        sleepIntervalStart = nil
+        if baseline != nil {
+            wakeBaseline = (
+                date: latest.timestamp,
+                capacityMAh: latest.currentCapacityMAh,
+                voltageV: latest.voltage,
+                adapterConnected: latest.adapterConnected,
+                telemetryCounters: latestTelemetryCounters
+            )
+        }
         NotificationCenter.default.post(
             name: .sleepIntervalEnded,
             object: self,
             userInfo: [
-                "start": baseline.date,
+                "start": start,
                 "end": latest.timestamp
             ]
         )
-        let boundaryChange = baseline.adapterConnected == latest.adapterConnected
-            ? "无"
-            : (baseline.adapterConnected ? "adapterToBattery" : "batteryToAdapter")
-        let wakeState = Self.describeSleepState(
-            adapterConnected: latest.adapterConnected,
-            batteryDischarging: latest.batteryDischargingWhilePlugged,
-            capacityMAh: latest.currentCapacityMAh,
-            voltageV: latest.voltage,
-            wallCounter: latestTelemetryCounters.accumulatedWallEnergyEstimate
+        if let baseline {
+            let boundaryChange = baseline.adapterConnected == latest.adapterConnected
+                ? "无"
+                : (baseline.adapterConnected ? "adapterToBattery" : "batteryToAdapter")
+            let wakeState = Self.describeSleepState(
+                adapterConnected: latest.adapterConnected,
+                batteryDischarging: latest.batteryDischargingWhilePlugged,
+                capacityMAh: latest.currentCapacityMAh,
+                voltageV: latest.voltage,
+                wallCounter: latestTelemetryCounters.accumulatedWallEnergyEstimate
+            )
+            let beforeCounter = baseline.telemetryCounters.accumulatedWallEnergyEstimate
+                .map(String.init) ?? "无"
+            let summary = "睡眠结束 \(wakeState)"
+                + " 睡前插电=\(baseline.adapterConnected) 睡前容量=\(Int(baseline.capacityMAh.rounded()))mAh"
+                + " 睡前计数=\(beforeCounter) 边界变化=\(boundaryChange)"
+            Self.sleepLogger.notice("\(summary, privacy: .public)")
+            startMaintenanceSampling()
+        } else {
+            Self.sleepLogger.error("睡眠结束但起点读数不完整，只记录区间未结算能耗")
+        }
+    }
+
+    /// 唤醒端点不可用时的补采：电量计通常在一两秒内恢复，重试仍失败就放弃能耗。
+    private func startWakeValidation() {
+        guard wakeValidationTask == nil else { return }
+        wakeValidationAttempts = 0
+        wakeValidationTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(self.wakeValidationInterval))
+                if Task.isCancelled { return }
+                guard self.sleepIntervalStart != nil || self.sleepBaseline != nil else { return }
+                self.wakeValidationAttempts += 1
+                self.refresh()
+                if Self.isUsableSleepEndpoint(self.latest) {
+                    self.completeWakeMeasurement()
+                    return
+                }
+                if self.wakeValidationAttempts >= self.wakeValidationMaxAttempts {
+                    self.abandonUnmeasurableWake()
+                    return
+                }
+            }
+        }
+    }
+
+    private func cancelWakeValidation() {
+        wakeValidationTask?.cancel()
+        wakeValidationTask = nil
+        wakeValidationAttempts = 0
+    }
+
+    /// 端点始终不可用：只关闭区间，不产生能耗记录。历史层会把它标成
+    /// 「未测量的睡眠」，而不是采样缺口。
+    private func abandonUnmeasurableWake() {
+        let attempts = wakeValidationAttempts
+        cancelWakeValidation()
+        guard let start = sleepIntervalStart ?? sleepBaseline?.date else { return }
+        let end = max(latest.timestamp, start.addingTimeInterval(SleepEnergyCalculator.minimumDuration))
+        sleepIntervalStart = nil
+        sleepBaseline = nil
+        wakeBaseline = nil
+        cancelMaintenanceSampling()
+        NotificationCenter.default.post(
+            name: .sleepIntervalEnded,
+            object: self,
+            userInfo: ["start": start, "end": end]
         )
-        let beforeCounter = baseline.telemetryCounters.accumulatedWallEnergyEstimate
-            .map(String.init) ?? "无"
-        let summary = "睡眠结束 \(wakeState)"
-            + " 睡前插电=\(baseline.adapterConnected) 睡前容量=\(Int(baseline.capacityMAh.rounded()))mAh"
-            + " 睡前计数=\(beforeCounter) 边界变化=\(boundaryChange)"
-        Self.sleepLogger.notice("\(summary, privacy: .public)")
-        startMaintenanceSampling()
+        Self.sleepLogger.error("睡眠端点读数不可用（重试 \(attempts) 次），已放弃能耗结算")
+    }
+
+    /// 上一条睡眠区间没有收到唤醒事件就再次入睡时，先用传入时刻关闭它，
+    /// 避免区间永远保持打开、把之后的所有样本都排除出能耗积分。
+    private func closeStaleSleepInterval(at end: Date) {
+        guard let start = sleepIntervalStart, end > start else { return }
+        sleepIntervalStart = nil
+        NotificationCenter.default.post(
+            name: .sleepIntervalEnded,
+            object: self,
+            userInfo: ["start": start, "end": end]
+        )
     }
 
     /// 唤醒后约 30 秒内每 5 秒采样一次直供功率，取最小值作为系统维持功耗估算。
@@ -585,6 +691,18 @@ final class BatteryMonitor {
             .filter { $0.isFinite && $0 > 0 }
             .min()
         return (minimumDirect, minimumAdapterInput)
+    }
+
+    /// 睡眠端点必须来自一次完整读数。
+    ///
+    /// 电池服务不可用时 `refresh()` 仍会生成带时间戳的快照，但容量与电压为 0；
+    /// 用这种端点做容量差会把整块电池记成一次睡眠耗电，必须在结算前拦截。
+    nonisolated static func isUsableSleepEndpoint(_ snapshot: BatterySnapshot) -> Bool {
+        snapshot.isPresent
+            && snapshot.currentCapacityMAh.isFinite
+            && snapshot.currentCapacityMAh > 0
+            && snapshot.voltage.isFinite
+            && snapshot.voltage > 0
     }
 
     /// 睡眠端点状态的一行摘要，仅用于诊断日志（非 UI）。

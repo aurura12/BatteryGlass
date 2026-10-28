@@ -47,6 +47,10 @@ enum SleepEnergyCalculator {
     static func segment(from input: Input) -> SleepSegment? {
         let duration = input.wakeTime.timeIntervalSince(input.sleepStart)
         guard duration >= minimumDuration else { return nil }
+        // 端点容量必须来自完整读数：读不到电池时快照会保留时间戳而容量为 0，
+        // 用它做差值得出的是"整块电池放空"，不是睡眠耗电。
+        guard input.capacityBeforeMAh.isFinite, input.capacityAfterMAh.isFinite,
+              input.capacityBeforeMAh > 0, input.capacityAfterMAh > 0 else { return nil }
 
         let energyKWh: Double
         let mode: SleepSegmentMode
