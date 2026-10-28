@@ -4,6 +4,10 @@
 
 ## [2026-10-28]
 
+### 修改
+- 今日累计耗电的整条状态提示改为数值旁的 11pt 小图标：有告警时显示感叹号，点击图标才展开具体原因；取消整张卡片的点击动作，说明弹层缩窄并只保留简短说明，图标保留独立的键盘与 VoiceOver 焦点。（`Views/LiveDashboardView.swift`）
+- 实时页将「功率与今日耗电」三列混排拆为同一行的两张玻璃卡片：「近 2 分钟功率」按平均 / 峰值显示 W，「今日累计耗电」独立显示 kWh。单位弱化、时间范围前置，移除会混淆整组数据口径的共用供电副标题；耗电质量以「含估算」「记录不完整」「未校准」等文字提示，点击整张耗电卡可查看完整原因、统计范围与单位说明。沿用紧凑布局和离屏冻结，缺失或非法耗电值显示占位符。补充展示状态测试并同步 README / CODEBUDDY。（`Views/LiveDashboardView.swift`、`Tests/BatteryGlassTests/TodayEnergyDisplayTests.swift`）
+
 ### 修复
 - 历史页空态说明「为什么没有数据」：原先关闭「记录充放电历史」或历史文件读取失败（`persistenceIssue`）时，历史页只显示通用的「暂无…」，电量图甚至固定写「应用运行后每 5 秒记录一次」，容易让人以为采样坏了。现在 `HistoryView` 顶部按情况显示提示条（持久化故障优先、橙色；用户主动关闭为次要样式），三张图的空态文案由新增的 `HistoryRecordingNotice` 统一给出；面板与放大窗口共用同一套判断。补 `HistoryRecordingNoticeTests` 覆盖提示优先级与文案。（`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`Views/HistoryPowerChart.swift`、`Views/HistoryBatteryLevelChart.swift`、`Views/HistoryEnergyChart.swift`、`Support/HistoryRecordingNotice.swift`、`Tests/BatteryGlassTests/HistoryRecordingNoticeTests.swift`）
 - 外接电源变化通知开启时不再静默失败：原先只有低电量开关会请求通知授权，如果用户从未开过低电量通知，直接打开「外接电源变化通知」时授权状态仍是 `.notDetermined`，系统既不弹窗也不送达。现在两个开关共用 `requestNotificationAuthorization`，拒绝时回滚开关并提示；提示文案改为同时覆盖两类提醒。（`Views/SettingsView.swift`）

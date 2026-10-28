@@ -6,11 +6,29 @@ struct TodayEnergyDisplay: Equatable {
     var energyKWh: Double?
     var needsAttention: Bool
     var warningText: String?
+    var qualityLabel: String
 
     init(summary: DailySummary?) {
-        energyKWh = summary?.energyKWh
+        energyKWh = summary.flatMap { $0.hasValidEnergy ? $0.energyKWh : nil }
         needsAttention = summary?.needsEnergyAttention ?? false
         warningText = summary?.energyQuality?.warningText
+
+        let quality = summary?.energyQuality
+        if energyKWh == nil {
+            qualityLabel = "暂无有效数据"
+        } else if quality?.hasSamplingGaps == true
+            || quality?.hasUnmeasuredSleepEnergy == true
+            || quality?.hasLowerBoundSleepEnergy == true {
+            qualityLabel = "记录不完整"
+        } else if quality?.hasEstimatedSleepEnergy == true {
+            qualityLabel = "含估算"
+        } else if quality?.hasUncalibratedCounterEnergy == true {
+            qualityLabel = "未校准"
+        } else if quality?.hasUnknownHistoricalCoverage == true {
+            qualityLabel = "旧版记录"
+        } else {
+            qualityLabel = "查看统计说明"
+        }
     }
 }
 
@@ -150,17 +168,20 @@ struct KpiCard<Content: View>: View {
     let title: String
     let icon: String
     let verticalPadding: CGFloat
+    let accessibilityChildren: AccessibilityChildBehavior
     let content: Content
 
     init(
         title: String,
         icon: String,
         verticalPadding: CGFloat = DashboardLayout.cardVerticalPadding,
+        accessibilityChildren: AccessibilityChildBehavior = .combine,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.icon = icon
         self.verticalPadding = verticalPadding
+        self.accessibilityChildren = accessibilityChildren
         self.content = content()
     }
 
@@ -175,8 +196,8 @@ struct KpiCard<Content: View>: View {
         .padding(.vertical, verticalPadding)
         .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
-        // 整张卡片作为一个焦点：标题与数值一起播报，避免「电量 / 80 / % / 剩余…」四段跳读。
-        .accessibilityElement(children: .combine)
+        // 默认整张卡片合并播报；含独立按钮时保留按钮焦点。
+        .accessibilityElement(children: accessibilityChildren)
     }
 }
 
@@ -369,105 +390,130 @@ struct HealthKpiCard: View {
     }
 }
 
-// MARK: - 功率趋势（数值版，与其他 KPI 卡片同模块）
+// MARK: - 近期功率与今日耗电（按时间范围分卡展示）
 
 struct PowerTrendCard: View {
     let samples: [PowerSample]
     let snapshot: BatterySnapshot
     let todayEnergy: TodayEnergyDisplay
     @Environment(\.themeAccent) private var themeAccent
-
-    private var accent: Color { BatteryStyling.tint(for: snapshot, accent: themeAccent) }
+    @State private var showingEnergyDetails = false
 
     var body: some View {
-        // 每帧只算一次：直接让峰值/平均/说明各自求值会重复扫描功率缓冲。
+        // 每帧只算一次，平均值与峰值共用同一个 120 秒窗口。
         let statistics = PowerTrendStatistics(samples: samples, now: snapshot.timestamp)
 
-        KpiCard(title: "功率与今日耗电", icon: "chart.line.uptrend.xyaxis") {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.spacingM) {
-                statistic(value: peakText(statistics), caption: "2 分钟峰值", tint: accent)
-                statistic(value: averageText(statistics), caption: "2 分钟平均", tint: .primary)
-                todayEnergyStatistic
-                Spacer(minLength: 0)
-            }
-            Text(directionCaption(statistics))
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(accent)
+        HStack(alignment: .top, spacing: DesignTokens.spacingM) {
+            recentPowerCard(statistics)
+            todayEnergyCard
         }
     }
 
-    private func statistic(value: String, caption: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value)
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(tint)
+    private func recentPowerCard(_ statistics: PowerTrendStatistics) -> some View {
+        KpiCard(title: "近 2 分钟功率", icon: "chart.line.uptrend.xyaxis") {
+            HStack(spacing: DesignTokens.spacingS) {
+                statistic(value: statistics.averagePower, caption: "平均", tint: themeAccent)
+                statistic(value: statistics.peakPower, caption: "峰值", tint: .primary)
+            }
+            Text(powerCaption(statistics))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.85)
+        }
+        .help("最近 2 分钟已记录的耗电功率，W 表示耗电的快慢。电池供电时统计电池放电，接通电源时统计适配器输入；切换电源时窗口内可能包含两种记录。")
+    }
+
+    private func statistic(value: Double?, caption: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
             Text(caption)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    /// 今日耗电：数值 + 质量告警（估算 / 缺口时琥珀色并给出原因）。
-    private var todayEnergyStatistic: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 3) {
-                Text(energyText)
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(value.map { String(format: "%.1f", $0) } ?? "--")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                    .foregroundStyle(energyTint)
+                    .foregroundStyle(tint)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                if todayEnergy.needsAttention {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(DesignTokens.statusAmber)
-                        .help(energyWarningText)
-                        .accessibilityLabel(energyWarningText)
+                    .minimumScaleFactor(0.75)
+                if value != nil {
+                    Text("W")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
             }
-            Text("今日耗电")
-                .font(.system(size: 10))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var todayEnergyCard: some View {
+        KpiCard(title: "今日累计耗电", icon: "bolt.circle", accessibilityChildren: .contain) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(todayEnergy.energyKWh.map { String(format: "%.3f", $0) } ?? "--")
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    if todayEnergy.energyKWh != nil {
+                        Text("kWh")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+
+                energyInfoButton
+            }
+            .padding(.top, DesignTokens.spacingS)
+        }
+    }
+
+    private var energyInfoButton: some View {
+        Button {
+            showingEnergyDetails.toggle()
+        } label: {
+            Image(systemName: todayEnergy.needsAttention ? "exclamationmark.circle" : "info.circle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(energyStatusTint)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(todayEnergy.warningText ?? "查看耗电说明")
+        .accessibilityLabel("今日耗电：\(todayEnergy.qualityLabel)")
+        .accessibilityHint("查看详细说明")
+        .popover(isPresented: $showingEnergyDetails, arrowEdge: .bottom) {
+            energyDetails
+        }
+    }
+
+    private var energyStatusTint: Color {
+        todayEnergy.needsAttention ? DesignTokens.statusAmber : .secondary
+    }
+
+    private var energyDetails: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(todayEnergy.warningText == nil ? "耗电说明" : todayEnergy.qualityLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(energyStatusTint)
+            Text(todayEnergy.warningText ?? (todayEnergy.energyKWh == nil
+                ? "今日暂无有效耗电记录，可在历史页查看记录状态。"
+                : "今天 00:00 起累计的已记录耗电，1 kWh = 1 度电。"))
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(DesignTokens.spacingM)
+        .frame(width: 240, alignment: .leading)
     }
 
-    private var energyText: String {
-        todayEnergy.energyKWh.map(BatteryFormatters.energyKWh) ?? "--"
-    }
-
-    private var energyTint: Color {
-        todayEnergy.needsAttention ? DesignTokens.statusAmber : themeAccent
-    }
-
-    private var energyWarningText: String {
-        todayEnergy.warningText ?? "今日耗电尚无有效数据，详见历史页每日明细。"
-    }
-
-    /// 采样功率恒为正（消耗功率），无数据时显示 "--" 而非误导性的 "+0.0 W"。
-    private func peakText(_ statistics: PowerTrendStatistics) -> String {
-        guard let peakPower = statistics.peakPower else { return "--" }
-        return String(format: "%.1f W", peakPower)
-    }
-
-    private func averageText(_ statistics: PowerTrendStatistics) -> String {
-        guard let averagePower = statistics.averagePower else { return "--" }
-        return String(format: "%.1f W", averagePower)
-    }
-
-    private func directionCaption(_ statistics: PowerTrendStatistics) -> String {
+    private func powerCaption(_ statistics: PowerTrendStatistics) -> String {
         if let message = snapshot.powerDisplayStatus.message {
-            return "\(message) · 显示最近 2 分钟记录"
+            return statistics.averagePower == nil ? message : "\(message) · 近期记录"
         }
-        if statistics.averagePower == nil { return "暂无有效功率数据" }
-        switch snapshot.state {
-        case .charging: return "适配器供电 · 适配器输出功率"
-        case .discharging: return "电池供电 · 电池放电功率"
-        case .pluggedIn: return "适配器供电 · 适配器输出功率"
-        case .unknown: return "暂无有效功率数据"
-        }
+        return statistics.averagePower == nil ? "等待有效功率读数" : "数值越高，耗电越快"
     }
 }
 
