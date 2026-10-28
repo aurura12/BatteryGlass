@@ -6,6 +6,7 @@
 
 ### 修复
 - 外接电源变化通知开启时不再静默失败：原先只有低电量开关会请求通知授权，如果用户从未开过低电量通知，直接打开「外接电源变化通知」时授权状态仍是 `.notDetermined`，系统既不弹窗也不送达。现在两个开关共用 `requestNotificationAuthorization`，拒绝时回滚开关并提示；提示文案改为同时覆盖两类提醒。（`Views/SettingsView.swift`）
+- 拖动「流动速度」滑块不再让玻璃光斑瞬移：`FluidGlassBackground` 原先用「绝对时间 × 速度」计算相位，速度一变等于把相位整体缩放，`sin`/`cos` 立即跳到任意位置。新增 `FluidGlassPhase`（基准 + 时长 × 速度），速度变化时先把旧速度走过的角度并入基准再重新计时，相位保持连续；补 `FluidGlassPhaseTests` 覆盖单次与连续变速。（`Views/FluidGlassBackground.swift`、`Tests/BatteryGlassTests/FluidGlassPhaseTests.swift`）
 
 ### 优化
 - 诊断日志解析移出启动主线程，并按需触发：`BatteryHistoryStore.load()` 原先无条件读取 `power-diagnostics.jsonl` 及其备份（最多 50 MB/10 万行，实测 18k 行/8.7 MB 需 **207 ms**）并逐行解码，全部发生在主线程、`BatteryGlassApp.init` 期间。现在只有**今天确实存在 `consumptionPowerW == nil` 的样本**时才启动后台任务，文件读取与解码在 `Task.detached(.utility)` 执行；结果回到主线程后补进样本、重算今天汇总与采样质量、按时间戳覆盖写回 `live_samples` 并 flush。`clearHistory()` 会取消尚未完成的任务。读取器改为可注入（`diagnosticsLoader`），测试不再触碰真实日志。（`Stores/BatteryHistoryStore.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
