@@ -1,14 +1,38 @@
 import SwiftUI
 
+/// 实时页「今日耗电」的展示值：数值 + 是否需要告警。
+/// 面板离屏时与快照一起冻结，避免离屏内容订阅 `BatteryHistoryStore`。
+struct TodayEnergyDisplay: Equatable {
+    var energyKWh: Double?
+    var needsAttention: Bool
+    var warningText: String?
+
+    init(summary: DailySummary?) {
+        energyKWh = summary?.energyKWh
+        needsAttention = summary?.needsEnergyAttention ?? false
+        warningText = summary?.energyQuality?.warningText
+    }
+}
+
+/// 面板离屏时冻结的实时页数据：快照、功率缓冲与今日能耗。
+struct LiveDashboardRenderedData {
+    var snapshot: BatterySnapshot
+    var recentPower: [PowerSample]
+    var todayEnergy: TodayEnergyDisplay
+}
+
 struct LiveDashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
-    /// 面板离屏时传入最后一份数据；非 nil 时整页不再订阅 `BatteryMonitor`，
-    /// 避免离屏内容随每秒发布重算 4 张 KPI 卡片、功率趋势与指标网格。
-    var renderedSnapshot: BatterySnapshot?
-    var renderedPower: [PowerSample]?
+    @Environment(BatteryHistoryStore.self) private var history
+    /// 面板离屏时传入最后一份数据；非 nil 时整页不再订阅 `BatteryMonitor` / `BatteryHistoryStore`，
+    /// 避免离屏内容随每秒发布与每 5 秒汇总重算 4 张 KPI 卡片、功率趋势、指标网格。
+    var rendered: LiveDashboardRenderedData?
 
-    private var snapshot: BatterySnapshot { renderedSnapshot ?? monitor.snapshot }
-    private var powerSamples: [PowerSample] { renderedPower ?? monitor.recentPower }
+    private var snapshot: BatterySnapshot { rendered?.snapshot ?? monitor.snapshot }
+    private var powerSamples: [PowerSample] { rendered?.recentPower ?? monitor.recentPower }
+    private var todayEnergy: TodayEnergyDisplay {
+        rendered?.todayEnergy ?? TodayEnergyDisplay(summary: history.todaySummary)
+    }
 
     var body: some View {
         VStack(spacing: DashboardLayout.contentSpacing) {
@@ -31,7 +55,8 @@ struct LiveDashboardView: View {
 
             PowerTrendCard(
                 samples: powerSamples,
-                snapshot: snapshot
+                snapshot: snapshot,
+                todayEnergy: todayEnergy
             )
 
             MetricsGrid(snapshot: snapshot)
@@ -349,54 +374,90 @@ struct HealthKpiCard: View {
 struct PowerTrendCard: View {
     let samples: [PowerSample]
     let snapshot: BatterySnapshot
+    let todayEnergy: TodayEnergyDisplay
     @Environment(\.themeAccent) private var themeAccent
 
     private var accent: Color { BatteryStyling.tint(for: snapshot, accent: themeAccent) }
 
     var body: some View {
-        KpiCard(title: "功率趋势", icon: "chart.line.uptrend.xyaxis") {
-            HStack(spacing: DesignTokens.spacingM) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(peakText)
-                        .font(.system(size: 20, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(accent)
-                    Text("2 分钟峰值")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
+        // 每帧只算一次：直接让峰值/平均/说明各自求值会重复扫描功率缓冲。
+        let statistics = PowerTrendStatistics(samples: samples, now: snapshot.timestamp)
+
+        KpiCard(title: "功率与今日耗电", icon: "chart.line.uptrend.xyaxis") {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.spacingM) {
+                statistic(value: peakText(statistics), caption: "2 分钟峰值", tint: accent)
+                statistic(value: averageText(statistics), caption: "2 分钟平均", tint: .primary)
+                todayEnergyStatistic
                 Spacer(minLength: 0)
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(averageText)
-                        .font(.system(size: 20, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                    Text("2 分钟平均")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
             }
-            Text(directionCaption)
+            Text(directionCaption(statistics))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(accent)
         }
     }
 
-    private var statistics: PowerTrendStatistics {
-        PowerTrendStatistics(samples: samples, now: snapshot.timestamp)
+    private func statistic(value: String, caption: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(caption)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 今日耗电：数值 + 质量告警（估算 / 缺口时琥珀色并给出原因）。
+    private var todayEnergyStatistic: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Text(energyText)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(energyTint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if todayEnergy.needsAttention {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(DesignTokens.statusAmber)
+                        .help(energyWarningText)
+                        .accessibilityLabel(energyWarningText)
+                }
+            }
+            Text("今日耗电")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var energyText: String {
+        todayEnergy.energyKWh.map(BatteryFormatters.energyKWh) ?? "--"
+    }
+
+    private var energyTint: Color {
+        todayEnergy.needsAttention ? DesignTokens.statusAmber : themeAccent
+    }
+
+    private var energyWarningText: String {
+        todayEnergy.warningText ?? "今日耗电尚无有效数据，详见历史页每日明细。"
     }
 
     /// 采样功率恒为正（消耗功率），无数据时显示 "--" 而非误导性的 "+0.0 W"。
-    private var peakText: String {
+    private func peakText(_ statistics: PowerTrendStatistics) -> String {
         guard let peakPower = statistics.peakPower else { return "--" }
         return String(format: "%.1f W", peakPower)
     }
 
-    private var averageText: String {
+    private func averageText(_ statistics: PowerTrendStatistics) -> String {
         guard let averagePower = statistics.averagePower else { return "--" }
         return String(format: "%.1f W", averagePower)
     }
 
-    private var directionCaption: String {
+    private func directionCaption(_ statistics: PowerTrendStatistics) -> String {
         if let message = snapshot.powerDisplayStatus.message {
             return "\(message) · 显示最近 2 分钟记录"
         }
@@ -409,3 +470,4 @@ struct PowerTrendCard: View {
         }
     }
 }
+

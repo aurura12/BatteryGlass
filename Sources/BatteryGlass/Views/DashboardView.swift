@@ -11,6 +11,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
 struct DashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(AppSettings.self) private var settings
+    @Environment(BatteryHistoryStore.self) private var history
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
@@ -19,8 +20,9 @@ struct DashboardView: View {
     /// 内容视图仍存活，需要据此暂停持续动画，否则离屏窗口会被反复布局（见 `PanelVisibilityObserver`）。
     @State private var panelVisible = false
     /// 面板关闭时冻结的实时页数据。离屏内容改为读取这份快照，
-    /// 不再订阅 `BatteryMonitor`（否则每秒发布都会重算整页 KPI 卡片）。
-    @State private var frozenDashboard: DashboardFrozenState?
+    /// 不再订阅 `BatteryMonitor` / `BatteryHistoryStore`（否则每秒发布与每 5 秒
+    /// 汇总更新都会重算整页 KPI 卡片）。
+    @State private var frozenDashboard: LiveDashboardRenderedData?
 
     private var tab: PanelTab {
         get { PanelTab(rawValue: tabRaw) ?? .live }
@@ -56,18 +58,12 @@ struct DashboardView: View {
                         Group {
                             if usesScrollFallback {
                                 ScrollView {
-                                    LiveDashboardView(
-                                        renderedSnapshot: frozenDashboard?.snapshot,
-                                        renderedPower: frozenDashboard?.recentPower
-                                    )
+                                    LiveDashboardView(rendered: frozenDashboard)
                                         .padding(.vertical, DashboardLayout.contentInset)
                                 }
                                 .scrollIndicators(.hidden)
                             } else {
-                                LiveDashboardView(
-                                    renderedSnapshot: frozenDashboard?.snapshot,
-                                    renderedPower: frozenDashboard?.recentPower
-                                )
+                                LiveDashboardView(rendered: frozenDashboard)
                                 .padding(.vertical, DashboardLayout.contentInset)
                             }
                         }
@@ -94,9 +90,10 @@ struct DashboardView: View {
                     if visible {
                         frozenDashboard = nil
                     } else {
-                        frozenDashboard = DashboardFrozenState(
+                        frozenDashboard = LiveDashboardRenderedData(
                             snapshot: monitor.snapshot,
-                            recentPower: monitor.recentPower
+                            recentPower: monitor.recentPower,
+                            todayEnergy: TodayEnergyDisplay(summary: history.todaySummary)
                         )
                     }
                     panelVisible = visible
@@ -229,13 +226,6 @@ private struct DashboardPanelBackground: View {
     }
 }
 
-
-/// 面板关闭时冻结的实时页数据：快照与功率缓冲一起保存，
-/// 保证离屏内容与最后一次可见时完全一致。
-private struct DashboardFrozenState {
-    var snapshot: BatterySnapshot
-    var recentPower: [PowerSample]
-}
 
 /// 应用品牌标记：渐变圆角徽章 + 闪电。
 struct AppMarkView: View {

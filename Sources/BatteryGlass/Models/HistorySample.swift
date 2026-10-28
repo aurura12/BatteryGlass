@@ -83,6 +83,30 @@ struct DailyEnergyQuality: Codable, Equatable, Sendable {
     var hasUnknownProvenance: Bool {
         hasUnknownHistoricalCoverage
     }
+
+    /// 告警原因文案；多条原因按标记顺序以「；」拼接。历史页角标与实时页「今日耗电」共用。
+    var warningText: String? {
+        var reasons: [String] = []
+        if hasSamplingGaps {
+            reasons.append("当天存在采样断点或累计功率读数缺失，耗电量可能偏低")
+        }
+        if hasUnmeasuredSleepEnergy {
+            reasons.append("部分睡眠时段缺少能耗记录，耗电量可能偏低")
+        }
+        if hasEstimatedSleepEnergy {
+            reasons.append("睡眠段为估算值（无可用计数器或未校准）")
+        }
+        if hasUncalibratedCounterEnergy {
+            reasons.append("睡眠段使用未校准的遥测计数器，数值可能有系统性偏差")
+        }
+        if hasLowerBoundSleepEnergy {
+            reasons.append("睡眠边界供电状态变化，仅统计到可观测来源，实际值不低于此")
+        }
+        if hasUnknownHistoricalCoverage {
+            reasons.append("旧版本记录，统计口径未知")
+        }
+        return reasons.isEmpty ? nil : reasons.joined(separator: "；")
+    }
 }
 
 struct DailySummary: Codable, Identifiable, Equatable, Sendable {

@@ -271,6 +271,12 @@ final class BatteryHistoryStore {
         dailySummaries
     }
 
+    /// 今天的日汇总（实时页「今日耗电」用）；还没有汇总时为 nil。
+    var todaySummary: DailySummary? {
+        let key = BatteryFormatters.dayKey(for: currentDate())
+        return dailySummaries.first { $0.dayKey == key }
+    }
+
     /// Dates come from the archive index and the small live buffer, not all historical rows.
     func availableDays() -> [Date] {
         if cachedAvailableDaysCount != samples.count || cachedAvailableDaysLastID != samples.last?.id
