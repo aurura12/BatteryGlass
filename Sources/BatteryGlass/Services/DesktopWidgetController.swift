@@ -8,7 +8,8 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
     private let monitor: BatteryMonitor
     private let settings: AppSettings
     private var window: NSWindow?
-    private var observers: [NSObjectProtocol] = []
+    /// 只在主线程增删；`deinit` 是 nonisolated，用 `nonisolated(unsafe)` 允许销毁时移除。
+    private nonisolated(unsafe) var observers: [NSObjectProtocol] = []
 
     init(monitor: BatteryMonitor, settings: AppSettings) {
         self.monitor = monitor
@@ -61,6 +62,12 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
                 }
             }
         )
+    }
+
+    deinit {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     func setVisible(_ visible: Bool) {

@@ -12,6 +12,7 @@
 - 曲线悬停不再按指针频率重算整图：原先把光标位置写入 `@State`，鼠标每移动一像素就重跑睡眠过滤、断点切分与降采样（10 分钟窗口约 1.4k 样本、每次数万次比较）。现在只在吸附样本切换时更新悬停状态，并把「可见段 / 降采样结果」与「电量图填充 / 缺口连线 / Y 域」分别记忆化为 `PowerChartSegmentCache`、`BatteryLevelSegmentCache`——窗口与样本不变时直接复用，悬停只插入高亮点。切换日期时一并清除悬停状态，修复放大窗口按天回看时 tooltip 仍显示上一天数据的问题。（`Views/HistoryView.swift`）
 
 ### 修复
+- 采样定时器与通知观察者不再随实例泄漏：`BatteryMonitor` 的两个 RunLoop 定时器只被 `RunLoop` 持有，两个 `NSWorkspace` 观察者 token 创建后直接丢弃；`DesktopWidgetController` 的四个观察者也只注册不移除。两类对象都没有 `deinit`，实例释放后仍会留下 1 Hz 空转与永久回调（对测试和实例重建尤其明显）。现在两者都在 `deinit` 中 invalidate 定时器、取消补采任务并移除观察者；相关字段标注 `nonisolated(unsafe)`（实际只在主线程读写）以允许 nonisolated 的 `deinit` 访问。（`Services/BatteryMonitor.swift`、`Services/DesktopWidgetController.swift`）
 - 睡眠起点改用即时读数：`handleWillSleep` 原先直接拿缓存快照当基线，而采样定时器挂在 `.common` 且带 `tolerance`，App Nap 下可能滞后数秒到数十秒。现在入睡前先 `refresh()` 再定格起点与容量，避免把睡前正常使用的时间并进睡眠区间（会被排除出能耗积分），也避免插电待机按时长外推时被放大。（`Services/BatteryMonitor.swift`）
 - 导出失败不再写出 0 字节文件：`HistoryExporter.jsonString` 原先编码失败返回 `""`，设置页把空串写入目标位置后仍视为成功。现在新增会抛错的 `jsonData` / `jsonString`，调用方直接写 `Data`（同时省掉一次 `String` 往返的内存），编码失败会走进既有「导出失败」提示。（`Support/HistoryExporter.swift`、`Views/SettingsView.swift`）
 - 迁移备份不再被旧备份顶掉、也不因清理失败卡住写入：原先只在 `history.legacy.json` 不存在时创建备份，若上次迁移的备份还在，本次待迁移文件不会被保存就被 v8 覆盖；且备份里温度字段清理抛错会让 `write()` 失败，`needsLegacyBackup` 永远为真，`persist()` 每 15 秒同步重试一次整笔写入。现在内容不同时另存 `history.legacy-<时间戳>.json`（绝不覆盖旧备份），温度清理改为尽力而为、不影响写入；`clearHistory()` 一并清理这些时间戳副本。（`Stores/BatteryHistoryStore.swift`）

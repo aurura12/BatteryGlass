@@ -33,7 +33,11 @@ final class BatteryMonitor {
 
     private let settings: AppSettings
     private let telemetryCalibrationStore: PowerTelemetryCalibrationStore
-    private var timer: Timer?
+    /// 以下资源只在主线程创建/修改，但 `deinit` 是 nonisolated：用 `nonisolated(unsafe)`
+    /// 允许销毁时撤销它们（否则实例释放后定时器仍会空转、观察者永久驻留）。
+    private nonisolated(unsafe) var timer: Timer?
+    /// NSWorkspace 睡眠/唤醒观察者，销毁时成对移除。
+    private nonisolated(unsafe) var workspaceObservers: [NSObjectProtocol] = []
     private var lowBatteryNotified = false
     private var lastAdapterConnected: Bool?
     private var pluggedDischargeConfirmation = BatteryDischargeConfirmation()
@@ -76,7 +80,7 @@ final class BatteryMonitor {
     /// 仍必须在唤醒后关闭区间，否则历史层会把之后的样本全部当成睡眠排除掉。
     private var sleepIntervalStart: Date?
     /// 唤醒端点读数不可用时的补采任务与已尝试次数。
-    private var wakeValidationTask: Task<Void, Never>?
+    private nonisolated(unsafe) var wakeValidationTask: Task<Void, Never>?
     private var wakeValidationAttempts = 0
     /// 唤醒后电量计可能仍停在旧值，最多重试 5 次、每次间隔 2 秒。
     private let wakeValidationInterval: TimeInterval = 2
@@ -86,7 +90,7 @@ final class BatteryMonitor {
     /// 唤醒后延迟采样得到的适配器总输入样本（W）。
     private var maintenanceAdapterInputSamples: [Double] = []
     private var maintenanceSampleTick = 0
-    private var maintenanceTimer: Timer?
+    private nonisolated(unsafe) var maintenanceTimer: Timer?
     private let maintenanceSampleInterval: TimeInterval = 5
     private let maintenanceSampleCount = 6
     private var latestTelemetryCounters = PowerTelemetryCounters(accumulatedWallEnergyEstimate: nil)
@@ -107,23 +111,39 @@ final class BatteryMonitor {
         scheduleRefreshTimer(interval: Self.idleRefreshInterval)
 
         let workspaceCenter = NSWorkspace.shared.notificationCenter
-        workspaceCenter.addObserver(
-            forName: NSWorkspace.willSleepNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.handleWillSleep()
+        workspaceObservers.append(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.willSleepNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.handleWillSleep()
+                }
             }
-        }
-        workspaceCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.handleDidWake()
+        )
+        workspaceObservers.append(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.handleDidWake()
+                }
             }
+        )
+    }
+
+    /// 定时器挂在主 RunLoop 上、观察者由通知中心持有：不主动释放会让实例销毁后
+    /// 仍留下 1 Hz 空转与永久回调（对测试与实例重建尤其明显）。
+    deinit {
+        timer?.invalidate()
+        maintenanceTimer?.invalidate()
+        wakeValidationTask?.cancel()
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            center.removeObserver(observer)
         }
     }
 
