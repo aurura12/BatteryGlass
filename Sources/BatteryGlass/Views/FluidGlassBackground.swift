@@ -49,6 +49,7 @@ struct FluidGlassBackground: View {
         }
         .allowsHitTesting(false)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusPanel, style: .continuous))
+        .accessibilityHidden(true)
         .onChange(of: speed) { oldSpeed, _ in
             phaseState = phaseState.rebased(at: Date(), from: oldSpeed)
         }

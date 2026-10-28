@@ -61,11 +61,14 @@ struct SettingsView: View {
                         Text("\(Int(settings.lowBatteryThreshold))%")
                             .foregroundStyle(.secondary)
                     }
+                    .accessibilityHidden(true)
                     Slider(
                         value: $settings.lowBatteryThreshold,
                         in: AppSettings.lowBatteryThresholdRange,
                         step: 5
                     )
+                    .accessibilityLabel("低电量提醒阈值")
+                    .accessibilityValue("\(Int(settings.lowBatteryThreshold))%")
                 }
 
                 Toggle("外接电源变化通知", isOn: $settings.adapterChangeNotificationsEnabled)
@@ -102,7 +105,10 @@ struct SettingsView: View {
                     Text(String(format: "%.0f%%", settings.animationIntensity * 100))
                         .foregroundStyle(.secondary)
                 }
+                .accessibilityHidden(true)
                 Slider(value: $settings.animationIntensity, in: 0.1...1, step: 0.05)
+                    .accessibilityLabel("玻璃浓度")
+                    .accessibilityValue(String(format: "%.0f%%", settings.animationIntensity * 100))
 
                 HStack {
                     Text("流动速度")
@@ -110,7 +116,10 @@ struct SettingsView: View {
                     Text(String(format: "%.1fx", settings.animationSpeed))
                         .foregroundStyle(.secondary)
                 }
+                .accessibilityHidden(true)
                 Slider(value: $settings.animationSpeed, in: 0.3...2.0, step: 0.1)
+                    .accessibilityLabel("流动速度")
+                    .accessibilityValue(String(format: "%.1f 倍", settings.animationSpeed))
             }
 
             Section("桌面小组件") {

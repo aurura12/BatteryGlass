@@ -37,6 +37,8 @@ struct HistoryDayNavigator: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("选择日期")
+            .accessibilityLabel("选择日期")
+            .accessibilityValue(selection.label)
 
             stepButton(
                 systemName: "chevron.right",

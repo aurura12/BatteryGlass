@@ -81,6 +81,7 @@ struct AdapterSplitCard: View {
         .padding(.horizontal, DesignTokens.spacingM)
         .padding(.vertical, DashboardLayout.cardVerticalPadding)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+        .accessibilityElement(children: .combine)
     }
 
     /// 电池侧分配：充电显示充入功率；插电但连续确认电池仍在放电时显示放电功率，
@@ -149,6 +150,8 @@ struct KpiCard<Content: View>: View {
         .padding(.vertical, verticalPadding)
         .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusCard)
+        // 整张卡片作为一个焦点：标题与数值一起播报，避免「电量 / 80 / % / 剩余…」四段跳读。
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -167,6 +170,8 @@ struct SlimBar: View {
             }
         }
         .frame(height: 4)
+        // 纯装饰进度条：数值已由卡片文本播报。
+        .accessibilityHidden(true)
     }
 }
 

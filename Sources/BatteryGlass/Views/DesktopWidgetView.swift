@@ -71,6 +71,9 @@ struct DesktopWidgetView: View {
                     .lineLimit(1)
             }
             .padding(14)
+            // 整块卡片合并为一个焦点；关闭按钮只在悬停时出现，VoiceOver 通过自定义动作触达。
+            .accessibilityElement(children: .combine)
+            .accessibilityAction(named: "关闭小组件") { onClose?() }
 
             if hover.hovering {
                 Button {
@@ -85,6 +88,7 @@ struct DesktopWidgetView: View {
                 .buttonStyle(.plain)
                 .padding(6)
                 .help("关闭小组件")
+                .accessibilityLabel("关闭小组件")
                 .transition(.opacity)
             }
         }

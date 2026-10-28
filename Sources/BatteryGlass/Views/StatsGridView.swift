@@ -76,5 +76,6 @@ struct MetricCell: View {
         .padding(.vertical, DashboardLayout.metricVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassSurface(cornerRadius: DesignTokens.cornerRadiusSmall)
+        .accessibilityElement(children: .combine)
     }
 }

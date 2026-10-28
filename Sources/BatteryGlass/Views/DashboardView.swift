@@ -196,6 +196,8 @@ private struct DashboardHeader: View {
             .padding(.vertical, 5)
             .background(Capsule().fill(tint.opacity(0.12)))
         }
+        // 应用名、状态说明与状态胶囊合成一个 VoiceOver 焦点。
+        .accessibilityElement(children: .combine)
     }
 
     private var stateShortLabel: String {
