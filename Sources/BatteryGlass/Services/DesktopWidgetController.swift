@@ -176,24 +176,37 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
     }
 
     private func restoredFrame() -> NSRect? {
-        let saved = settings.desktopWidgetFrameString
-        guard !saved.isEmpty else { return nil }
-        let rect = NSRectFromString(saved)
-        guard NSScreen.screens.contains(where: { $0.visibleFrame.intersects(rect) }) else {
-            return nil
-        }
-        return rect
+        DesktopWidgetFramePolicy.restoredFrame(
+            saved: settings.desktopWidgetFrameString,
+            screenFrames: NSScreen.screens.map(\.visibleFrame)
+        )
     }
 
     private func defaultFrame() -> NSRect {
+        let size = DesktopWidgetView.preferredSize(for: settings.desktopWidgetStyle)
         guard let screen = NSScreen.main else {
             return NSRect(x: 100, y: 100, width: 236, height: 132)
         }
-        let visible = screen.visibleFrame
-        let size = DesktopWidgetView.preferredSize(for: settings.desktopWidgetStyle)
-        return NSRect(
-            x: visible.maxX - size.width - 24,
-            y: visible.maxY - size.height - 72,
+        return DesktopWidgetFramePolicy.defaultFrame(size: size, visibleFrame: screen.visibleFrame)
+    }
+}
+
+/// 小组件窗口位置的纯决策，便于脱离 `NSScreen` 做单元测试。
+enum DesktopWidgetFramePolicy {
+    /// 已保存的位置只有在与任一屏幕可见区相交时才恢复；否则由调用方回退到默认位置。
+    static func restoredFrame(saved: String, screenFrames: [NSRect]) -> NSRect? {
+        guard !saved.isEmpty else { return nil }
+        let rect = NSRectFromString(saved)
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        guard screenFrames.contains(where: { $0.intersects(rect) }) else { return nil }
+        return rect
+    }
+
+    /// 主屏右上角默认位置：距右边 24pt、距顶 72pt。
+    static func defaultFrame(size: CGSize, visibleFrame: NSRect) -> NSRect {
+        NSRect(
+            x: visibleFrame.maxX - size.width - 24,
+            y: visibleFrame.maxY - size.height - 72,
             width: size.width,
             height: size.height
         )

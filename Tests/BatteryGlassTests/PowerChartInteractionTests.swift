@@ -50,16 +50,20 @@ final class PowerChartInteractionTests: XCTestCase {
             XCTFail("未找到柱状图数据柱")
             return
         }
+        XCTAssertEqual(barCenters.count, 14)
+        guard let firstBar = barCenters.first, let lastBar = barCenters.last,
+              barCenters.count > 13 else {
+            XCTFail("柱状图数据柱数量异常：\(barCenters.count)")
+            return
+        }
         let labelColumnRanges = axisLabelColumnRanges(in: bitmap, after: barBottom)
             .filter {
                 let center = ($0.lowerBound + $0.upperBound) / 2
-                return (barCenters.first! - 30)...(barCenters.last! + 30) ~= center
+                return (firstBar - 30)...(lastBar + 30) ~= center
             }
         let labelCenters = labelColumnRanges.map { ($0.lowerBound + $0.upperBound) / 2 }
         let labeledBarCenters = [0, 3, 7, 10, 13].map { barCenters[$0] }
         let pixelScale = CGFloat(bitmap.pixelsWide) / hostingView.bounds.width
-
-        XCTAssertEqual(barCenters.count, 14)
         XCTAssertEqual(labelCenters.count, 5)
         for (labelCenter, barCenter) in zip(labelCenters, labeledBarCenters) {
             XCTAssertEqual(labelCenter, barCenter, accuracy: Int(ceil(1.5 * pixelScale)))
@@ -260,8 +264,8 @@ final class PowerChartInteractionTests: XCTestCase {
     private func contiguousRuns(_ rows: [Int]) -> [[Int]] {
         var runs: [[Int]] = []
         for row in rows {
-            if let last = runs.indices.last, row - runs[last].last! <= 1 {
-                runs[last].append(row)
+            if let lastValue = runs.last?.last, row - lastValue <= 1 {
+                runs[runs.count - 1].append(row)
             } else {
                 runs.append([row])
             }
@@ -272,13 +276,16 @@ final class PowerChartInteractionTests: XCTestCase {
     private func groupedColumns(_ columns: [Int]) -> [Int] {
         var groups: [[Int]] = []
         for column in columns {
-            if let last = groups.indices.last, column - groups[last].last! <= 6 {
-                groups[last].append(column)
+            if let lastValue = groups.last?.last, column - lastValue <= 6 {
+                groups[groups.count - 1].append(column)
             } else {
                 groups.append([column])
             }
         }
-        return groups.map { ($0.first! + $0.last!) / 2 }
+        return groups.compactMap { group in
+            guard let first = group.first, let last = group.last else { return nil }
+            return (first + last) / 2
+        }
     }
 
     private func groupedColumns(
@@ -298,12 +305,15 @@ final class PowerChartInteractionTests: XCTestCase {
 
         var groups: [[Int]] = []
         for column in columns {
-            if let last = groups.indices.last, column - groups[last].last! <= 6 {
-                groups[last].append(column)
+            if let lastValue = groups.last?.last, column - lastValue <= 6 {
+                groups[groups.count - 1].append(column)
             } else {
                 groups.append([column])
             }
         }
-        return groups.map { $0.first!...$0.last! }
+        return groups.compactMap { group in
+            guard let first = group.first, let last = group.last else { return nil }
+            return first...last
+        }
     }
 }
