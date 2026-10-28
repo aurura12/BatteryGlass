@@ -33,4 +33,21 @@ final class BatteryFormattersTests: XCTestCase {
         let sameYear = calendar.date(from: DateComponents(year: 2026, month: 8, day: 25))!
         XCTAssertEqual(BatteryFormatters.historyDayLabel(sameYear, now: now, calendar: calendar), "8/25")
     }
+
+    func testCalendarDayKeyMatchesFormatterOutput() {
+        let calendar = Calendar.current
+        let dates = [
+            Date(timeIntervalSince1970: 0),
+            Date(timeIntervalSince1970: 1_793_000_000),
+            Date()
+        ]
+        for date in dates {
+            XCTAssertEqual(
+                BatteryFormatters.dayKey(for: date, calendar: calendar),
+                BatteryFormatters.dayKey(for: date),
+                "能耗拆天与汇总主键必须使用同一个日键"
+            )
+            XCTAssertEqual(BatteryFormatters.dayKey(for: date).count, 10)
+        }
+    }
 }

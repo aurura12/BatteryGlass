@@ -61,7 +61,7 @@ struct BatterySnapshot: Equatable, Sendable {
     /// 展示功率：优先电池电气参数（电压×电流），否则使用系统遥测电池功率。
     var power: Double {
         let electrical = voltage * current
-        if abs(electrical) >= 0.01 {
+        if abs(electrical) >= BatteryPowerThresholds.minimumDischargeW {
             return electrical
         }
         return telemetryPowerW ?? electrical

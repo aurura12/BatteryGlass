@@ -92,7 +92,10 @@ final class AppSettings {
 
         if defaults.object(forKey: Self.thresholdKey) != nil {
             // 钳制到设置滑块的合法范围（10–50），避免存储值越界导致低电量误判。
-            lowBatteryThreshold = min(max(defaults.double(forKey: Self.thresholdKey), 10), 50)
+            lowBatteryThreshold = min(
+                max(defaults.double(forKey: Self.thresholdKey), Self.lowBatteryThresholdRange.lowerBound),
+                Self.lowBatteryThresholdRange.upperBound
+            )
         } else {
             lowBatteryThreshold = 20
         }
@@ -109,6 +112,10 @@ final class AppSettings {
     }
 
     private static let notificationsEnabledKey = "notificationsEnabled"
+    /// 低电量阈值允许范围与「解除提醒」的迟滞量：设置页滑块、读取钳制与通知判定共用。
+    static let lowBatteryThresholdRange: ClosedRange<Double> = 10...50
+    static let lowBatteryNotifyHysteresis: Double = 5
+
     private static let thresholdKey = "lowBatteryThreshold"
     private static let intensityKey = "animationIntensity"
     private static let speedKey = "animationSpeed"

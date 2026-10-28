@@ -46,6 +46,18 @@ enum BatteryFormatters {
         dayFormatter.string(from: date)
     }
 
+    /// 与 `dayKey(for:)` 相同的 `yyyy-MM-dd`，但使用调用方传入的日历。
+    /// 能耗跨天拆分需要按测试/调用方的时区计算，避免与固定 `autoupdatingCurrent` 的格式器漂移。
+    static func dayKey(for date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
     static func dayKeyDate(_ key: String) -> Date? {
         dayFormatter.date(from: key)
     }

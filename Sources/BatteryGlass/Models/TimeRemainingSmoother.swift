@@ -12,8 +12,9 @@ import Foundation
 struct TimeRemainingSmoother {
     /// 每 0.5s tick 的 EMA 系数：τ ≈ 3s，约 20s 收敛，不拖慢显示。
     static let alphaPerTick = 0.15
-    static let minimumSeconds: TimeInterval = 60
-    static let maximumSeconds: TimeInterval = 172_800
+    /// 与 Estimator 共用同一结果域，避免两处上界各自漂移。
+    static let minimumSeconds = TimeRemainingEstimator.minimumSeconds
+    static let maximumSeconds = TimeRemainingEstimator.maximumSeconds
 
     private(set) var value: TimeInterval?
     private var hasValue = false

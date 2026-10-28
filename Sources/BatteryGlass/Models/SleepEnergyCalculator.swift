@@ -200,20 +200,10 @@ enum SleepEnergyCalculator {
             guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else { break }
             let segmentEnd = min(end, nextDay)
             let fraction = segmentEnd.timeIntervalSince(cursor) / total
-            let key = dayKey(for: cursor, calendar: calendar)
+            let key = BatteryFormatters.dayKey(for: cursor, calendar: calendar)
             result[key, default: 0] += energyKWh * fraction
             cursor = segmentEnd
         }
         return result
-    }
-
-    private static func dayKey(for date: Date, calendar: Calendar) -> String {
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(
-            format: "%04d-%02d-%02d",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0
-        )
     }
 }

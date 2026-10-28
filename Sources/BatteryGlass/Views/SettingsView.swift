@@ -65,7 +65,11 @@ struct SettingsView: View {
                         Text("\(Int(settings.lowBatteryThreshold))%")
                             .foregroundStyle(.secondary)
                     }
-                    Slider(value: $settings.lowBatteryThreshold, in: 10...50, step: 5)
+                    Slider(
+                        value: $settings.lowBatteryThreshold,
+                        in: AppSettings.lowBatteryThresholdRange,
+                        step: 5
+                    )
                 }
 
                 Toggle("外接电源变化通知", isOn: $settings.adapterChangeNotificationsEnabled)

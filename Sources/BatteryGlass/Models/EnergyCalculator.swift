@@ -69,7 +69,7 @@ enum EnergyCalculator {
                 )
                 let segmentDuration = segmentEnd.timeIntervalSince(segmentStart)
                 let energy = ((startPower + endPower) / 2) * segmentDuration / 3_600_000
-                let key = dayKey(for: dayStart, calendar: calendar)
+                let key = BatteryFormatters.dayKey(for: dayStart, calendar: calendar)
                 result[key, default: 0] += energy
                 segmentStart = segmentEnd
             }
@@ -140,7 +140,7 @@ enum EnergyCalculator {
                 break
             }
             let segmentEnd = min(end, nextDay)
-            result.append((dayKey(for: dayStart, calendar: calendar), segmentEnd.timeIntervalSince(cursor)))
+            result.append((BatteryFormatters.dayKey(for: dayStart, calendar: calendar), segmentEnd.timeIntervalSince(cursor)))
             cursor = segmentEnd
         }
         return result
@@ -168,15 +168,5 @@ enum EnergyCalculator {
 
     private static func interpolatedPower(first: Double, second: Double, fraction: Double) -> Double {
         first + (second - first) * fraction
-    }
-
-    private static func dayKey(for date: Date, calendar: Calendar) -> String {
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(
-            format: "%04d-%02d-%02d",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0
-        )
     }
 }

@@ -788,7 +788,7 @@ final class BatteryMonitor {
                 lowBatteryNotified = true
                 NotificationService.shared.sendLowBattery(percent: s.percent, threshold: settings.lowBatteryThreshold)
             }
-        } else if s.percent > settings.lowBatteryThreshold + 5 {
+        } else if s.percent > settings.lowBatteryThreshold + AppSettings.lowBatteryNotifyHysteresis {
             lowBatteryNotified = false
         }
     }
