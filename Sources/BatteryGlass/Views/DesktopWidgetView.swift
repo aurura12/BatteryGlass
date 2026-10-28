@@ -16,11 +16,14 @@ struct DesktopWidgetView: View {
 
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(AppSettings.self) private var settings
+    /// 小组件的 `NSHostingView` 只创建一次，主题色从设置直接读取，改动立即生效。
+    private var themeAccent: Color { settings.themeAccent.color }
+
     var onClose: (() -> Void)? = nil
     @StateObject private var hover = HoverModel()
 
     private var snapshot: BatterySnapshot { monitor.snapshot }
-    private var tint: Color { BatteryStyling.tint(for: snapshot) }
+    private var tint: Color { BatteryStyling.tint(for: snapshot, accent: themeAccent) }
     private var style: DesktopWidgetStyle { settings.desktopWidgetStyle }
     private var preferredSize: CGSize { Self.preferredSize(for: style) }
 
@@ -145,7 +148,7 @@ struct DesktopWidgetView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: BatteryStyling.gradient(for: snapshot),
+                        colors: BatteryStyling.gradient(for: snapshot, accent: themeAccent),
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )

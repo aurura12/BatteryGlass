@@ -82,7 +82,7 @@ struct BatteryGlassApp: App {
             cancelPendingSleepEnergy: { [weak monitor] in monitor?.cancelPendingSleepEnergy() }
         )
         let desktopWidget = DesktopWidgetController(monitor: monitor, settings: settings)
-        let chartWindow = ChartWindowController(history: history)
+        let chartWindow = ChartWindowController(history: history, settings: settings)
         self.settings = settings
         self.calibrationStore = calibrationStore
         self.monitor = monitor

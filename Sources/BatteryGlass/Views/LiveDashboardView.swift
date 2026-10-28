@@ -36,6 +36,7 @@ struct LiveDashboardView: View {
 
 struct AdapterSplitCard: View {
     let snapshot: BatterySnapshot
+    @Environment(\.themeAccent) private var themeAccent
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
@@ -57,7 +58,7 @@ struct AdapterSplitCard: View {
                     icon: "laptopcomputer",
                     value: snapshot.powerDisplayStatus.placeholder
                         ?? snapshot.directSupplyPowerW.map { String(format: "%.1f W", $0) } ?? "--",
-                    tint: DesignTokens.dataBlue
+                    tint: themeAccent
                 )
                 Divider()
                     .frame(height: 26)
@@ -166,8 +167,9 @@ struct SlimBar: View {
 
 struct BatteryPercentCard: View {
     let snapshot: BatterySnapshot
+    @Environment(\.themeAccent) private var themeAccent
 
-    private var accent: Color { BatteryStyling.tint(for: snapshot) }
+    private var accent: Color { BatteryStyling.tint(for: snapshot, accent: themeAccent) }
 
     var body: some View {
         KpiCard(title: "电量", icon: "battery.75percent") {
@@ -208,6 +210,7 @@ struct BatteryPercentCard: View {
 
 struct PowerKpiCard: View {
     let snapshot: BatterySnapshot
+    @Environment(\.themeAccent) private var themeAccent
 
     private var isOnAdapter: Bool {
         snapshot.displayState == .charging || snapshot.displayState == .pluggedIn
@@ -218,7 +221,7 @@ struct PowerKpiCard: View {
     }
 
     private var accent: Color {
-        isOnAdapter ? DesignTokens.dataBlue : BatteryStyling.tint(for: snapshot)
+        isOnAdapter ? themeAccent : BatteryStyling.tint(for: snapshot, accent: themeAccent)
     }
 
     var body: some View {
@@ -274,6 +277,7 @@ struct PowerKpiCard: View {
 
 struct CycleKpiCard: View {
     let snapshot: BatterySnapshot
+    @Environment(\.themeAccent) private var themeAccent
 
     var body: some View {
         KpiCard(title: "循环次数", icon: "repeat") {
@@ -282,7 +286,7 @@ struct CycleKpiCard: View {
                 .monospacedDigit()
             SlimBar(
                 progress: min(Double(snapshot.cycleCount) / 1000, 1),
-                tint: DesignTokens.dataBlue
+                tint: themeAccent
             )
             Text("设计寿命 1000 次")
                 .font(.system(size: 10))
@@ -333,8 +337,9 @@ struct HealthKpiCard: View {
 struct PowerTrendCard: View {
     let samples: [PowerSample]
     let snapshot: BatterySnapshot
+    @Environment(\.themeAccent) private var themeAccent
 
-    private var accent: Color { BatteryStyling.tint(for: snapshot) }
+    private var accent: Color { BatteryStyling.tint(for: snapshot, accent: themeAccent) }
 
     var body: some View {
         KpiCard(title: "功率趋势", icon: "chart.line.uptrend.xyaxis") {

@@ -10,6 +10,7 @@ import SwiftUI
 @Observable
 final class ChartWindowController {
     @ObservationIgnored private let history: BatteryHistoryStore
+    @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let model = ChartDetailModel()
     @ObservationIgnored private var window: NSWindow?
     @ObservationIgnored private let visibilityDelegate = ChartWindowVisibilityDelegate()
@@ -18,8 +19,9 @@ final class ChartWindowController {
     private static let defaultSize = NSSize(width: 1_000, height: 600)
     private static let minimumSize = NSSize(width: 480, height: 320)
 
-    init(history: BatteryHistoryStore) {
+    init(history: BatteryHistoryStore, settings: AppSettings) {
         self.history = history
+        self.settings = settings
     }
 
     /// 打开（或复用）窗口并切到指定曲线；日期重置为今天。
@@ -53,6 +55,7 @@ final class ChartWindowController {
                 window?.title = kind.title(day: day)
             }
             .environment(history)
+            .environment(settings)
         )
 
         visibilityDelegate.onChange = { [weak self] visible in

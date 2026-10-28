@@ -75,6 +75,23 @@ struct SettingsView: View {
                 Toggle("外接电源变化通知", isOn: $settings.adapterChangeNotificationsEnabled)
             }
 
+            Section("外观") {
+                HStack(spacing: DesignTokens.spacingS) {
+                    Text("主题色")
+                    Spacer()
+                    ForEach(ThemeAccentPreset.allCases) { preset in
+                        themeSwatch(preset)
+                    }
+                }
+
+                ColorPicker("自定义颜色", selection: themeAccentBinding, supportsOpacity: false)
+                    .accessibilityLabel("自定义主题色")
+
+                Text("主题色用于曲线、强调数值与玻璃光晕；充电、低电量等状态仍使用绿/黄/红语义色。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("流体玻璃动效") {
                 HStack {
                     Text("玻璃浓度")
@@ -211,6 +228,35 @@ struct SettingsView: View {
         } message: {
             Text("无法读取历史或写入导出文件，请检查数据文件与目标位置是否可访问。")
         }
+    }
+
+    /// 取色器与持久化的十六进制值互转：写入时统一为 `#RRGGBB`，避免明暗外观下分量漂移。
+    private var themeAccentBinding: Binding<Color> {
+        Binding(
+            get: { settings.themeAccent.color },
+            set: { settings.themeAccentHex = ThemeAccent(color: $0).hexString }
+        )
+    }
+
+    /// 预设色块：选中项外圈加一道深色细环，避免仅靠颜色本身表达选中态。
+    private func themeSwatch(_ preset: ThemeAccentPreset) -> some View {
+        let selected = settings.themeAccentHex.caseInsensitiveCompare(preset.accent.hexString) == .orderedSame
+        return Button {
+            settings.themeAccentHex = preset.accent.hexString
+        } label: {
+            Circle()
+                .fill(preset.accent.color)
+                .frame(width: 16, height: 16)
+                .overlay {
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(selected ? 0.55 : 0), lineWidth: 1.5)
+                        .frame(width: 22, height: 22)
+                }
+        }
+        .buttonStyle(.plain)
+        .help(preset.title)
+        .accessibilityLabel(preset.title)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     /// 系统无法查询登录项状态时禁用开关。

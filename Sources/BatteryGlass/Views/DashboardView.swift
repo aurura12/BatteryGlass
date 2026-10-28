@@ -10,6 +10,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
+    @Environment(AppSettings.self) private var settings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
@@ -89,6 +90,8 @@ struct DashboardView: View {
         .frame(width: 392, height: 672)
         // 固定面板只支持到 xxxLarge：超出后说明文字会撑破卡片高度，而数值仍不缩放。
         .dynamicTypeSize(PanelLayoutPolicy.supportedDynamicTypeSizes)
+        // 主题色在此注入：设置页改动 `themeAccentHex` 会让本视图重算，环境值随之更新。
+        .environment(\.themeAccent, settings.themeAccent.color)
         .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.86), value: tab)
         .confirmationDialog("确定要退出 BatteryGlass 吗？", isPresented: $showingQuitConfirmation, titleVisibility: .visible) {
             Button("退出", role: .destructive) {
@@ -136,6 +139,11 @@ struct DashboardView: View {
 /// Keeps 2 Hz battery observations inside the header instead of invalidating the page host.
 private struct DashboardHeader: View {
     @Environment(BatteryMonitor.self) private var monitor
+    @Environment(\.themeAccent) private var themeAccent
+
+    private var tint: Color {
+        BatteryStyling.tint(for: monitor.snapshot, accent: themeAccent)
+    }
 
     var body: some View {
         HStack(spacing: DesignTokens.spacingS) {
@@ -153,15 +161,15 @@ private struct DashboardHeader: View {
 
             HStack(spacing: 5) {
                 Circle()
-                    .fill(BatteryStyling.tint(for: monitor.snapshot))
+                    .fill(tint)
                     .frame(width: 6, height: 6)
                 Text(stateShortLabel)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(BatteryStyling.tint(for: monitor.snapshot))
+                    .foregroundStyle(tint)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Capsule().fill(BatteryStyling.tint(for: monitor.snapshot).opacity(0.12)))
+            .background(Capsule().fill(tint.opacity(0.12)))
         }
     }
 
@@ -182,7 +190,7 @@ private struct DashboardPanelBackground: View {
 
     var body: some View {
         FluidGlassBackground(
-            colors: BatteryStyling.gradient(for: monitor.snapshot),
+            colors: BatteryStyling.gradient(for: monitor.snapshot, accent: settings.themeAccent.color),
             intensity: settings.animationIntensity,
             speed: settings.animationSpeed,
             isAnimated: isAnimated
@@ -193,13 +201,14 @@ private struct DashboardPanelBackground: View {
 /// 应用品牌标记：渐变圆角徽章 + 闪电。
 struct AppMarkView: View {
     let snapshot: BatterySnapshot
+    @Environment(\.themeAccent) private var themeAccent
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: BatteryStyling.gradient(for: snapshot),
+                        colors: BatteryStyling.gradient(for: snapshot, accent: themeAccent),
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )

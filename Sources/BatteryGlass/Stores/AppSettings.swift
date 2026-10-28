@@ -84,6 +84,16 @@ final class AppSettings {
         didSet { defaults.set(desktopWidgetFrameString, forKey: Self.desktopWidgetFrameKey) }
     }
 
+    /// 主题色以十六进制字符串持久化（如 `#127AF5`），与 `ThemeAccent` 互转。
+    var themeAccentHex: String {
+        didSet { defaults.set(themeAccentHex, forKey: Self.themeAccentKey) }
+    }
+
+    /// 解析失败（旧版本存储值损坏等）时回退到默认主题色，避免界面拿到无效颜色。
+    var themeAccent: ThemeAccent {
+        ThemeAccent(hex: themeAccentHex) ?? .fallback
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -109,6 +119,9 @@ final class AppSettings {
         menuBarDisplayMode = MenuBarDisplayMode(rawValue: defaults.string(forKey: Self.menuBarDisplayModeKey) ?? "") ?? .percent
         adapterChangeNotificationsEnabled = defaults.object(forKey: Self.adapterChangeNotificationsKey) as? Bool ?? false
         desktopWidgetStyle = DesktopWidgetStyle(rawValue: defaults.string(forKey: Self.desktopWidgetStyleKey) ?? "") ?? .compact
+        themeAccentHex = ThemeAccent(
+            hex: defaults.string(forKey: Self.themeAccentKey) ?? ""
+        )?.hexString ?? ThemeAccent.defaultHex
     }
 
     private static let notificationsEnabledKey = "notificationsEnabled"
@@ -127,4 +140,5 @@ final class AppSettings {
     private static let menuBarDisplayModeKey = "menuBarDisplayMode"
     private static let adapterChangeNotificationsKey = "adapterChangeNotificationsEnabled"
     private static let desktopWidgetStyleKey = "desktopWidgetStyle"
+    private static let themeAccentKey = "themeAccentHex"
 }

@@ -32,8 +32,9 @@ enum DesignTokens {
     )
 
     // 数据色（仅用于数据可视化与中性强调）
+    /// 默认主题强调色（= `ThemeAccent.defaultHex`）。用户可在设置中改主题色，
+    /// 界面统一读环境值 `\.themeAccent`，这里只作为未注入时的兜底与默认值来源。
     static let dataBlue = Color(red: 0.07, green: 0.48, blue: 0.96)     // #127AF5
-    static let dischargeBlue = Color(red: 0.20, green: 0.53, blue: 0.95)
     static let mint = Color(red: 0.15, green: 0.73, blue: 0.60)
 
     /// 随系统外观切换的语义色；用 sRGB 分量直接构造，避免资源颜色表的额外开销。

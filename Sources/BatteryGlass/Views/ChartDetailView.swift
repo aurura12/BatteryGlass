@@ -46,6 +46,7 @@ final class ChartDetailModel {
 /// 不再同步查 SQLite；只有窗口可见时才按采样节拍重新加载，关闭或最小化后完全停止。
 struct ChartDetailView: View {
     @Environment(BatteryHistoryStore.self) private var history
+    @Environment(AppSettings.self) private var settings
     let model: ChartDetailModel
     /// 选择变化回调，供窗口同步标题。
     let onSelectionChange: (ExpandedChart, Date) -> Void
@@ -124,6 +125,8 @@ struct ChartDetailView: View {
         .padding(DesignTokens.spacingL)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: reloadKey) { await reload() }
+        // 窗口的 NSHostingView 只创建一次，主题色必须在视图内跟随设置，不能在建窗时快照。
+        .environment(\.themeAccent, settings.themeAccent.color)
     }
 
     /// 异步加载当前日期的样本。窗口不可见时直接返回，关闭状态下不产生任何查询。

@@ -122,6 +122,7 @@ design-system/batteryglass/  # ui-ux-pro-max 设计系统（MASTER.md）
 
 ### 设置界面（运行时可调，持久化到 UserDefaults）
 
+- **主题色** `themeAccentHex`：6 个预设色 + 自定义取色器；作用于曲线、强调数值与玻璃光晕，充电与低电量仍用绿/黄/红状态色
 - **玻璃浓度** `animationIntensity`（0.1–1.0）：控制流体层透明度（`0.55 + 0.25 × 浓度`）
 - **流动速度** `animationSpeed`（0.3–2.0）：所有相位动画的时间倍率
 

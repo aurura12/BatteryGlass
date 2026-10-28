@@ -6,6 +6,7 @@ struct FluidGlassBackground: View {
     var speed: Double
     var isAnimated = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.themeAccent) private var themeAccent
 
     var body: some View {
         Group {
@@ -27,7 +28,7 @@ struct FluidGlassBackground: View {
         ZStack {
             // 克制的流体光晕：两个柔和径向光斑，避免高饱和色带
             RadialGradient(
-                colors: [(colors.first ?? DesignTokens.dataBlue).opacity(0.30), .clear],
+                colors: [(colors.first ?? themeAccent).opacity(0.30), .clear],
                 center: UnitPoint(x: 0.82, y: 0.10),
                 startRadius: 0,
                 endRadius: 320
@@ -38,7 +39,7 @@ struct FluidGlassBackground: View {
             )
 
             RadialGradient(
-                colors: [DesignTokens.dataBlue.opacity(0.20), .clear],
+                colors: [themeAccent.opacity(0.20), .clear],
                 center: UnitPoint(x: 0.15, y: 0.92),
                 startRadius: 0,
                 endRadius: 340

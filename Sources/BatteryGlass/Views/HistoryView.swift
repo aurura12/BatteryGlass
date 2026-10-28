@@ -474,6 +474,7 @@ struct DailyDetailsDisclosureState {
 struct DailyEnergyComparisonChart: View {
     let summaries: [DailySummary]
     @Binding var range: EnergyHistoryRange
+    @Environment(\.themeAccent) private var themeAccent
     @State private var grouping: EnergyGrouping = .day
     @State private var hoveredAggregate: EnergyAggregate?
     @State private var dailyDetailsState = DailyDetailsDisclosureState()
@@ -524,7 +525,7 @@ struct DailyEnergyComparisonChart: View {
                         x: .value("日期", aggregate.periodStart),
                         y: .value("耗电量", aggregate.energyKWh)
                     )
-                    .foregroundStyle(DesignTokens.dataBlue.gradient)
+                    .foregroundStyle(themeAccent.gradient)
                     .cornerRadius(4)
                 }
                 .chartYScale(domain: energyAxis.domain)
@@ -659,7 +660,7 @@ struct DailyEnergyComparisonChart: View {
             Text(BatteryFormatters.energyKWh(aggregate.energyKWh))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(DesignTokens.dataBlue)
+                .foregroundStyle(themeAccent)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -732,7 +733,7 @@ struct DailyEnergyComparisonChart: View {
             Text(value.map(BatteryFormatters.energyKWh) ?? "--")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(DesignTokens.dataBlue)
+                .foregroundStyle(themeAccent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -796,7 +797,7 @@ struct DailyEnergyComparisonChart: View {
                         Text(summary.energyKWh.map(BatteryFormatters.energyKWh) ?? "--")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .foregroundStyle(DesignTokens.dataBlue)
+                            .foregroundStyle(themeAccent)
                     }
                     .padding(.vertical, 2)
                 }
@@ -839,6 +840,7 @@ struct DailyEnergyComparisonChart: View {
 struct TodayPowerChart: View {
     let chartData: PowerChartData
     let sleepIntervals: [SleepInterval]
+    @Environment(\.themeAccent) private var themeAccent
     /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
     let day: Date
     /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
@@ -950,7 +952,7 @@ struct TodayPowerChart: View {
                                 .interpolationMethod(.linear)
                                 .foregroundStyle(
                                     LinearGradient(
-                                        colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                        colors: [themeAccent.opacity(0.22), themeAccent.opacity(0.02)],
                                         startPoint: .top,
                                         endPoint: .bottom
                                     )
@@ -962,7 +964,7 @@ struct TodayPowerChart: View {
                                     series: .value("曲线段", segmentID)
                                 )
                                 .interpolationMethod(.linear)
-                                .foregroundStyle(DesignTokens.dataBlue)
+                                .foregroundStyle(themeAccent)
                                 .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
                             }
                         }
@@ -973,7 +975,7 @@ struct TodayPowerChart: View {
                                 yStart: .value("功率", connection.startPowerW),
                                 yEnd: .value("功率", connection.endPowerW)
                             )
-                            .foregroundStyle(DesignTokens.dataBlue)
+                            .foregroundStyle(themeAccent)
                             .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
                         }
 
@@ -986,7 +988,7 @@ struct TodayPowerChart: View {
                                 )
                             )
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                                .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
+                                .foregroundStyle(themeAccent.opacity(0.7))
 
                             PointMark(
                                 x: .value(
@@ -995,7 +997,7 @@ struct TodayPowerChart: View {
                                 ),
                                 y: .value("功率", power)
                             )
-                            .foregroundStyle(DesignTokens.dataBlue)
+                            .foregroundStyle(themeAccent)
                             .symbolSize(36)
                         }
                     }
@@ -1079,7 +1081,7 @@ struct TodayPowerChart: View {
                             in: sliderRange
                         )
                         .controlSize(.small)
-                        .tint(DesignTokens.dataBlue)
+                        .tint(themeAccent)
                         .accessibilityLabel("功率曲线时间范围")
                         .accessibilityHint("拖动查看更早或更新的功率数据")
                     }
@@ -1291,7 +1293,7 @@ struct TodayPowerChart: View {
             Text(String(format: "%.1f W", sample.consumptionPowerW ?? 0))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(DesignTokens.dataBlue)
+                .foregroundStyle(themeAccent)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -1303,6 +1305,7 @@ struct TodayPowerChart: View {
 /// 电量曲线：支持缩放 / 拖动平移与悬停查看时间与电量。
 struct TodayBatteryLevelChart: View {
     let chartData: BatteryLevelChartData
+    @Environment(\.themeAccent) private var themeAccent
     /// 该图展示的日期（当天 00:00）；面板固定为今天，放大窗口可按天切换。
     let day: Date
     /// 绘图区高度；nil 表示撑满剩余空间（放大窗口内使用）。
@@ -1441,7 +1444,7 @@ struct TodayBatteryLevelChart: View {
                         .interpolationMethod(.linear)
                         .foregroundStyle(
                             LinearGradient(
-                                colors: [DesignTokens.dataBlue.opacity(0.22), DesignTokens.dataBlue.opacity(0.02)],
+                                colors: [themeAccent.opacity(0.22), themeAccent.opacity(0.02)],
                                 startPoint: .top,
                                 endPoint: .bottom
                             )
@@ -1457,7 +1460,7 @@ struct TodayBatteryLevelChart: View {
                                 series: .value("曲线段", segmentID)
                             )
                             .interpolationMethod(.linear)
-                            .foregroundStyle(DesignTokens.dataBlue)
+                            .foregroundStyle(themeAccent)
                             .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round))
                         }
                     }
@@ -1473,7 +1476,7 @@ struct TodayBatteryLevelChart: View {
                                 series: .value("曲线段", bridgeID)
                             )
                             .interpolationMethod(.linear)
-                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.45))
+                            .foregroundStyle(themeAccent.opacity(0.45))
                             .lineStyle(StrokeStyle(lineWidth: 1, lineCap: .round))
                         }
                     }
@@ -1481,13 +1484,13 @@ struct TodayBatteryLevelChart: View {
                     if let hoveredSample {
                         RuleMark(x: .value("悬停时间", hoveredSample.timestamp))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                            .foregroundStyle(DesignTokens.dataBlue.opacity(0.7))
+                            .foregroundStyle(themeAccent.opacity(0.7))
 
                         PointMark(
                             x: .value("时间", hoveredSample.timestamp),
                             y: .value("电量", hoveredSample.percent)
                         )
-                        .foregroundStyle(DesignTokens.dataBlue)
+                        .foregroundStyle(themeAccent)
                         .symbolSize(36)
                     }
                 }
@@ -1642,7 +1645,7 @@ struct TodayBatteryLevelChart: View {
             Text(BatteryFormatters.percent(sample.percent))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(DesignTokens.dataBlue)
+                .foregroundStyle(themeAccent)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
