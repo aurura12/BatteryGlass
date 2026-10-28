@@ -314,7 +314,33 @@ final class BatteryHistoryStore {
         )
     }
 
-    func clearHistory() {
+    /// 清空全部历史与备份。删除失败时返回 false 并保持内存数据不变：
+    /// 否则界面显示"已清空"，而磁盘上的归档仍在，重启后旧曲线会复活。
+    @discardableResult
+    func clearHistory() -> Bool {
+        let failures: [String] = persistenceQueue.sync {
+            var failures: [String] = []
+            do {
+                try archive.remove()
+            } catch {
+                failures.append("曲线归档：\(error.localizedDescription)")
+            }
+            for url in [fileURL, Self.legacyBackupURL(for: fileURL)]
+            where FileManager.default.fileExists(atPath: url.path) {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                } catch {
+                    failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+                }
+            }
+            return failures
+        }
+        guard failures.isEmpty else {
+            NSLog("BatteryGlass: 清空历史失败 - %@", failures.joined(separator: "；"))
+            return false
+        }
+        Self.removeRepairBackups(for: fileURL)
+
         historyClearedAt = currentDate()
         cancelPendingSleepEnergy()
         samples = []
@@ -340,12 +366,7 @@ final class BatteryHistoryStore {
         needsLegacyBackup = false
         canPersist = true
         persistenceIssue = nil
-        persistenceQueue.sync {
-            try? FileManager.default.removeItem(at: fileURL)
-            try? archive.remove()
-            try? FileManager.default.removeItem(at: Self.legacyBackupURL(for: fileURL))
-            Self.removeRepairBackups(for: fileURL)
-        }
+        return true
     }
 
     private func acceptsHistory(startingAt date: Date) -> Bool {

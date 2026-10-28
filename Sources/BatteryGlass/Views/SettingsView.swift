@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var showingLoginItemUnconfirmedAlert = false
     @State private var showingLoginItemErrorAlert = false
     @State private var showingExportErrorAlert = false
+    @State private var showingClearHistoryFailedAlert = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -160,7 +161,9 @@ struct SettingsView: View {
             titleVisibility: .visible
         ) {
             Button("清空", role: .destructive) {
-                history.clearHistory()
+                if !history.clearHistory() {
+                    showingClearHistoryFailedAlert = true
+                }
             }
             Button("取消", role: .cancel) {}
         }
@@ -193,6 +196,11 @@ struct SettingsView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("无法修改开机自启动设置，请稍后重试，或到「系统设置 → 通用 → 登录项」中手动管理。")
+        }
+        .alert("清空历史失败", isPresented: $showingClearHistoryFailedAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("部分历史文件无法删除（可能被其他程序占用或权限不足）。数据未被清空，请稍后重试。")
         }
         .alert("导出失败", isPresented: $showingExportErrorAlert) {
             Button("好", role: .cancel) {}

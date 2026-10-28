@@ -5,6 +5,7 @@
 ## [2026-10-28]
 
 ### 修复
+- 清空历史不再忽略删除失败：原先三个删除操作都用 `try?`，归档删不掉时内存已清空、界面显示"已清空"，但重启后旧日期会从 `history.sqlite` 重新读回。现在 `clearHistory()` 返回是否成功，删除全部成功后才清空内存并取消待结算睡眠；任一文件删除失败就记录日志、保留内存数据，设置页弹出「清空历史失败」提示。（`Stores/BatteryHistoryStore.swift`、`Views/SettingsView.swift`）
 - 校准数据不再因一次读取失败被清空：原先 `power-calibration.json` 解码失败会静默返回空记录，之后任何一次保存都会用空数组覆盖原文件，唯一一份校准记录永久丢失。现在读取失败（含超过 1 MB）会把原文件改名留档为 `power-calibration.invalid-*.json` 并记录日志，不再覆盖。`save()` 改为返回成功与否，写入失败时 `completeSession` 返回新增的 `.saveFailed`，校准面板明确提示"结果未写入磁盘"，不再显示为保存成功。（`Models/PowerTelemetryCalibration.swift`、`Views/PowerCalibrationSection.swift`）
 - 历史文件读取失败不再静默停写：原先 `history.json` 超限、解码失败或版本过新时只是设置 `canPersist = false`，界面照常显示"正在记录"，而 `record()` 仍无上限地往内存追加样本，退出时统一丢弃。现在三条失败路径都记录 `persistenceIssue` 并在设置页「数据与历史」显示橙色说明，`record()` 在禁用持久化时立即停止累积；原文件保持原样，可清除历史后恢复记录。同时 `BoundedFileReader` 改为分块循环读取，修复单次 `read(upToCount:)` 短读时把截断内容当完整文件、进而被误判为文件损坏的问题。（`Stores/BatteryHistoryStore.swift`、`Stores/BoundedFileReader.swift`、`Views/SettingsView.swift`）
 - 睡眠中退出不再丢失区间边界：`history.json` 新增可选字段 `openSleepStart`，退出时仍处于睡眠则记录起点；下次启动用第一条样本关闭该区间，并记为「未测量的睡眠」（不再被误判为采样缺口，也不会把整段离线时间算进能耗）。跨进程恢复的区间上限为 24 小时，更长的离线时间按真实采样缺口处理。区间起点与能耗基线分离，起点读数缺失或唤醒事件丢失时也不会让区间永久保持打开。（`Stores/BatteryHistoryStore.swift`）

@@ -595,6 +595,33 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertNil(BoundedFileReader.read(at: fileURL, maximumBytes: 4095))
     }
 
+    func testClearHistoryFailureKeepsDataInsteadOfReportingSuccess() throws {
+        if getuid() == 0 { throw XCTSkip("root 可绕过目录权限，无法模拟删除失败") }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("history.json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = BatteryHistoryStore(settings: AppSettings(defaults: defaults), fileURL: fileURL)
+        store.record(snapshot(at: Date(), cycleCount: 5))
+        store.flush()
+        // 归档文件存在且父目录只读：删除必然失败。
+        let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
+        XCTAssertTrue(FileManager.default.createFile(atPath: archiveURL.path, contents: Data()))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+
+        XCTAssertFalse(store.clearHistory())
+        XCTAssertFalse(store.samples.isEmpty, "删除失败时不能清空内存数据")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }
