@@ -60,7 +60,7 @@ struct DashboardView: View {
                         }
                         .transition(pageTransition)
                     } else {
-                        HistoryView()
+                        HistoryView(isVisible: panelVisible)
                             .transition(pageTransition)
                     }
                 }

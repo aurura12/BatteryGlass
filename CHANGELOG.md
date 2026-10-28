@@ -12,6 +12,7 @@
 - 曲线悬停不再按指针频率重算整图：原先把光标位置写入 `@State`，鼠标每移动一像素就重跑睡眠过滤、断点切分与降采样（10 分钟窗口约 1.4k 样本、每次数万次比较）。现在只在吸附样本切换时更新悬停状态，并把「可见段 / 降采样结果」与「电量图填充 / 缺口连线 / Y 域」分别记忆化为 `PowerChartSegmentCache`、`BatteryLevelSegmentCache`——窗口与样本不变时直接复用，悬停只插入高亮点。切换日期时一并清除悬停状态，修复放大窗口按天回看时 tooltip 仍显示上一天数据的问题。（`Views/HistoryView.swift`）
 
 ### 优化
+- 面板关闭后历史页不再重算：`MenuBarExtra` 面板关闭后内容视图仍存活，历史页会随每 5 秒一条新样本重建两张图（含逐样本 mark），即使窗口已离屏。`HistoryView` 新增 `isVisible` 参数，隐藏时改用最后一次的快照（样本 / 睡眠区间 / 汇总）渲染，不再读取 `BatteryHistoryStore`（三元分支的惰性求值使观察依赖根本不建立）；重新显示时用最新数据刷新，同时避免关闭动画期间闪成空态。（`Views/HistoryView.swift`、`Views/DashboardView.swift`）
 - 曲线坐标换算改为二分查找：`PowerChartTimeline.position(for:)` / `date(for:)` 原先对每个样本线性扫描断点（断点多时逐样本 O(断点数)），现在预计算每个断点的压缩起点与累计压缩时长，两次二分即可定位；轴标签的「最近刻度」也先用位置字典精确命中，未命中才回退线性比较。（`Views/HistoryView.swift`）
 
 ### 修复
