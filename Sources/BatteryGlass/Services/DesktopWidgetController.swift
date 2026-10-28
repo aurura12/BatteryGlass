@@ -10,6 +10,9 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     /// 只在主线程增删；`deinit` 是 nonisolated，用 `nonisolated(unsafe)` 允许销毁时移除。
     private nonisolated(unsafe) var observers: [NSObjectProtocol] = []
+    /// 拖动期间的窗口位置合并写盘，避免每个拖动事件都同步写一次 UserDefaults。
+    private nonisolated(unsafe) var frameSaveTimer: Timer?
+    private var pendingFrame: NSRect?
 
     init(monitor: BatteryMonitor, settings: AppSettings) {
         self.monitor = monitor
@@ -65,6 +68,7 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
     }
 
     deinit {
+        frameSaveTimer?.invalidate()
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -141,7 +145,24 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
 
     func windowDidMove(_ notification: Notification) {
         guard let window else { return }
-        settings.desktopWidgetFrameString = NSStringFromRect(window.frame)
+        pendingFrame = window.frame
+        frameSaveTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.4, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.flushPendingFrame()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        frameSaveTimer = timer
+    }
+
+    /// 把拖动过程中最后一次位置写入设置；拖动期间每个事件都写会是高频同步 IO。
+    private func flushPendingFrame() {
+        frameSaveTimer?.invalidate()
+        frameSaveTimer = nil
+        guard let frame = pendingFrame else { return }
+        pendingFrame = nil
+        settings.desktopWidgetFrameString = NSStringFromRect(frame)
     }
 
     /// 屏幕参数变化后，若窗口不再与任何屏幕的可见区相交，则移回默认位置。
