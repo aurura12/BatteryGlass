@@ -74,7 +74,16 @@ final class HistoryExporterTests: XCTestCase {
         XCTAssertTrue(csv.contains("120"))
     }
 
-    func testJSONRoundTripsSamplesAndSummaries() {
+    func testJSONExportThrowsInsteadOfReturningEmptyStringForInvalidNumbers() {
+        var sample = makeSample()
+        sample.power = .nan
+
+        XCTAssertThrowsError(
+            try HistoryExporter.jsonString(samples: [sample], dailySummaries: [])
+        )
+    }
+
+    func testJSONRoundTripsSamplesAndSummaries() throws {
         let summaries = [
             DailySummary(
                 dayKey: "2026-08-30",
@@ -107,7 +116,7 @@ final class HistoryExporterTests: XCTestCase {
                 end: Date(timeIntervalSince1970: 1_700_000_030)
             )
         ]
-        let json = HistoryExporter.jsonString(
+        let json = try HistoryExporter.jsonString(
             samples: [sample],
             dailySummaries: summaries,
             sleepSegments: sleepSegments,

@@ -45,12 +45,15 @@ enum HistoryExporter {
     }
 
     /// 生成可独立读取的版本 8 JSON，包含全部曲线、每日汇总与睡眠边界。
-    static func jsonString(
+    ///
+    /// 编码失败（例如样本里混入 NaN/Inf）必须抛错：此前返回空字符串，调用方会把
+    /// 0 字节文件当成导出成功。
+    static func jsonData(
         samples: [HistorySample],
         dailySummaries: [DailySummary],
         sleepSegments: [SleepSegment] = [],
         sleepIntervals: [SleepInterval] = []
-    ) -> String {
+    ) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -61,8 +64,25 @@ enum HistoryExporter {
             sleepSegments: sleepSegments,
             sleepIntervals: sleepIntervals
         )
-        guard let data = try? encoder.encode(payload) else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
+        return try encoder.encode(payload)
+    }
+
+    static func jsonString(
+        samples: [HistorySample],
+        dailySummaries: [DailySummary],
+        sleepSegments: [SleepSegment] = [],
+        sleepIntervals: [SleepInterval] = []
+    ) throws -> String {
+        let data = try jsonData(
+            samples: samples,
+            dailySummaries: dailySummaries,
+            sleepSegments: sleepSegments,
+            sleepIntervals: sleepIntervals
+        )
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
+        }
+        return text
     }
 
     private static let extendedHeader = "类型,时间,功率(W),消耗功率(W),电量(%),循环次数,健康度(%),耗电量(kWh),平均功率(W),最大功率(W),最小功率(W),样本数"

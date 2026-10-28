@@ -250,15 +250,22 @@ struct SettingsView: View {
 
         do {
             let samples = try history.allCurveSamples()
-            let content = asCSV
-                ? HistoryExporter.csvString(samples: samples, dailySummaries: history.dailySummaries)
-                : HistoryExporter.jsonString(
+            if asCSV {
+                let content = HistoryExporter.csvString(
+                    samples: samples,
+                    dailySummaries: history.dailySummaries
+                )
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            } else {
+                // 直接写编码结果：省掉 String 往返的一份内存，也让编码失败真正走进 catch。
+                let data = try HistoryExporter.jsonData(
                     samples: samples,
                     dailySummaries: history.dailySummaries,
                     sleepSegments: history.sleepSegments,
                     sleepIntervals: history.sleepIntervals
                 )
-            try content.write(to: url, atomically: true, encoding: .utf8)
+                try data.write(to: url, options: .atomic)
+            }
         } catch {
             showingExportErrorAlert = true
         }
