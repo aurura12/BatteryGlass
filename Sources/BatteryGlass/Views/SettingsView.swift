@@ -114,6 +114,14 @@ struct SettingsView: View {
                 Text("曲线长期保留：当天约每 5 秒记录一次，往日每分钟保留一个数据点。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let issue = history.persistenceIssue {
+                    Label(
+                        "历史记录已暂停：\(issue)。本次运行不会写入新数据，原文件保持原样；可清除历史后重新开始记录。",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                }
                 Button("清空历史数据", role: .destructive) {
                     showingClearHistoryConfirmation = true
                 }

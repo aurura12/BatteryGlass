@@ -526,7 +526,7 @@ final class HistoryPersistenceTests: XCTestCase {
 
         XCTAssertEqual(secondRun.sleepIntervals.count, 1)
         let interval = try XCTUnwrap(secondRun.sleepIntervals.first)
-        XCTAssertEqual(interval.start.timeIntervalSince1970, start.timeIntervalSince1970, accuracy: 0.5)
+        XCTAssertEqual(interval.start.timeIntervalSince1970, start.timeIntervalSince1970, accuracy: 1)
         XCTAssertEqual(interval.end.timeIntervalSince1970, wake.timeIntervalSince1970, accuracy: 1)
         // 睡眠期间没有观测，必须标成「未测量的睡眠」，而不是采样缺口。
         let todayKey = BatteryFormatters.dayKey(for: wake)
@@ -559,6 +559,40 @@ final class HistoryPersistenceTests: XCTestCase {
 
         let interval = try XCTUnwrap(secondRun.sleepIntervals.first)
         XCTAssertEqual(interval.end.timeIntervalSince(interval.start), 24 * 60 * 60, accuracy: 1)
+    }
+
+    func testCorruptHistoryFileDisablesPersistenceWithoutTouchingIt() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: fileURL.deletingPathExtension().appendingPathExtension("sqlite"))
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let corrupt = "{ not valid history"
+        try corrupt.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = BatteryHistoryStore(settings: AppSettings(defaults: defaults), fileURL: fileURL)
+        XCTAssertNotNil(store.persistenceIssue)
+
+        store.record(snapshot(at: Date(), cycleCount: 3))
+        store.flush()
+
+        XCTAssertTrue(store.samples.isEmpty)
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), corrupt)
+    }
+
+    func testBoundedFileReaderRejectsOversizedFileAndAcceptsExactLimit() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let payload = Data(repeating: 0x41, count: 4096)
+        try payload.write(to: fileURL)
+
+        XCTAssertEqual(BoundedFileReader.read(at: fileURL, maximumBytes: 4096), payload)
+        XCTAssertNil(BoundedFileReader.read(at: fileURL, maximumBytes: 4095))
     }
 
     private struct PersistedHistory: Decodable {

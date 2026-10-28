@@ -20,6 +20,8 @@ final class BatteryHistoryStore {
     private var historyClearedAt: Date?
     private var needsLegacyBackup = false
     private var canPersist = true
+    /// 历史文件无法读取时的用户可见原因；非 nil 表示本次运行不会写入新记录。
+    private(set) var persistenceIssue: String?
     @ObservationIgnored private var cachedArchiveDay: Date?
     @ObservationIgnored private var cachedArchiveSamples: [HistorySample] = []
     @ObservationIgnored private var cachedMergedSamples: [HistorySample] = []
@@ -146,6 +148,9 @@ final class BatteryHistoryStore {
     func record(_ snapshot: BatterySnapshot) {
         guard settings.recordHistory, snapshot.isPresent,
               acceptsHistory(startingAt: snapshot.timestamp) else { return }
+        // 读不到旧文件时不能继续在内存里累积：那些样本既不会落盘，
+        // 退出时还会连同旧数据一起丢失，只会让界面误以为仍在正常记录。
+        guard canPersist else { return }
 
         let now = currentDate()
         closePendingSleepInterval(at: snapshot.timestamp)
@@ -334,6 +339,7 @@ final class BatteryHistoryStore {
         cachedAvailableDaysCount = -1
         needsLegacyBackup = false
         canPersist = true
+        persistenceIssue = nil
         persistenceQueue.sync {
             try? FileManager.default.removeItem(at: fileURL)
             try? archive.remove()
@@ -392,14 +398,23 @@ final class BatteryHistoryStore {
         guard let data = BoundedFileReader.read(
             at: fileURL,
             maximumBytes: HistoryLoadLimits.maxHistoryFileBytes
-        ) else { canPersist = false; return }
+        ) else {
+            disablePersistence(reason: "文件无法读取或超过 20 MB 上限")
+            return
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let payload = try? decoder.decode(HistoryPayload.self, from: data) else { canPersist = false; return }
+        guard let payload = try? decoder.decode(HistoryPayload.self, from: data) else {
+            disablePersistence(reason: "文件格式无法解析")
+            return
+        }
         guard HistoryLoadLimits.acceptsHistory(
             sampleCount: payload.samples.count,
             summaryCount: payload.dailySummaries.count
-        ), payload.version <= 8 else { canPersist = false; return }
+        ), payload.version <= 8 else {
+            disablePersistence(reason: "样本数量超出上限或文件版本过新")
+            return
+        }
         needsLegacyBackup = payload.version < 7
         let temperatureHistoryNeedsRemoval = payload.version < 8
         samples = payload.samples
@@ -455,6 +470,14 @@ final class BatteryHistoryStore {
             || samplingGapsBackfilled || temperatureHistoryNeedsRemoval {
             flush()
         }
+    }
+
+    /// 只停止本会话写盘，原文件保持原样：它可能来自更新版本，或只是暂时读不出来，
+    /// 覆盖会让唯一一份数据永久消失。
+    private func disablePersistence(reason: String) {
+        canPersist = false
+        persistenceIssue = reason
+        NSLog("BatteryGlass: 历史记录已停用 - %@", reason)
     }
 
     private func persist() {
