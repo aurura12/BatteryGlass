@@ -12,6 +12,7 @@ final class HistoryPersistenceTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defer {
             try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: fileURL.deletingPathExtension().appendingPathExtension("sqlite"))
             defaults.removePersistentDomain(forName: suiteName)
         }
 
@@ -28,12 +29,16 @@ final class HistoryPersistenceTests: XCTestCase {
 
         store.flush()
 
+        // 当天样本落在归档的 live_samples，JSON 只保留跨午夜边界（今天没有，所以为空）。
         let data = try Data(contentsOf: fileURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let payload = try decoder.decode(PersistedHistory.self, from: data)
-        XCTAssertEqual(payload.samples.count, 1)
-        XCTAssertEqual(payload.samples[0].consumptionPowerW, 24)
+        XCTAssertTrue(payload.samples.isEmpty)
+
+        let reloaded = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        XCTAssertEqual(reloaded.samples.count, 1)
+        XCTAssertEqual(reloaded.samples.first?.consumptionPowerW, 24)
     }
 
     func testTerminationNotificationFlushesLatestSamplesSynchronously() throws {
@@ -69,8 +74,11 @@ final class HistoryPersistenceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let payload = try decoder.decode(PersistedHistory.self, from: data)
-        XCTAssertEqual(payload.samples.count, 2)
-        XCTAssertEqual(payload.samples.last?.consumptionPowerW, 36)
+        XCTAssertTrue(payload.samples.isEmpty)
+
+        let reloaded = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        XCTAssertEqual(reloaded.samples.count, 2)
+        XCTAssertEqual(reloaded.samples.last?.consumptionPowerW, 36)
     }
 
     func testSnapshotNotificationIsFlushedBeforeImmediateTermination() throws {
@@ -105,8 +113,11 @@ final class HistoryPersistenceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let payload = try decoder.decode(PersistedHistory.self, from: data)
-        XCTAssertEqual(payload.samples.count, 1)
-        XCTAssertEqual(payload.samples[0].consumptionPowerW, 24)
+        XCTAssertTrue(payload.samples.isEmpty)
+
+        let reloaded = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        XCTAssertEqual(reloaded.samples.count, 1)
+        XCTAssertEqual(reloaded.samples.first?.consumptionPowerW, 24)
     }
 
     func testV2PayloadLoadsWithEmptySleepSegments() throws {
@@ -463,8 +474,10 @@ final class HistoryPersistenceTests: XCTestCase {
             .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
         let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
+        let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
         defer {
             try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: archiveURL)
             defaults.removePersistentDomain(forName: suiteName)
         }
 
@@ -478,14 +491,13 @@ final class HistoryPersistenceTests: XCTestCase {
         store.record(snapshot)
         store.flush()
 
-        let data = try Data(contentsOf: fileURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let payload = try decoder.decode(PersistedHistory.self, from: data)
-        XCTAssertNotNil(payload.samples.last)
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let samples = try XCTUnwrap(json["samples"] as? [[String: Any]])
-        XCTAssertNil(samples.last?["temperatureCelsius"])
+        // 当天样本落在归档里：读回来重新编码后不应再带已移除的温度字段。
+        let archive = HistorySampleArchive(fileURL: archiveURL)
+        let stored = try archive.liveSamples(forDay: Date())
+        XCTAssertEqual(stored.count, 1)
+        let encoded = try JSONEncoder().encode(try XCTUnwrap(stored.first))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(json["temperatureCelsius"])
     }
 
     func testLegacyTemperatureFieldIsDiscardedWhenSampleIsReencoded() throws {
@@ -612,9 +624,9 @@ final class HistoryPersistenceTests: XCTestCase {
         let store = BatteryHistoryStore(settings: AppSettings(defaults: defaults), fileURL: fileURL)
         store.record(snapshot(at: Date(), cycleCount: 5))
         store.flush()
-        // 归档文件存在且父目录只读：删除必然失败。
+        // 归档文件在首次写盘时已经创建，父目录只读后删除必然失败。
         let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
-        XCTAssertTrue(FileManager.default.createFile(atPath: archiveURL.path, contents: Data()))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archiveURL.path))
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
 
         XCTAssertFalse(store.clearHistory())
@@ -650,6 +662,43 @@ final class HistoryPersistenceTests: XCTestCase {
         let expected = syncStore.samples(forDay: yesterdayNoon)
         XCTAssertFalse(expected.isEmpty)
         XCTAssertEqual(loaded.map { $0.id }, expected.map { $0.id })
+    }
+
+    func testTodaySamplesStayInArchiveInsteadOfBeingRewrittenIntoJSON() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: archiveURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        var now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(10 * 3_600)
+        let store = BatteryHistoryStore(settings: settings, fileURL: fileURL, now: { now })
+        for index in 0..<5 {
+            now = now.addingTimeInterval(5)
+            store.record(snapshot(at: now, cycleCount: index))
+        }
+        store.flush()
+
+        // 当天样本不再进入 history.json（文件大小不随当天时长增长）。
+        let data = try Data(contentsOf: fileURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertTrue(try decoder.decode(PersistedHistory.self, from: data).samples.isEmpty)
+
+        let archive = HistorySampleArchive(fileURL: archiveURL)
+        let today = Calendar.current.startOfDay(for: now)
+        XCTAssertEqual(try archive.liveSamples(forDay: today).count, 5)
+
+        // 重启后从归档恢复当天 5 秒精度样本。
+        let reloaded = BatteryHistoryStore(settings: settings, fileURL: fileURL, now: { now })
+        XCTAssertEqual(reloaded.samples.count, 5)
+        XCTAssertEqual(reloaded.samples.last?.consumptionPowerW, 24)
     }
 
     private struct PersistedHistory: Decodable {

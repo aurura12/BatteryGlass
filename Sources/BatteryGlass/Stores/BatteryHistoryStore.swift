@@ -56,6 +56,9 @@ final class BatteryHistoryStore {
     )
     private var lastPersistenceScheduledAt = Date.distantPast
     private let persistenceInterval: TimeInterval = 15
+    /// 已写入 `live_samples` 的最新样本时间；nil 表示归档里还没有今天的样本
+    /// （首次运行，或从旧版 `history.json` 升级时需要在首次写盘时回填当天全部样本）。
+    @ObservationIgnored private var archivedUpTo: Date?
 
     /// 往日样本的降采样间隔：今天保持原生 ~5 秒精度，往日 1 分钟一条。
     private static let olderSampleResolution: TimeInterval = 60
@@ -432,6 +435,7 @@ final class BatteryHistoryStore {
         lastRecordedSample = nil
         lastSamplesPrunedDay = nil
         lastPersistenceScheduledAt = .distantPast
+        archivedUpTo = nil
         // 重置采样节流与显著变化基准，清空后立即恢复记录，避免头几条样本被跳过。
         lastRecord = .distantPast
         lastCycleCount = -1
@@ -458,13 +462,31 @@ final class BatteryHistoryStore {
         // Complete the wake measurement before taking the persisted snapshot. This also
         // makes termination ordering independent of NotificationCenter observer order.
         finishPendingSleepEnergy()
+        let now = currentDate()
+        let today = Calendar.current.startOfDay(for: now)
         let payload = makePayload()
+        let pending = pendingLiveSamples(today: today)
+        // 旧版 JSON 里的历史样本（一次性迁移）也要补进分钟表；稳态下这里只有
+        // 跨午夜边界的一条。
+        let older = samples.filter { $0.timestamp < today }
         let fileURL = self.fileURL
-        let today = Calendar.current.startOfDay(for: currentDate())
-        let didWrite = persistenceQueue.sync {
-            Self.write(payload, to: fileURL, archive: archive, today: today, backupLegacy: needsLegacyBackup)
+        let didWrite = persistenceQueue.sync { () -> Bool in
+            guard Self.write(
+                payload, to: fileURL, archive: archive,
+                backupLegacy: needsLegacyBackup, newLiveSamples: pending
+            ) else { return false }
+            do {
+                try archive.store(older)
+                return true
+            } catch {
+                NSLog("BatteryGlass: 历史归档写入失败 - %@", error.localizedDescription)
+                return false
+            }
         }
-        if didWrite { needsLegacyBackup = false }
+        if didWrite {
+            needsLegacyBackup = false
+            markArchived(pending)
+        }
     }
 
     // MARK: - 持久化
@@ -511,13 +533,26 @@ final class BatteryHistoryStore {
         guard HistoryLoadLimits.acceptsHistory(
             sampleCount: payload.samples.count,
             summaryCount: payload.dailySummaries.count
-        ), payload.version <= 8 else {
+        ), payload.version <= 9 else {
             disablePersistence(reason: "样本数量超出上限或文件版本过新")
             return
         }
         needsLegacyBackup = payload.version < 7
         let temperatureHistoryNeedsRemoval = payload.version < 8
-        samples = payload.samples
+        // 当天全精度样本在 `live_samples`；JSON 里只留跨午夜前的边界样本。
+        // 旧版文件的 JSON 仍带当天全部样本，合并后由首次写盘回填进归档。
+        let today = Calendar.current.startOfDay(for: currentDate())
+        let live = (try? persistenceQueue.sync { try archive.liveSamples(forDay: today) }) ?? []
+        archivedUpTo = try? persistenceQueue.sync { try archive.latestLiveTimestamp() }
+        var loaded = Self.mergeLiveSamples(archive: live, json: payload.samples)
+        // 退出发生在午夜前、启动发生在午夜后时，JSON 里没有边界样本（当时它仍算「今天」），
+        // 从 `live_samples` 补一条跨午夜的样本，保证今天首条样本的能量积分不断档。
+        if let boundary = (try? persistenceQueue.sync { try archive.lastLiveSample(before: today) }) ?? nil,
+           !loaded.contains(where: { $0.id == boundary.id }) {
+            loaded.append(boundary)
+            loaded.sort { $0.timestamp < $1.timestamp }
+        }
+        samples = loaded
         if payload.version >= 2 {
             // 统一按日期升序，保证统计范围和明细展示的顺序一致。
             dailySummaries = payload.dailySummaries.sorted { $0.dayKey < $1.dayKey }
@@ -586,22 +621,33 @@ final class BatteryHistoryStore {
         guard now.timeIntervalSince(lastPersistenceScheduledAt) >= persistenceInterval else { return }
         lastPersistenceScheduledAt = now
 
+        let today = Calendar.current.startOfDay(for: now)
         let payload = makePayload()
+        let pending = pendingLiveSamples(today: today)
         let fileURL = self.fileURL
         let archive = self.archive
-        let today = Calendar.current.startOfDay(for: now)
         // Migration must finish synchronously before ordinary background writes can replace
         // the legacy file, even if an earlier attempt failed.
         guard !needsLegacyBackup else { flush(); return }
-        persistenceQueue.async {
-            Self.write(payload, to: fileURL, archive: archive, today: today, backupLegacy: false)
+        persistenceQueue.async { [weak self] in
+            guard Self.write(
+                payload, to: fileURL, archive: archive,
+                backupLegacy: false, newLiveSamples: pending
+            ) else { return }
+            guard let latest = pending.last?.timestamp else { return }
+            Task { @MainActor [weak self] in
+                self?.markArchived(latest)
+            }
         }
     }
 
     private func makePayload() -> HistoryPayload {
-        HistoryPayload(
-            version: 8,
-            samples: samples,
+        let today = Calendar.current.startOfDay(for: currentDate())
+        return HistoryPayload(
+            version: 9,
+            // 当天全精度样本在 `live_samples`；这里只保留跨午夜前的最后一条，
+            // 供重启后与昨夜样本做能量积分。
+            samples: Self.preMidnightSample(samples, today: today),
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,
             sleepIntervals: sleepIntervals,
@@ -688,10 +734,46 @@ final class BatteryHistoryStore {
         return (previous.map { [$0] } ?? []) + samples.filter { $0.timestamp >= today }
     }
 
+    /// 热层 JSON 只保留跨午夜前的最后一条：当天全精度样本已经在 `live_samples` 里，
+    /// 这条只用于重启后与昨夜样本做能量积分。
+    nonisolated private static func preMidnightSample(
+        _ samples: [HistorySample], today: Date
+    ) -> [HistorySample] {
+        samples.last(where: { $0.timestamp < today }).map { [$0] } ?? []
+    }
+
+    /// 合并归档里的当天样本与 JSON 里的边界样本（按 id 去重，时间升序）。
+    nonisolated private static func mergeLiveSamples(
+        archive: [HistorySample], json: [HistorySample]
+    ) -> [HistorySample] {
+        guard !archive.isEmpty else { return json.sorted { $0.timestamp < $1.timestamp } }
+        guard !json.isEmpty else { return archive }
+        var byID = Dictionary(archive.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        for sample in json { byID[sample.id] = sample }
+        return byID.values.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    /// 尚未写入 `live_samples` 的当天样本。用时间戳水位而不是索引：写盘在后台队列
+    /// 异步完成，重复写入由 `INSERT OR REPLACE` 吸收。
+    private func pendingLiveSamples(today: Date) -> [HistorySample] {
+        samples.filter { sample in
+            sample.timestamp >= today && (archivedUpTo.map { sample.timestamp > $0 } ?? true)
+        }
+    }
+
+    private func markArchived(_ samples: [HistorySample]) {
+        guard let latest = samples.last?.timestamp else { return }
+        markArchived(latest)
+    }
+
+    private func markArchived(_ latest: Date) {
+        archivedUpTo = max(archivedUpTo ?? .distantPast, latest)
+    }
+
     @discardableResult
     nonisolated private static func write(
         _ payload: HistoryPayload, to fileURL: URL, archive: HistorySampleArchive,
-        today: Date, backupLegacy: Bool
+        backupLegacy: Bool, newLiveSamples: [HistorySample]
     ) -> Bool {
         do {
             try FileManager.default.createDirectory(
@@ -709,15 +791,13 @@ final class BatteryHistoryStore {
                     NSLog("BatteryGlass: 旧备份温度字段清理失败 - %@", error.localizedDescription)
                 }
             }
-            // Commit archival rows before replacing the live snapshot. A crash between the
-            // two writes is safe: the next attempt upserts the same minute buckets.
-            try archive.store(payload.samples.filter { $0.timestamp < today })
-            var livePayload = payload
-            livePayload.samples = liveSamples(payload.samples, today: today)
+            // 先把新增的当天样本落到 `live_samples`，再原子替换 JSON。中途崩溃最多
+            // 丢一个写盘周期，重复写入按时间戳幂等。
+            try archive.storeLiveSamples(newLiveSamples)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.sortedKeys]
-            let data = try encoder.encode(livePayload)
+            let data = try encoder.encode(payload)
             try data.write(to: fileURL, options: .atomic)
             return true
         } catch {
@@ -741,12 +821,26 @@ final class BatteryHistoryStore {
             olderResolution: Self.olderSampleResolution
         )
         let payload = makePayload()
-        let didWrite = persistenceQueue.sync {
-            Self.write(payload, to: fileURL, archive: archive, today: today, backupLegacy: needsLegacyBackup)
+        let pending = pendingLiveSamples(today: today)
+        // 昨天的样本可能同时存在于内存（旧版 JSON 迁移）与 `live_samples`，两边都幂等写入。
+        let older = samples.filter { $0.timestamp < today }
+        let didWrite = persistenceQueue.sync { () -> Bool in
+            guard Self.write(
+                payload, to: fileURL, archive: archive,
+                backupLegacy: needsLegacyBackup, newLiveSamples: pending
+            ) else { return false }
+            do {
+                try archive.store(older)
+                try archive.archiveLiveSamples(before: today)
+                return true
+            } catch {
+                NSLog("BatteryGlass: 历史归档失败 - %@", error.localizedDescription)
+                return false
+            }
         }
         guard didWrite else { return }
         needsLegacyBackup = false
-        let older = samples.filter { $0.timestamp < today }
+        markArchived(pending)
         archivedDays = Array(Set(archivedDays + HistoryRetention.availableDays(from: older))).sorted()
         samples = Self.liveSamples(samples, today: today)
         cachedArchiveDay = nil

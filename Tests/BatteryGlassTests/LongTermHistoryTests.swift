@@ -34,7 +34,9 @@ final class LongTermHistoryTests: XCTestCase {
         XCTAssertEqual(reloaded.allSummaries(), summaries)
         XCTAssertEqual(try Data(contentsOf: context.backupURL), original)
         let payload = try JSONSerialization.jsonObject(with: Data(contentsOf: context.fileURL)) as! [String: Any]
-        XCTAssertEqual(payload["version"] as? Int, 8)
+        XCTAssertEqual(payload["version"] as? Int, 9)
+        // 当天样本已迁入归档，JSON 只剩跨午夜边界一条。
+        XCTAssertEqual((payload["samples"] as? [[String: Any]])?.count, 1)
     }
 
     func testExistingLegacyBackupIsKeptAndNewMigrationGetsTimestampedCopy() throws {
@@ -70,7 +72,7 @@ final class LongTermHistoryTests: XCTestCase {
         _ = context.makeStore()
 
         let payload = try JSONSerialization.jsonObject(with: Data(contentsOf: context.fileURL)) as! [String: Any]
-        XCTAssertEqual(payload["version"] as? Int, 8, "备份温度清理失败不应阻止迁移写入")
+        XCTAssertEqual(payload["version"] as? Int, 9, "备份温度清理失败不应阻止迁移写入")
     }
 
     func testMidnightArchivesYesterdayAndPreservesFineSamplesAndEnergyAfterRestart() throws {

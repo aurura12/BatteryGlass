@@ -6,43 +6,88 @@ import SQLite3
 struct HistorySampleArchive: Sendable {
     let fileURL: URL
 
+    /// 往日曲线：按 epoch 分钟桶 upsert，每桶保留时间戳较新的一条。
     func store(_ samples: [HistorySample]) throws {
         guard !samples.isEmpty else { return }
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        let database = try open(writable: true)
-        defer { sqlite3_close(database) }
-        try execute("CREATE TABLE IF NOT EXISTS samples (minute INTEGER PRIMARY KEY, timestamp REAL NOT NULL, payload BLOB NOT NULL)", in: database)
-        try execute("CREATE INDEX IF NOT EXISTS samples_timestamp ON samples(timestamp)", in: database)
-        try execute("BEGIN IMMEDIATE", in: database)
-        do {
-            let statement = try prepare("""
-                INSERT INTO samples(minute, timestamp, payload) VALUES (?, ?, ?)
-                ON CONFLICT(minute) DO UPDATE SET timestamp = excluded.timestamp, payload = excluded.payload
-                WHERE excluded.timestamp >= samples.timestamp
-                """, in: database)
-            defer { sqlite3_finalize(statement) }
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            for sample in samples {
-                let data = try encoder.encode(sample)
-                sqlite3_reset(statement)
-                sqlite3_clear_bindings(statement)
-                sqlite3_bind_int64(statement, 1, Int64(floor(sample.timestamp.timeIntervalSince1970 / 60)))
-                sqlite3_bind_double(statement, 2, sample.timestamp.timeIntervalSince1970)
-                let result = data.withUnsafeBytes { bytes in
-                    sqlite3_bind_blob(statement, 3, bytes.baseAddress, Int32(bytes.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-                }
-                guard result == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else {
-                    throw failure(in: database)
-                }
-            }
-            try execute("COMMIT", in: database)
-        } catch {
-            try? execute("ROLLBACK", in: database)
-            throw error
+        try withWritableDatabase { database in
+            try createTable(.minute, in: database)
+            try insertMinuteRows(samples, in: database)
         }
+    }
+
+    /// 当天曲线：按原生时间戳保存，重复写入幂等。跨天后由
+    /// `archiveLiveSamples(before:)` 降采样进分钟表并删除。
+    func storeLiveSamples(_ samples: [HistorySample]) throws {
+        guard !samples.isEmpty else { return }
+        try withWritableDatabase { database in
+            try createTable(.live, in: database)
+            try insertLiveRows(samples, in: database)
+        }
+    }
+
+    /// 读取某天的当天高精度曲线（重启后恢复当天样本用）。
+    func liveSamples(forDay day: Date, calendar: Calendar = .current) throws -> [HistorySample] {
+        guard let interval = calendar.dateInterval(of: .day, for: day) else { return [] }
+        return try readSamples(from: interval.start, to: interval.end, table: .live)
+    }
+
+    /// 跨午夜前的最后一条当天样本：重启后用它和今天首条样本续接能量积分。
+    func lastLiveSample(before date: Date) throws -> HistorySample? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        let database = try open(writable: false)
+        defer { sqlite3_close(database) }
+        guard try hasTable(.live, in: database) else { return nil }
+        let statement = try prepare(
+            "SELECT payload FROM live_samples WHERE timestamp < ? ORDER BY timestamp DESC LIMIT 1",
+            in: database
+        )
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, date.timeIntervalSince1970)
+        let result = sqlite3_step(statement)
+        if result == SQLITE_DONE { return nil }
+        guard result == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else {
+            throw failure(in: database)
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(
+            HistorySample.self,
+            from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
+        )
+    }
+
+    /// 已写入 `live_samples` 的最新样本时间；没有任何当天样本时为 nil。
+    func latestLiveTimestamp() throws -> Date? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        let database = try open(writable: false)
+        defer { sqlite3_close(database) }
+        guard try hasTable(.live, in: database) else { return nil }
+        let statement = try prepare("SELECT MAX(timestamp) FROM live_samples", in: database)
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw failure(in: database) }
+        guard sqlite3_column_type(statement, 0) != SQLITE_NULL else { return nil }
+        return Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
+    }
+
+    /// 跨天：把 `date` 之前的当天样本降采样进分钟表并删除，返回搬移条数。
+    /// 分钟表的 upsert 语义天然实现「每分钟保留最后一个点」。
+    @discardableResult
+    func archiveLiveSamples(before date: Date) throws -> Int {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return 0 }
+        var archived = 0
+        try withWritableDatabase { database in
+            try createTable(.minute, in: database)
+            try createTable(.live, in: database)
+            let old = try decodeSamples(from: nil, to: date, table: .live, in: database)
+            guard !old.isEmpty else { return }
+            archived = old.count
+            try insertMinuteRows(old, in: database)
+            let statement = try prepare("DELETE FROM live_samples WHERE timestamp < ?", in: database)
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_double(statement, 1, date.timeIntervalSince1970)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw failure(in: database) }
+        }
+        return archived
     }
 
     func samples(forDay day: Date, calendar: Calendar = .current) throws -> [HistorySample] {
@@ -97,7 +142,7 @@ struct HistorySampleArchive: Sendable {
                 return
             }
 
-            guard try hasSamplesTable(in: database) else {
+            guard try hasTable(.minute, in: database) else {
                 try execute("PRAGMA user_version = 1", in: database)
                 try execute("COMMIT", in: database)
                 return
@@ -135,18 +180,38 @@ struct HistorySampleArchive: Sendable {
         }
     }
 
-    private func readSamples(from start: Date?, to end: Date?) throws -> [HistorySample] {
+    private func readSamples(
+        from start: Date?,
+        to end: Date?,
+        table: Table = .minute
+    ) throws -> [HistorySample] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
         let database = try open(writable: false)
         defer { sqlite3_close(database) }
-        let query = start == nil
-            ? "SELECT payload FROM samples ORDER BY timestamp"
-            : "SELECT payload FROM samples WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp"
+        guard try hasTable(table, in: database) else { return [] }
+        return try decodeSamples(from: start, to: end, table: table, in: database)
+    }
+
+    private func decodeSamples(
+        from start: Date?,
+        to end: Date?,
+        table: Table,
+        in database: OpaquePointer
+    ) throws -> [HistorySample] {
+        var clauses: [String] = []
+        if start != nil { clauses.append("timestamp >= ?") }
+        if end != nil { clauses.append("timestamp < ?") }
+        let filter = clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND ")
+        let query = "SELECT payload FROM \(table.rawValue)\(filter) ORDER BY timestamp"
         let statement = try prepare(query, in: database)
         defer { sqlite3_finalize(statement) }
-        if let start, let end {
-            sqlite3_bind_double(statement, 1, start.timeIntervalSince1970)
-            sqlite3_bind_double(statement, 2, end.timeIntervalSince1970)
+        var index: Int32 = 1
+        if let start {
+            sqlite3_bind_double(statement, index, start.timeIntervalSince1970)
+            index += 1
+        }
+        if let end {
+            sqlite3_bind_double(statement, index, end.timeIntervalSince1970)
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -174,6 +239,90 @@ struct HistorySampleArchive: Sendable {
         }
     }
 
+    private enum Table: String {
+        case minute = "samples"
+        case live = "live_samples"
+    }
+
+    private func withWritableDatabase(_ body: (OpaquePointer) throws -> Void) throws {
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let database = try open(writable: true)
+        defer { sqlite3_close(database) }
+        try execute("BEGIN IMMEDIATE", in: database)
+        do {
+            try body(database)
+            try execute("COMMIT", in: database)
+        } catch {
+            try? execute("ROLLBACK", in: database)
+            throw error
+        }
+    }
+
+    private func createTable(_ table: Table, in database: OpaquePointer) throws {
+        switch table {
+        case .minute:
+            try execute("CREATE TABLE IF NOT EXISTS samples (minute INTEGER PRIMARY KEY, timestamp REAL NOT NULL, payload BLOB NOT NULL)", in: database)
+            try execute("CREATE INDEX IF NOT EXISTS samples_timestamp ON samples(timestamp)", in: database)
+        case .live:
+            try execute("CREATE TABLE IF NOT EXISTS live_samples (timestamp REAL PRIMARY KEY, payload BLOB NOT NULL)", in: database)
+        }
+    }
+
+    private func insertMinuteRows(_ samples: [HistorySample], in database: OpaquePointer) throws {
+        let statement = try prepare("""
+            INSERT INTO samples(minute, timestamp, payload) VALUES (?, ?, ?)
+            ON CONFLICT(minute) DO UPDATE SET timestamp = excluded.timestamp, payload = excluded.payload
+            WHERE excluded.timestamp >= samples.timestamp
+            """, in: database)
+        defer { sqlite3_finalize(statement) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        for sample in samples {
+            let data = try encoder.encode(sample)
+            sqlite3_reset(statement)
+            sqlite3_clear_bindings(statement)
+            sqlite3_bind_int64(statement, 1, Int64(floor(sample.timestamp.timeIntervalSince1970 / 60)))
+            sqlite3_bind_double(statement, 2, sample.timestamp.timeIntervalSince1970)
+            try bindBlob(data, at: 3, in: statement, database: database)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw failure(in: database) }
+        }
+    }
+
+    private func insertLiveRows(_ samples: [HistorySample], in database: OpaquePointer) throws {
+        let statement = try prepare(
+            "INSERT OR REPLACE INTO live_samples(timestamp, payload) VALUES (?, ?)",
+            in: database
+        )
+        defer { sqlite3_finalize(statement) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        for sample in samples {
+            let data = try encoder.encode(sample)
+            sqlite3_reset(statement)
+            sqlite3_clear_bindings(statement)
+            sqlite3_bind_double(statement, 1, sample.timestamp.timeIntervalSince1970)
+            try bindBlob(data, at: 2, in: statement, database: database)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw failure(in: database) }
+        }
+    }
+
+    private func bindBlob(
+        _ data: Data,
+        at index: Int32,
+        in statement: OpaquePointer,
+        database: OpaquePointer
+    ) throws {
+        let result = data.withUnsafeBytes { bytes in
+            sqlite3_bind_blob(
+                statement, index, bytes.baseAddress, Int32(bytes.count),
+                unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            )
+        }
+        guard result == SQLITE_OK else { throw failure(in: database) }
+    }
+
     private func open(writable: Bool) throws -> OpaquePointer {
         var database: OpaquePointer?
         let flags = writable ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE : SQLITE_OPEN_READONLY
@@ -194,12 +343,13 @@ struct HistorySampleArchive: Sendable {
         return sqlite3_column_int(statement, 0)
     }
 
-    private func hasSamplesTable(in database: OpaquePointer) throws -> Bool {
+    private func hasTable(_ table: Table, in database: OpaquePointer) throws -> Bool {
         let statement = try prepare(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'samples' LIMIT 1",
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
             in: database
         )
         defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, table.rawValue, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         let result = sqlite3_step(statement)
         if result == SQLITE_ROW { return true }
         if result == SQLITE_DONE { return false }

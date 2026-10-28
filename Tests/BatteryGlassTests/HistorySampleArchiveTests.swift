@@ -87,6 +87,56 @@ final class HistorySampleArchiveTests: XCTestCase {
         XCTAssertEqual(try archive.allSamples().count, 1)
     }
 
+    func testLiveSamplesKeepNativeResolutionAndReplaceSameTimestamp() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = HistorySampleArchive(fileURL: directory.appendingPathComponent("history.sqlite"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.date(from: DateComponents(year: 2026, month: 8, day: 27, hour: 10))!
+        let first = sample(at: day)
+        let second = sample(at: day.addingTimeInterval(5))
+
+        try archive.storeLiveSamples([first, second])
+        XCTAssertEqual(try archive.liveSamples(forDay: day, calendar: calendar), [first, second])
+        XCTAssertEqual(try archive.latestLiveTimestamp(), second.timestamp)
+        XCTAssertEqual(try archive.lastLiveSample(before: day.addingTimeInterval(5)), first)
+        XCTAssertNil(try archive.lastLiveSample(before: day))
+        XCTAssertTrue(try archive.allSamples().isEmpty, "当天样本不应写进分钟表")
+
+        // 同一时间戳重复写入是幂等的（后台写盘与 flush 可能重叠）。
+        try archive.storeLiveSamples([first, second])
+        XCTAssertEqual(try archive.liveSamples(forDay: day, calendar: calendar).count, 2)
+    }
+
+    func testArchivingLiveSamplesDowngradesToMinuteRowsAndDeletesLive() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = HistorySampleArchive(fileURL: directory.appendingPathComponent("history.sqlite"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.date(from: DateComponents(year: 2026, month: 8, day: 27))!
+        let points = [5.0, 10, 65, 70].map { sample(at: day.addingTimeInterval($0)) }
+        try archive.storeLiveSamples(points)
+
+        XCTAssertEqual(try archive.archiveLiveSamples(before: day.addingTimeInterval(3_600)), 4)
+        XCTAssertTrue(try archive.liveSamples(forDay: day, calendar: calendar).isEmpty)
+        // 分钟桶各保留最后一条：第 1 分钟留 +10s，第 2 分钟留 +70s。
+        XCTAssertEqual(
+            try archive.samples(forDay: day, calendar: calendar).map(\.timestamp),
+            [points[1].timestamp, points[3].timestamp]
+        )
+        XCTAssertNil(try archive.latestLiveTimestamp())
+    }
+
+    func testLatestLiveTimestampIsNilWithoutLiveTable() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = HistorySampleArchive(fileURL: directory.appendingPathComponent("missing.sqlite"))
+        XCTAssertNil(try archive.latestLiveTimestamp())
+        XCTAssertNil(try archive.lastLiveSample(before: Date()))
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BatteryGlassArchive-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
