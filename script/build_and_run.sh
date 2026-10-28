@@ -115,9 +115,28 @@ case "$MODE" in
     /usr/bin/log stream --info --style compact --predicate 'subsystem == "com.batteryglass.app"'
     ;;
   --verify|verify)
+    # 只确认「有同名进程在跑」会被上一次残留的实例骗过：App 接管失败时会 exit(0)，
+    # pgrep 仍命中旧进程。这里要求出现一个启动前不存在的 PID。
+    before_pids="$(pgrep -x "$APP_NAME" | tr '\n' ' ' || true)"
     open_app
-    sleep 2
-    pgrep -x "$APP_NAME" >/dev/null
+    verified_pid=""
+    for _ in $(seq 1 20); do
+      for pid in $(pgrep -x "$APP_NAME" || true); do
+        case " $before_pids " in
+          *" $pid "*) ;;
+          *) verified_pid="$pid" ;;
+        esac
+      done
+      if [ -n "$verified_pid" ]; then
+        break
+      fi
+      sleep 0.5
+    done
+    if [ -z "$verified_pid" ]; then
+      printf 'verify failed: %s did not start a new process\n' "$APP_NAME" >&2
+      exit 1
+    fi
+    printf 'verified: %s pid %s\n' "$APP_NAME" "$verified_pid"
     ;;
   *)
     echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
