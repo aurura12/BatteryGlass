@@ -11,6 +11,9 @@
 - 放大窗口不再在主线程同步查 SQLite，也只在可见时刷新：`ChartDetailView` 的 `body` 原先直接调 `samples(forDay:)`（内部 `persistenceQueue.sync`，遇到归档导入或 `history.json` 写盘最长可阻塞 `busy_timeout` 5 秒），且窗口关闭后仍每 5 秒重算整日曲线。现在样本经新增的 `BatteryHistoryStore.samplesAsync(forDay:)` 在持久化队列读取并复用同一套缓存；`ChartDetailModel.isVisible` 由窗口 delegate 同步（关闭、最小化、被遮挡），不可见时视图不读取样本计数也不发起查询，重新显示时补加载。切换日期先清空旧样本，避免旧曲线配新时间轴。（`Views/ChartDetailView.swift`、`Services/ChartWindowController.swift`、`Stores/BatteryHistoryStore.swift`）
 - 曲线悬停不再按指针频率重算整图：原先把光标位置写入 `@State`，鼠标每移动一像素就重跑睡眠过滤、断点切分与降采样（10 分钟窗口约 1.4k 样本、每次数万次比较）。现在只在吸附样本切换时更新悬停状态，并把「可见段 / 降采样结果」与「电量图填充 / 缺口连线 / Y 域」分别记忆化为 `PowerChartSegmentCache`、`BatteryLevelSegmentCache`——窗口与样本不变时直接复用，悬停只插入高亮点。切换日期时一并清除悬停状态，修复放大窗口按天回看时 tooltip 仍显示上一天数据的问题。（`Views/HistoryView.swift`）
 
+### 修改
+- 面板动态字号改为显式策略：原先 `DashboardView` 直接用 `dynamicTypeSize > .large` 判定滚动回退，但界面几乎全是固定字号，系统字号放大时只有 `.caption` 会变化，容易在固定卡片高度里截断。现在面板根部用 `.dynamicTypeSize(.xSmall...`.xxxLarge)` 限定支持范围，判定抽成可测的 `PanelLayoutPolicy`（`.xLarge` 起切滚动）。没有采用「实测内容高度再切换」：那需要把测量写回 `@State`，会与面板 2Hz 重渲染形成布局反馈环（与 `ChartZoomInteraction` 里记录的问题同类）。（`Views/DashboardView.swift`、`Support/DesignTokens.swift`）
+
 ### 优化
 - 补桌面小组件位置决策的测试：把「恢复位置需与屏幕相交」「右上角默认位置」抽成纯函数 `DesktopWidgetFramePolicy`，新增 `DesktopWidgetFramePolicyTests`；同时去掉 `PowerChartInteractionTests` 里的 `first!` / `last!`，改为 `guard` + `compactMap`，断言失败不再让整个测试进程崩溃。（`Services/DesktopWidgetController.swift`、`Tests/BatteryGlassTests/DesktopWidgetFramePolicyTests.swift`）
 - 放大窗口的日期菜单只渲染最近 120 天：原先遍历全部可选日期为每一天构建 `Button`（多年历史时每次刷新都重建上千个视图，即使菜单没打开）。更早的日期仍可用左右箭头逐天回看，菜单底部给出提示。逻辑抽为 `HistoryDaySelection.recentMenuDays(limit:)` 并有测试。（`Models/HistoryDaySelection.swift`、`Views/ChartDetailView.swift`）

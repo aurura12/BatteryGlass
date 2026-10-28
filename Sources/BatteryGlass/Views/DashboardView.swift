@@ -23,9 +23,12 @@ struct DashboardView: View {
         nonmutating set { tabRaw = newValue.rawValue }
     }
 
-    /// 面板尺寸固定 392×672：标准字号下直接展示完整内容，仅当系统字体放大到可能放不下时
-    /// 才回退到滚动版本。相比 `ViewThatFits`（每个布局周期都会测量两个分支），这里只测量一个。
-    private var usesScrollFallback: Bool { dynamicTypeSize > .large }
+    /// 面板尺寸固定 392×672：标准字号下直接展示完整内容，系统字号放大到 `.xLarge` 及以上时
+    /// 回退到滚动版本。判定与可用字号范围集中在 `PanelLayoutPolicy`（可单测）。
+    /// 相比 `ViewThatFits`（每个布局周期都会测量两个分支），这里只测量一个。
+    private var usesScrollFallback: Bool {
+        PanelLayoutPolicy.usesScrollFallback(for: dynamicTypeSize)
+    }
 
     var body: some View {
         GlassContainerIfAvailable {
@@ -84,6 +87,8 @@ struct DashboardView: View {
             .panelGlassSurface(cornerRadius: DesignTokens.cornerRadiusPanel)
         }
         .frame(width: 392, height: 672)
+        // 固定面板只支持到 xxxLarge：超出后说明文字会撑破卡片高度，而数值仍不缩放。
+        .dynamicTypeSize(PanelLayoutPolicy.supportedDynamicTypeSizes)
         .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.86), value: tab)
         .confirmationDialog("确定要退出 BatteryGlass 吗？", isPresented: $showingQuitConfirmation, titleVisibility: .visible) {
             Button("退出", role: .destructive) {

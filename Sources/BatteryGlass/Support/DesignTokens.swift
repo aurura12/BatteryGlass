@@ -62,6 +62,22 @@ enum DesignTokens {
     }
 }
 
+/// 面板动态字号策略。
+///
+/// 面板固定 392×672，只支持到 `.xxxLarge`：再大的字号会让说明文字撑破固定高度，
+/// 而 KPI 数值本身就是固定字号，继续放大并不会更易读。超过 `.large` 时切到可滚动布局，
+/// 保证放大后的内容仍能完整看到。
+///
+/// 这里刻意不按「实测内容高度」切换：那需要把测量结果写回 `@State`，会与面板 2Hz
+/// 重渲染形成布局反馈环（见 `Views/ChartZoomInteraction.swift` 里同类问题的记录）。
+enum PanelLayoutPolicy {
+    static let supportedDynamicTypeSizes: ClosedRange<DynamicTypeSize> = .xSmall ... .xxxLarge
+
+    static func usesScrollFallback(for size: DynamicTypeSize) -> Bool {
+        size > .large
+    }
+}
+
 /// 实时面板的紧凑布局参数。
 ///
 /// 菜单栏面板的高度固定，需要让常用数据在标准字号下一屏展示；
