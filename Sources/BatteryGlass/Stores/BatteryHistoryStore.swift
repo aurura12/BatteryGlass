@@ -283,7 +283,9 @@ final class BatteryHistoryStore {
             } catch {
                 NSLog("BatteryGlass: 曲线读取失败 - %@", error.localizedDescription)
                 cachedArchiveSamples = []
-                cachedArchiveDay = nil
+                // 记住这次失败：否则每次进入该日都会重新打开 SQLite、全表扫描再失败，
+                // 把偶发错误固化成反复的同步 IO。重启或切换日期后可再试。
+                cachedArchiveDay = start
                 cachedLiveCount = -1
             }
         }
@@ -317,7 +319,11 @@ final class BatteryHistoryStore {
                 }
             }
             guard let loaded else {
-                // 读取失败时只展示热层样本，不回落到主线程同步查询。
+                // 读取失败时只展示热层样本，不回落到主线程同步查询；
+                // 同时记住本次失败，避免每次刷新都重试同一次查询。
+                cachedArchiveDay = start
+                cachedArchiveSamples = []
+                cachedLiveCount = -1
                 return HistoryRetention.retainedSamples(
                     HistoryRetention.samples(forDay: start, from: samples),
                     now: currentDate(),

@@ -151,14 +151,26 @@ struct HistorySampleArchive: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         var samples: [HistorySample] = []
+        var skipped = 0
         while true {
             let result = sqlite3_step(statement)
-            if result == SQLITE_DONE { return samples }
+            if result == SQLITE_DONE {
+                if skipped > 0 {
+                    // 单条 payload 损坏（旧版本写入中断、磁盘位翻转）不应让整天陪葬：
+                    // 跳过坏行继续读，其余分钟仍能正常展示。
+                    NSLog("BatteryGlass: 曲线归档跳过 %d 条无法解码的记录", skipped)
+                }
+                return samples
+            }
             guard result == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else {
                 throw failure(in: database)
             }
             let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
-            samples.append(try decoder.decode(HistorySample.self, from: data))
+            if let sample = try? decoder.decode(HistorySample.self, from: data) {
+                samples.append(sample)
+            } else {
+                skipped += 1
+            }
         }
     }
 

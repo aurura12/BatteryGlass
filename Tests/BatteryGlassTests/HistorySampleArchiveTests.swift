@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import XCTest
 @testable import BatteryGlass
 
@@ -61,6 +62,29 @@ final class HistorySampleArchiveTests: XCTestCase {
         invalid.power = .nan
         XCTAssertThrowsError(try archive.store([second, invalid]))
         XCTAssertEqual(try archive.allSamples(), [first])
+    }
+
+    func testCorruptPayloadIsSkippedInsteadOfFailingWholeDay() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("history.sqlite")
+        let archive = HistorySampleArchive(fileURL: databaseURL)
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        try archive.store([
+            sample(at: day.addingTimeInterval(60)),
+            sample(at: day.addingTimeInterval(120))
+        ])
+
+        // 把一条 payload 改成非法 JSON，模拟写入中断留下的坏行。
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let corrupt = "UPDATE samples SET payload = X'7B' "
+            + "WHERE rowid = (SELECT rowid FROM samples LIMIT 1)"
+        XCTAssertEqual(sqlite3_exec(database, corrupt, nil, nil, nil), SQLITE_OK)
+
+        XCTAssertEqual(try archive.samples(forDay: day).count, 1)
+        XCTAssertEqual(try archive.allSamples().count, 1)
     }
 
     private func temporaryDirectory() throws -> URL {
