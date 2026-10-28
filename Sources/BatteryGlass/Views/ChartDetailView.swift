@@ -155,11 +155,15 @@ struct ChartDetailView: View {
             }
 
             Menu {
-                ForEach(days.days.reversed(), id: \.self) { day in
+                ForEach(days.recentMenuDays().reversed(), id: \.self) { day in
                     Button(days.label(for: day)) {
                         model.selectedDay = day
                         onSelectionChange(model.kind, day)
                     }
+                }
+                if days.days.count > 120 {
+                    Divider()
+                    Text("更早的日期可用左侧箭头逐天回看")
                 }
             } label: {
                 Text(days.label)

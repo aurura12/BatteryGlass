@@ -61,6 +61,13 @@ struct HistoryDaySelection: Equatable {
         canGoNewer ? days[index + 1] : nil
     }
 
+    /// 日期菜单只渲染最近 `limit` 天：多年历史下每次刷新都构建上千个 Button 代价过高，
+    /// 更早的日期仍可用左右箭头逐天回看。
+    func recentMenuDays(limit: Int = 120) -> [Date] {
+        guard limit > 0, days.count > limit else { return days }
+        return Array(days.suffix(limit))
+    }
+
     func label(for day: Date) -> String {
         BatteryFormatters.historyDayLabel(day, now: now, calendar: calendar)
     }

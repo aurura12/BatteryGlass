@@ -127,6 +127,27 @@ final class HistoryDaySelectionTests: XCTestCase {
         return calendar
     }
 
+    func testMenuKeepsOnlyRecentDaysButSelectionStillSeesAll() {
+        let now = date("2026-08-27 12:00:00")
+        let calendar = utcCalendar()
+        let days = (0..<200).map { calendar.date(byAdding: .day, value: -$0, to: calendar.startOfDay(for: now))! }
+        let selection = HistoryDaySelection(days: days, selected: now, now: now, calendar: calendar)
+
+        let menuDays = selection.recentMenuDays(limit: 120)
+        XCTAssertEqual(menuDays.count, 120)
+        XCTAssertEqual(menuDays.last, calendar.startOfDay(for: now))
+        XCTAssertEqual(selection.days.count, 200)
+    }
+
+    func testMenuReturnsEveryDayWhenBelowLimit() {
+        let now = date("2026-08-27 12:00:00")
+        let calendar = utcCalendar()
+        let days = (0..<5).map { calendar.date(byAdding: .day, value: -$0, to: calendar.startOfDay(for: now))! }
+        let selection = HistoryDaySelection(days: days, selected: now, now: now, calendar: calendar)
+
+        XCTAssertEqual(selection.recentMenuDays(), selection.days)
+    }
+
     private func date(_ string: String) -> Date {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
