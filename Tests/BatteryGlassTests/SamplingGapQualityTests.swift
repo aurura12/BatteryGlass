@@ -178,6 +178,38 @@ final class SamplingGapQualityTests: XCTestCase {
         XCTAssertEqual(todaySummary(in: store)?.energyQuality?.hasSamplingGaps, false)
     }
 
+    func testOvernightGapFlagsBothTheDepartureDayAndToday() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let (settings, defaults, suiteName) = makeSettings()
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(
+                at: fileURL.deletingPathExtension().appendingPathExtension("sqlite")
+            )
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        // 昨晚 22:50 退出，今早 09:00 启动：中间 10 小时没在记录。
+        let yesterdayEvening = base.addingTimeInterval(-11 * 60 * 60)
+        let yesterdayKey = BatteryFormatters.dayKey(for: yesterdayEvening)
+        var clock = yesterdayEvening
+        let firstRun = makeStore(fileURL: fileURL, settings: settings, now: { clock })
+        firstRun.record(dischargingSnapshot(at: yesterdayEvening, current: -2))
+        firstRun.flush()
+
+        clock = base.addingTimeInterval(-3 * 60 * 60)
+        let secondRun = makeStore(fileURL: fileURL, settings: settings, now: { clock })
+        secondRun.record(dischargingSnapshot(at: clock, current: -2))
+
+        let yesterday = secondRun.allSummaries().first { $0.dayKey == yesterdayKey }
+        XCTAssertEqual(
+            yesterday?.energyQuality?.hasSamplingGaps, true,
+            "跨午夜断点中属于昨天的部分必须标记，否则昨天会一直显示为完整"
+        )
+        XCTAssertEqual(todaySummary(in: secondRun)?.energyQuality?.hasSamplingGaps, true)
+    }
+
     private func sampleJSON(at date: Date, formatter: ISO8601DateFormatter) -> [String: Any] {
         [
             "id": UUID().uuidString,
