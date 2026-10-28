@@ -36,12 +36,14 @@ final class ChartDetailModel {
     var kind: ExpandedChart = .power
     /// 当前查看的日期（当天 00:00）。
     var selectedDay: Date = Calendar.current.startOfDay(for: Date())
+    /// 窗口是否真的在屏幕上（可见且未最小化）。关闭或最小化后视图停止重新加载曲线数据。
+    var isVisible = false
 }
 
 /// 放大窗口内的曲线视图。
 ///
-/// 自行从 `BatteryHistoryStore` 取样本并记忆化曲线数据（与面板内各自一份），
-/// 因此窗口开着时会随新样本实时刷新。窗口内可切换曲线，并用左右箭头逐天回看。
+/// 样本通过 `BatteryHistoryStore.samplesAsync(forDay:)` 在持久化队列上读取，`body`
+/// 不再同步查 SQLite；只有窗口可见时才按采样节拍重新加载，关闭或最小化后完全停止。
 struct ChartDetailView: View {
     @Environment(BatteryHistoryStore.self) private var history
     let model: ChartDetailModel
@@ -50,13 +52,36 @@ struct ChartDetailView: View {
 
     @State private var chartCache = PowerChartDataCache()
     @State private var levelChartCache = BatteryLevelChartDataCache()
+    /// 可选日期与当前日期样本，由 `reload()` 异步填充。
+    @State private var availableDays: [Date] = []
+    @State private var samples: [HistorySample] = []
+    /// `samples` 当前对应的日期；换日时先清空，避免用旧一天的曲线配新一天的时间轴。
+    @State private var loadedDay: Date?
+
+    /// 重新加载的条件：日期、可见性、热层样本与归档索引。
+    /// 不可见时刻意不读取热层计数，避免后台采样持续触发视图重算。
+    private struct ReloadKey: Equatable {
+        var day: Date
+        var isVisible: Bool
+        var liveCount: Int
+        var liveLastID: UUID?
+        var archivedDayCount: Int
+    }
+
+    private var reloadKey: ReloadKey {
+        let visible = model.isVisible
+        return ReloadKey(
+            day: model.selectedDay,
+            isVisible: visible,
+            liveCount: visible ? history.samples.count : 0,
+            liveLastID: visible ? history.samples.last?.id : nil,
+            archivedDayCount: visible ? history.archivedDays.count : 0
+        )
+    }
 
     /// 可选日期与前后一天导航。
     private var daySelection: HistoryDaySelection {
-        HistoryDaySelection(
-            days: history.availableDays(),
-            selected: model.selectedDay
-        )
+        HistoryDaySelection(days: availableDays, selected: model.selectedDay)
     }
 
     private var kindSelection: Binding<ExpandedChart> {
@@ -71,7 +96,6 @@ struct ChartDetailView: View {
 
     var body: some View {
         let days = daySelection
-        let samples = history.samples(forDay: days.selected)
 
         return VStack(alignment: .leading, spacing: DesignTokens.spacingS) {
             HStack(spacing: DesignTokens.spacingM) {
@@ -99,6 +123,21 @@ struct ChartDetailView: View {
         }
         .padding(DesignTokens.spacingL)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task(id: reloadKey) { await reload() }
+    }
+
+    /// 异步加载当前日期的样本。窗口不可见时直接返回，关闭状态下不产生任何查询。
+    private func reload() async {
+        guard model.isVisible else { return }
+        availableDays = history.availableDays()
+        let day = model.selectedDay
+        if loadedDay != day {
+            samples = []
+            loadedDay = day
+        }
+        let loaded = await history.samplesAsync(forDay: day)
+        guard !Task.isCancelled, model.selectedDay == day else { return }
+        samples = loaded
     }
 
     /// 日期导航：`◀  8/25  ▶`，点中间日期弹出菜单直接跳到某天。

@@ -299,6 +299,39 @@ final class BatteryHistoryStore {
         return cachedMergedSamples
     }
 
+    /// 异步读取某天样本：归档查询在持久化队列执行，避免放大窗口在 `body` 里同步等待
+    /// 写事务（归档导入或 `history.json` 原子替换期间最长可阻塞 `busy_timeout`）。
+    /// 结果写回与同步路径相同的缓存，持续刷新时不会重复解码。
+    func samplesAsync(forDay day: Date) async -> [HistorySample] {
+        let start = Calendar.current.startOfDay(for: day)
+        if cachedArchiveDay != start {
+            let archive = self.archive
+            let loaded: [HistorySample]? = await withCheckedContinuation { continuation in
+                persistenceQueue.async {
+                    do {
+                        continuation.resume(returning: try archive.samples(forDay: start))
+                    } catch {
+                        NSLog("BatteryGlass: 曲线异步读取失败 - %@", error.localizedDescription)
+                        continuation.resume(returning: nil)
+                    }
+                }
+            }
+            guard let loaded else {
+                // 读取失败时只展示热层样本，不回落到主线程同步查询。
+                return HistoryRetention.retainedSamples(
+                    HistoryRetention.samples(forDay: start, from: samples),
+                    now: currentDate(),
+                    retentionDays: nil,
+                    olderResolution: Self.olderSampleResolution
+                )
+            }
+            cachedArchiveSamples = loaded
+            cachedArchiveDay = start
+            cachedLiveCount = -1
+        }
+        return samples(forDay: start)
+    }
+
     /// Export explicitly reads the complete archive; normal charting only reads one day.
     func allCurveSamples() throws -> [HistorySample] {
         let archived = try persistenceQueue.sync { try archive.allSamples() }

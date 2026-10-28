@@ -622,6 +622,36 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testSamplesAsyncLoadsArchivedDayWithoutBlockingMainThread() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: fileURL.deletingPathExtension().appendingPathExtension("sqlite"))
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        var now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 60 * 60)
+        let yesterdayNoon = now.addingTimeInterval(-24 * 60 * 60)
+        let store = BatteryHistoryStore(settings: settings, fileURL: fileURL, now: { now })
+        for index in 0..<3 {
+            now = now.addingTimeInterval(5)
+            store.record(snapshot(at: yesterdayNoon.addingTimeInterval(Double(index) * 5), cycleCount: index))
+        }
+        store.flush()
+
+        let asyncStore = BatteryHistoryStore(settings: settings, fileURL: fileURL, now: { now })
+        let loaded = await asyncStore.samplesAsync(forDay: yesterdayNoon)
+
+        let syncStore = BatteryHistoryStore(settings: settings, fileURL: fileURL, now: { now })
+        let expected = syncStore.samples(forDay: yesterdayNoon)
+        XCTAssertFalse(expected.isEmpty)
+        XCTAssertEqual(loaded.map { $0.id }, expected.map { $0.id })
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

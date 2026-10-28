@@ -12,6 +12,7 @@ final class ChartWindowController {
     @ObservationIgnored private let history: BatteryHistoryStore
     @ObservationIgnored private let model = ChartDetailModel()
     @ObservationIgnored private var window: NSWindow?
+    @ObservationIgnored private let visibilityDelegate = ChartWindowVisibilityDelegate()
 
     private static let autosaveName = "BatteryGlass.chartWindow"
     private static let defaultSize = NSSize(width: 1_000, height: 600)
@@ -25,6 +26,7 @@ final class ChartWindowController {
     func show(_ kind: ExpandedChart) {
         model.kind = kind
         model.selectedDay = Calendar.current.startOfDay(for: Date())
+        model.isVisible = true
         let window = window ?? makeWindow()
         self.window = window
         window.title = kind.title(day: model.selectedDay)
@@ -53,6 +55,11 @@ final class ChartWindowController {
             .environment(history)
         )
 
+        visibilityDelegate.onChange = { [weak self] visible in
+            self?.model.isVisible = visible
+        }
+        window.delegate = visibilityDelegate
+
         // 有历史记录时按上次的位置与大小恢复；没有记录则保持默认尺寸与居中位置。
         window.setFrameAutosaveName(Self.autosaveName)
         ensureOnScreen(window)
@@ -65,5 +72,29 @@ final class ChartWindowController {
         guard !isVisible else { return }
         window.setContentSize(Self.defaultSize)
         window.center()
+    }
+}
+
+/// 把窗口的关闭 / 最小化 / 遮挡状态同步给 `ChartDetailModel.isVisible`。
+/// 视图据此停止在后台按采样节拍重算整日曲线。
+@MainActor
+private final class ChartWindowVisibilityDelegate: NSObject, NSWindowDelegate {
+    var onChange: ((Bool) -> Void)?
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        onChange?(false)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        onChange?(true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onChange?(false)
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        onChange?(window.occlusionState.contains(.visible))
     }
 }
