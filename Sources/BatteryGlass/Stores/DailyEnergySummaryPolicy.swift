@@ -21,6 +21,11 @@ enum DailyEnergySummaryPolicy {
 
             var updated = summary
             updated.energyKWh = energy
+            // 这一天已用全精度样本重算，旧口径的「来源未知」不再成立；
+            // 否则加载时种下的橙色提示会永久跟随该日，与「结论可随样本补齐消除」相悖。
+            if updated.energyQuality?.hasUnknownHistoricalCoverage == true {
+                updated.energyQuality?.hasUnknownHistoricalCoverage = false
+            }
             return updated
         }
     }

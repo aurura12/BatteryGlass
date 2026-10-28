@@ -33,6 +33,23 @@ final class DailyEnergySummaryPolicyTests: XCTestCase {
         XCTAssertEqual(result.last?.energyKWh, 0.25)
     }
 
+    func testAuthoritativeRecalculationClearsLegacyUnknownCoverage() {
+        var allowed = summary(dayKey: "2026-08-28", energy: 0.5, sampleCount: 10)
+        allowed.energyQuality = DailyEnergyQuality(hasUnknownHistoricalCoverage: true)
+        var skipped = summary(dayKey: "2026-08-27", energy: 0.5, sampleCount: 10)
+        skipped.energyQuality = DailyEnergyQuality(hasUnknownHistoricalCoverage: true)
+
+        let result = DailyEnergySummaryPolicy.reconcile(
+            summaries: [skipped, allowed],
+            recalculatedEnergy: ["2026-08-27": 0.4, "2026-08-28": 0.4],
+            allowedDayKeys: ["2026-08-28"]
+        )
+
+        XCTAssertEqual(result.first?.energyQuality?.hasUnknownHistoricalCoverage, true)
+        XCTAssertEqual(result.last?.energyQuality?.hasUnknownHistoricalCoverage, false)
+        XCTAssertEqual(result.last?.energyKWh, 0.4)
+    }
+
     func testSummaryRetentionKeepsAllDays() {
         let oldSummary = summary(dayKey: "2020-01-01", energy: 1, sampleCount: 10)
 
