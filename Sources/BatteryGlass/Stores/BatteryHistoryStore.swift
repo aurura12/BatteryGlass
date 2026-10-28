@@ -344,12 +344,51 @@ final class BatteryHistoryStore {
         return mergedSamples(archived, samples)
     }
 
+    /// 导出的异步版本：全量读取归档、解码、去重与排序都在持久化队列执行，主线程只取一次
+    /// 热层快照。多年按分钟归档时同步版本会让设置页在读取期间整段卡死。
+    /// 快照取到样本的先后不影响正确性：读取期间新追加的样本至多让导出少最后几秒的数据。
+    func allCurveSamplesAsync() async throws -> [HistorySample] {
+        let live = samples
+        let now = currentDate()
+        let olderResolution = Self.olderSampleResolution
+        let archive = self.archive
+        return try await withCheckedThrowingContinuation { continuation in
+            persistenceQueue.async {
+                do {
+                    let archived = try archive.allSamples()
+                    continuation.resume(
+                        returning: Self.mergedSamples(
+                            archive: archived, live: live,
+                            now: now, olderResolution: olderResolution
+                        )
+                    )
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     private func mergedSamples(_ archived: [HistorySample], _ live: [HistorySample]) -> [HistorySample] {
-        var byID = Dictionary(archived.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        Self.mergedSamples(
+            archive: archived, live: live,
+            now: currentDate(), olderResolution: Self.olderSampleResolution
+        )
+    }
+
+    /// 归档与热层样本的合并（去重 + 按保留策略降采样）。纯计算，导出时放到持久化队列执行，
+    /// 避免把几十万条样本的字典与排序压在主线程上。
+    nonisolated private static func mergedSamples(
+        archive: [HistorySample],
+        live: [HistorySample],
+        now: Date,
+        olderResolution: TimeInterval
+    ) -> [HistorySample] {
+        var byID = Dictionary(archive.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         for sample in live { byID[sample.id] = sample }
         return HistoryRetention.retainedSamples(
-            Array(byID.values), now: currentDate(), retentionDays: nil,
-            olderResolution: Self.olderSampleResolution
+            Array(byID.values), now: now, retentionDays: nil,
+            olderResolution: olderResolution
         )
     }
 

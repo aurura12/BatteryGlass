@@ -2,6 +2,36 @@ import Foundation
 
 /// 历史数据导出：纯函数生成 CSV / JSON 文本，便于单元测试。
 enum HistoryExporter {
+    /// 导出文件格式。
+    enum ExportFormat {
+        case csv
+        case json
+    }
+
+    /// 生成并写入导出文件。编码与写盘都是 CPU/IO 密集操作，调用方应放在后台执行。
+    static func write(
+        _ format: ExportFormat,
+        samples: [HistorySample],
+        dailySummaries: [DailySummary],
+        sleepSegments: [SleepSegment] = [],
+        sleepIntervals: [SleepInterval] = [],
+        to url: URL
+    ) throws {
+        switch format {
+        case .csv:
+            let content = csvString(samples: samples, dailySummaries: dailySummaries)
+            try content.write(to: url, atomically: true, encoding: .utf8)
+        case .json:
+            let data = try jsonData(
+                samples: samples,
+                dailySummaries: dailySummaries,
+                sleepSegments: sleepSegments,
+                sleepIntervals: sleepIntervals
+            )
+            try data.write(to: url, options: .atomic)
+        }
+    }
+
     /// 生成包含长期曲线采样与完整每日汇总的 CSV。
     static func csvString(
         samples: [HistorySample],

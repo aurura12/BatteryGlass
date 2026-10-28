@@ -3,6 +3,20 @@ import XCTest
 @testable import BatteryGlass
 
 final class HistoryExporterTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlassExport-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let directory {
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+
     private func makeSample(
         timestamp: Date = Date(timeIntervalSince1970: 1_700_000_000),
         power: Double = 12.34,
@@ -81,6 +95,42 @@ final class HistoryExporterTests: XCTestCase {
         XCTAssertThrowsError(
             try HistoryExporter.jsonString(samples: [sample], dailySummaries: [])
         )
+    }
+
+    func testWriteCSVProducesHeaderAndSampleRows() throws {
+        let url = directory.appendingPathComponent("history.csv")
+        try HistoryExporter.write(.csv, samples: [makeSample()], dailySummaries: [], to: url)
+
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(text.split(separator: "\n").count, 2)
+        XCTAssertTrue(text.hasPrefix("类型,时间,"))
+    }
+
+    func testWriteJSONProducesDecodablePayload() throws {
+        let url = directory.appendingPathComponent("history.json")
+        try HistoryExporter.write(.json, samples: [makeSample()], dailySummaries: [], to: url)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(ExportPayloadFixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(payload.version, 8)
+        XCTAssertEqual(payload.samples.count, 1)
+        XCTAssertEqual(payload.samples.first?.cycleCount, 42)
+    }
+
+    /// 编码失败时不能碰目标文件：导出是在保存面板选好的路径上直接写，失败后不应留下半份或空文件。
+    func testWriteJSONKeepsExistingFileWhenEncodingFails() throws {
+        let url = directory.appendingPathComponent("history.json")
+        let original = Data("existing".utf8)
+        try original.write(to: url)
+
+        var sample = makeSample()
+        sample.power = .nan
+
+        XCTAssertThrowsError(
+            try HistoryExporter.write(.json, samples: [sample], dailySummaries: [], to: url)
+        )
+        XCTAssertEqual(try Data(contentsOf: url), original)
     }
 
     func testJSONRoundTripsSamplesAndSummaries() throws {

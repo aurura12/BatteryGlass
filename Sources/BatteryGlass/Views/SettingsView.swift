@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var showingLoginItemUnconfirmedAlert = false
     @State private var showingLoginItemErrorAlert = false
     @State private var showingExportErrorAlert = false
+    @State private var isExporting = false
     @State private var showingClearHistoryFailedAlert = false
 
     var body: some View {
@@ -154,6 +155,15 @@ struct SettingsView: View {
                 } label: {
                     Label("导出历史数据", systemImage: "square.and.arrow.up")
                 }
+                .disabled(isExporting)
+                if isExporting {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("正在导出…")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
 
                 Toggle("记录电源诊断日志", isOn: $settings.powerDiagnosticsLoggingEnabled)
                 Text("启用后每秒记录一次原始功率遥测和应用计算结果，保留当前日志和上一份日志，合计最多约 10 MB。")
@@ -288,6 +298,8 @@ struct SettingsView: View {
 
     /// 导出历史数据：CSV 或 JSON，通过保存面板选择目标位置。
     private func exportHistory(asCSV: Bool) {
+        guard !isExporting else { return }
+
         let panel = NSSavePanel()
         if asCSV {
             panel.allowedContentTypes = [.commaSeparatedText]
@@ -298,26 +310,31 @@ struct SettingsView: View {
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let samples = try history.allCurveSamples()
-            if asCSV {
-                let content = HistoryExporter.csvString(
-                    samples: samples,
-                    dailySummaries: history.dailySummaries
-                )
-                try content.write(to: url, atomically: true, encoding: .utf8)
-            } else {
-                // 直接写编码结果：省掉 String 往返的一份内存，也让编码失败真正走进 catch。
-                let data = try HistoryExporter.jsonData(
-                    samples: samples,
-                    dailySummaries: history.dailySummaries,
-                    sleepSegments: history.sleepSegments,
-                    sleepIntervals: history.sleepIntervals
-                )
-                try data.write(to: url, options: .atomic)
+        // 值快照：汇总与睡眠数据很小，先在主线程取好；样本由 store 在持久化队列读取。
+        let summaries = history.dailySummaries
+        let sleepSegments = history.sleepSegments
+        let sleepIntervals = history.sleepIntervals
+        let format: HistoryExporter.ExportFormat = asCSV ? .csv : .json
+
+        isExporting = true
+        Task { @MainActor in
+            defer { isExporting = false }
+            do {
+                let samples = try await history.allCurveSamplesAsync()
+                // 编码与写盘都离开主线程：多年按分钟归档时，光是 JSON 编码就能让面板卡住数秒。
+                try await Task.detached(priority: .userInitiated) {
+                    try HistoryExporter.write(
+                        format,
+                        samples: samples,
+                        dailySummaries: summaries,
+                        sleepSegments: sleepSegments,
+                        sleepIntervals: sleepIntervals,
+                        to: url
+                    )
+                }.value
+            } catch {
+                showingExportErrorAlert = true
             }
-        } catch {
-            showingExportErrorAlert = true
         }
     }
 }

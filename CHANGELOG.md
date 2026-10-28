@@ -6,10 +6,12 @@
 
 ### 新增
 - 新增可自定义主题色：设置页「外观」分节提供 6 个预设色块与自定义取色器，选择结果以 `#RRGGBB` 持久化到 UserDefaults（`themeAccentHex`）。主题色经环境值 `\.themeAccent` 注入面板、放大窗口与桌面小组件，替换原先固定的数据蓝：曲线与填充、强调数值、系统直供指示、循环进度条、玻璃光晕跟随主题；充电绿与低电量黄/红等语义色保持不变。默认值仍为 `#127AF5`，未设置时外观与旧版本一致；原先仅电池放电使用的 `dischargeBlue` 一并并入主题色。（`Support/ThemeAccent.swift`、`Stores/AppSettings.swift`、`Views/SettingsView.swift`、`Support/BatteryStyling.swift`、`Support/DesignTokens.swift`、`Views/DashboardView.swift`、`Views/LiveDashboardView.swift`、`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`Views/DesktopWidgetView.swift`、`Views/FluidGlassBackground.swift`、`Services/ChartWindowController.swift`、`App/BatteryGlassApp.swift`、`Tests/BatteryGlassTests/ThemeAccentTests.swift`）
+- 补导出写盘测试：`HistoryExporter.write` 覆盖 CSV 表头与行数、JSON 可解码，以及编码失败时目标文件保持原样；`LongTermHistoryTests` 新增「异步导出与同步导出结果逐条一致」。（`Tests/BatteryGlassTests/HistoryExporterTests.swift`、`Tests/BatteryGlassTests/LongTermHistoryTests.swift`）
 - 补电源诊断日志轮换测试：把日志目录、文件名、大小阈值与节流间隔改为可在 `init` 注入（默认单例仍写 `~/Library/Application Support/BatteryGlass/power-diagnostics.jsonl`，行为不变），新增 `PowerDiagnosticsLoggerTests` 用临时目录验证逐条追加、超限时先轮换再写、以及连续轮换只保留一份备份。此前这段逻辑零覆盖——测试若走默认路径会污染真实日志。（`Services/PowerDiagnosticsLogger.swift`、`Tests/BatteryGlassTests/PowerDiagnosticsLoggerTests.swift`）
 - 新增跨午夜断点的回归测试：昨晚退出、今早启动时，22:50→00:00 与 00:00→09:00 两段分别记入昨天和今天的质量标记。核查确认现有实现（`recordUnaccountedTime` 按 `daySegments` 拆天）已正确处理该场景，无需改动业务代码。
 
 ### 优化
+- 导出历史不再占用主线程：原先设置页在 `NSSavePanel` 回调里同步读取整个 `history.sqlite`（按分钟归档，一年约 52 万行），再在主线程完成 CSV/JSON 编码与写盘，导出期间设置页完全无法响应。现在新增 `allCurveSamplesAsync()`——归档读取、解码、去重与排序都在持久化队列执行，主线程只取一次热层快照；编码与写盘交给 `Task.detached`。导出期间菜单禁用并显示「正在导出…」，失败仍弹既有提示。（`Stores/BatteryHistoryStore.swift`、`Support/HistoryExporter.swift`、`Views/SettingsView.swift`）
 - 放大窗口不再在主线程同步查 SQLite，也只在可见时刷新：`ChartDetailView` 的 `body` 原先直接调 `samples(forDay:)`（内部 `persistenceQueue.sync`，遇到归档导入或 `history.json` 写盘最长可阻塞 `busy_timeout` 5 秒），且窗口关闭后仍每 5 秒重算整日曲线。现在样本经新增的 `BatteryHistoryStore.samplesAsync(forDay:)` 在持久化队列读取并复用同一套缓存；`ChartDetailModel.isVisible` 由窗口 delegate 同步（关闭、最小化、被遮挡），不可见时视图不读取样本计数也不发起查询，重新显示时补加载。切换日期先清空旧样本，避免旧曲线配新时间轴。（`Views/ChartDetailView.swift`、`Services/ChartWindowController.swift`、`Stores/BatteryHistoryStore.swift`）
 - 曲线悬停不再按指针频率重算整图：原先把光标位置写入 `@State`，鼠标每移动一像素就重跑睡眠过滤、断点切分与降采样（10 分钟窗口约 1.4k 样本、每次数万次比较）。现在只在吸附样本切换时更新悬停状态，并把「可见段 / 降采样结果」与「电量图填充 / 缺口连线 / Y 域」分别记忆化为 `PowerChartSegmentCache`、`BatteryLevelSegmentCache`——窗口与样本不变时直接复用，悬停只插入高亮点。切换日期时一并清除悬停状态，修复放大窗口按天回看时 tooltip 仍显示上一天数据的问题。（`Views/HistoryView.swift`）
 

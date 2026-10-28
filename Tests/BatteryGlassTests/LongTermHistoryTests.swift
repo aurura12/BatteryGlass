@@ -118,6 +118,25 @@ final class LongTermHistoryTests: XCTestCase {
         XCTAssertEqual(reloaded.samples(forDay: midnight.addingTimeInterval(-5)).count, 1)
     }
 
+    func testAsyncExportMatchesSyncExport() async throws {
+        let context = try Context()
+        defer { context.cleanup() }
+        let today = Calendar.current.startOfDay(for: context.now)
+        let yesterday = today.addingTimeInterval(-3 * 3_600)
+        try context.archive.store([
+            sample(at: yesterday),
+            sample(at: yesterday.addingTimeInterval(60)),
+            sample(at: yesterday.addingTimeInterval(120))
+        ])
+        let store = context.makeStore()
+        store.record(snapshot(at: today.addingTimeInterval(10)))
+
+        // 异步路径把归档读取、解码与合并放到持久化队列，结果必须与同步版本逐条一致。
+        let exported = try await store.allCurveSamplesAsync()
+        XCTAssertEqual(exported, try store.allCurveSamples())
+        XCTAssertEqual(exported.count, 4)
+    }
+
     func testArchiveBeyondOldFileAndSampleLimitsLoadsOnlyRequestedDay() throws {
         let context = try Context()
         defer { context.cleanup() }
