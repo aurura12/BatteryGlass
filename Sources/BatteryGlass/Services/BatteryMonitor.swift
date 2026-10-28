@@ -228,8 +228,12 @@ final class BatteryMonitor {
         case .live:
             return true
         case .widget:
-            // 毛玻璃材质的小组件按秒刷新已足够，其余时间仍走下面的变化判定。
-            if secondsSinceLastPublish >= widgetRefreshInterval { return true }
+            // 毛玻璃小组件只在真正显示的内容变化时才重绘，最多每秒一次。
+            // 不足一秒时仍走下面的判定，让插拔/百分比跃迁立即跟上。
+            if secondsSinceLastPublish >= widgetRefreshInterval,
+               Self.widgetDisplayChanged(previous: previous, next: next) {
+                return true
+            }
         case .background:
             break
         }
@@ -249,10 +253,34 @@ final class BatteryMonitor {
         return false
     }
 
+    /// 桌面小组件实际渲染的字段（百分比、状态、功率与剩余时间文本等）。
+    /// 只有这些内容变化才值得重绘一次毛玻璃卡片；待机时功率与百分比不动，
+    /// 就不该跟着每秒采样重新布局。
+    nonisolated static func widgetDisplayChanged(
+        previous: BatterySnapshot,
+        next: BatterySnapshot
+    ) -> Bool {
+        if previous.percentText != next.percentText { return true }
+        if previous.displayState != next.displayState { return true }
+        if previous.powerDisplayStatus != next.powerDisplayStatus { return true }
+        if previous.displayPowerText != next.displayPowerText { return true }
+        if previous.adapterConnected != next.adapterConnected { return true }
+        if previous.adapterWatts != next.adapterWatts { return true }
+        if previous.healthText != next.healthText { return true }
+        if previous.cycleCount != next.cycleCount { return true }
+        let previousTime = BatteryFormatters.menuBarTimeRemaining(previous.displayTimeRemaining)
+        let nextTime = BatteryFormatters.menuBarTimeRemaining(next.displayTimeRemaining)
+        return previousTime != nextTime
+    }
+
     private func publish(_ s: BatterySnapshot) {
         lastPublishAt = s.timestamp
         snapshot = s
-        recentPower = powerBuffer
+        // 面板关闭时 recentPower 没有消费者（实时页已冻结），赋值只会让
+        // 下一次 append 多拷一份缓冲，并让离屏视图继续建立观察依赖。
+        if panelVisible {
+            recentPower = powerBuffer
+        }
     }
 
     private func publishIfNeeded(_ s: BatterySnapshot) {

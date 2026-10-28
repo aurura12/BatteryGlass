@@ -18,6 +18,9 @@ struct DashboardView: View {
     /// 承载面板的窗口是否真正可见。面板关闭后 MenuBarExtra 只把窗口 order out，
     /// 内容视图仍存活，需要据此暂停持续动画，否则离屏窗口会被反复布局（见 `PanelVisibilityObserver`）。
     @State private var panelVisible = false
+    /// 面板关闭时冻结的实时页数据。离屏内容改为读取这份快照，
+    /// 不再订阅 `BatteryMonitor`（否则每秒发布都会重算整页 KPI 卡片）。
+    @State private var frozenDashboard: DashboardFrozenState?
 
     private var tab: PanelTab {
         get { PanelTab(rawValue: tabRaw) ?? .live }
@@ -34,7 +37,7 @@ struct DashboardView: View {
     var body: some View {
         GlassContainerIfAvailable {
             VStack(spacing: DashboardLayout.sectionSpacing) {
-                DashboardHeader()
+                DashboardHeader(renderedSnapshot: frozenDashboard?.snapshot)
 
                 AnimatedSegmentedControl(
                     items: PanelTab.allCases,
@@ -53,13 +56,19 @@ struct DashboardView: View {
                         Group {
                             if usesScrollFallback {
                                 ScrollView {
-                                    LiveDashboardView()
+                                    LiveDashboardView(
+                                        renderedSnapshot: frozenDashboard?.snapshot,
+                                        renderedPower: frozenDashboard?.recentPower
+                                    )
                                         .padding(.vertical, DashboardLayout.contentInset)
                                 }
                                 .scrollIndicators(.hidden)
                             } else {
-                                LiveDashboardView()
-                                    .padding(.vertical, DashboardLayout.contentInset)
+                                LiveDashboardView(
+                                    renderedSnapshot: frozenDashboard?.snapshot,
+                                    renderedPower: frozenDashboard?.recentPower
+                                )
+                                .padding(.vertical, DashboardLayout.contentInset)
                             }
                         }
                         .transition(pageTransition)
@@ -74,10 +83,22 @@ struct DashboardView: View {
             }
             .padding(DashboardLayout.panelPadding)
             .background {
-                DashboardPanelBackground(isAnimated: tab == .live && panelVisible)
+                DashboardPanelBackground(
+                    isAnimated: tab == .live && panelVisible,
+                    renderedSnapshot: frozenDashboard?.snapshot
+                )
             }
             .background {
                 PanelVisibilityObserver { visible in
+                    // 先冻结再切到隐藏态：隐藏后的第一帧就只读快照，不再订阅 monitor。
+                    if visible {
+                        frozenDashboard = nil
+                    } else {
+                        frozenDashboard = DashboardFrozenState(
+                            snapshot: monitor.snapshot,
+                            recentPower: monitor.recentPower
+                        )
+                    }
                     panelVisible = visible
                     // 采样频率与界面发布频率跟随可见性：离屏时不再 2 Hz 重算视图图。
                     monitor.setPanelVisible(visible)
@@ -140,14 +161,18 @@ struct DashboardView: View {
 private struct DashboardHeader: View {
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(\.themeAccent) private var themeAccent
+    /// 非 nil 表示面板已离屏：只读冻结快照，不订阅 `BatteryMonitor`。
+    var renderedSnapshot: BatterySnapshot?
+
+    private var snapshot: BatterySnapshot { renderedSnapshot ?? monitor.snapshot }
 
     private var tint: Color {
-        BatteryStyling.tint(for: monitor.snapshot, accent: themeAccent)
+        BatteryStyling.tint(for: snapshot, accent: themeAccent)
     }
 
     var body: some View {
         HStack(spacing: DesignTokens.spacingS) {
-            AppMarkView(snapshot: monitor.snapshot)
+            AppMarkView(snapshot: snapshot)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("BatteryGlass")
@@ -174,11 +199,11 @@ private struct DashboardHeader: View {
     }
 
     private var stateShortLabel: String {
-        monitor.snapshot.displayState.rawValue
+        snapshot.displayState.rawValue
     }
 
     private var statusText: String {
-        monitor.snapshot.displayStatusText
+        snapshot.displayStatusText
     }
 }
 
@@ -187,15 +212,27 @@ private struct DashboardPanelBackground: View {
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(AppSettings.self) private var settings
     let isAnimated: Bool
+    /// 非 nil 表示面板已离屏：背景光晕跟随冻结快照，不再按采样节拍重算。
+    var renderedSnapshot: BatterySnapshot?
+
+    private var snapshot: BatterySnapshot { renderedSnapshot ?? monitor.snapshot }
 
     var body: some View {
         FluidGlassBackground(
-            colors: BatteryStyling.gradient(for: monitor.snapshot, accent: settings.themeAccent.color),
+            colors: BatteryStyling.gradient(for: snapshot, accent: settings.themeAccent.color),
             intensity: settings.animationIntensity,
             speed: settings.animationSpeed,
             isAnimated: isAnimated
         )
     }
+}
+
+
+/// 面板关闭时冻结的实时页数据：快照与功率缓冲一起保存，
+/// 保证离屏内容与最后一次可见时完全一致。
+private struct DashboardFrozenState {
+    var snapshot: BatterySnapshot
+    var recentPower: [PowerSample]
 }
 
 /// 应用品牌标记：渐变圆角徽章 + 闪电。

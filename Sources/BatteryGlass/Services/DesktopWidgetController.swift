@@ -86,6 +86,8 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
             createWindow()
         }
         window?.orderFrontRegardless()
+        // 先按可见上报，等窗口服务器给出真实的遮挡状态再修正（见 windowDidChangeOcclusionState）。
+        // 被普通窗口完全盖住时不必每秒重绘毛玻璃卡片。
         monitor.setDesktopWidgetVisible(true)
     }
 
@@ -143,6 +145,14 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
         frame.size = size
         frame.origin = CGPoint(x: topRight.x - size.width, y: topRight.y - size.height)
         window.setFrame(frame, display: true)
+    }
+
+    /// 小组件被其他窗口完全遮挡（或在别的 Space）时，`BatteryMonitor` 无需按秒发布：
+    /// 窗口重新露出来时会再次收到该通知，随即恢复刷新。
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window,
+              (notification.object as? NSWindow) === window else { return }
+        monitor.setDesktopWidgetVisible(window.occlusionState.contains(.visible))
     }
 
     func windowDidMove(_ notification: Notification) {

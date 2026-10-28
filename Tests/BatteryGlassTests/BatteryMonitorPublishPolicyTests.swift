@@ -157,10 +157,39 @@ final class BatteryMonitorPublishPolicyTests: XCTestCase {
         )
     }
 
-    /// 只有小组件在屏幕上时按秒发布，不再跟 2 Hz 采样。
-    func testWidgetModePublishesAtMostOncePerSecond() {
+    /// 只有小组件在屏幕上时，显示内容没变就不重绘毛玻璃卡片。
+    func testWidgetModeSkipsRedrawWhenDisplayedContentIsUnchanged() {
         let previous = snapshot(percent: 80)
         let next = snapshot(percent: 80)
+
+        XCTAssertFalse(
+            BatteryMonitor.shouldPublish(
+                previous: previous,
+                next: next,
+                mode: .widget,
+                menuBarMode: .percent,
+                secondsSinceLastPublish: 0.5
+            )
+        )
+        XCTAssertFalse(
+            BatteryMonitor.shouldPublish(
+                previous: previous,
+                next: next,
+                mode: .widget,
+                menuBarMode: .percent,
+                secondsSinceLastPublish: BatteryMonitor.widgetRefreshInterval
+            )
+        )
+    }
+
+    /// 小组件显示功率（0.1 W）变化时才按秒重绘。
+    func testWidgetModePublishesWhenDisplayedPowerChanges() {
+        var previous = snapshot(percent: 80)
+        previous.voltage = 12
+        previous.current = -0.70
+        var next = snapshot(percent: 80)
+        next.voltage = 12
+        next.current = -0.71
 
         XCTAssertFalse(
             BatteryMonitor.shouldPublish(

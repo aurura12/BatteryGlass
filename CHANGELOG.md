@@ -4,6 +4,12 @@
 
 ## [2026-10-28]
 
+
+### 优化
+- 桌面小组件只在显示内容变化时重绘，并跟随真实遮挡状态：`BatteryMonitor.shouldPublish` 的 `.widget` 分支原先每满 1 秒就无条件发布，即使百分比、功率与剩余时间都没变；现在改为比较小组件实际渲染的字段（百分比、状态、功率文本、剩余时间文本、适配器、健康度、循环次数），内容不变就不重绘，插拔等状态跃迁仍可立即发布。`DesktopWidgetController` 新增 `windowDidChangeOcclusionState`，小组件被其他窗口完全盖住（或在别的 Space）时上报不可见，`BatteryMonitor` 随即退回 `.background` 档，窗口重新露出时自动恢复。实测空闲（面板关闭、小组件被其他窗口遮挡）CPU 由约 2.0% 降到约 0.55%（60 秒 CPU 时间增量 1.18 s → 0.33 s）；30 秒心跳仍会在遮挡期间兜底刷新。（`Services/BatteryMonitor.swift`、`Services/DesktopWidgetController.swift`）
+- 面板离屏时冻结实时页：`DashboardView` 在面板关闭时保存最后一份 `BatterySnapshot` 与 `recentPower`，`LiveDashboardView` / `DashboardHeader` / `DashboardPanelBackground` 通过可选参数读取冻结数据——非 nil 时不再读取 `BatteryMonitor`（`??` 的惰性求值保证不建立观察依赖），离屏内容不再随每秒发布重算 4 张 KPI 卡片、功率趋势、指标网格与玻璃光晕；面板重新打开时清除冻结值并立即发布最新快照。`publish` 也只在面板可见时写 `recentPower`，避免无消费者的赋值触发离屏视图与数组拷贝。（`Views/DashboardView.swift`、`Views/LiveDashboardView.swift`、`Services/BatteryMonitor.swift`）
+- 补发布策略测试：小组件显示内容不变时满 1 秒仍不发布、功率文本（0.1 W）变化时发布、不足 1 秒的功率抖动不发布；原「每秒必发布」用例改为新语义。（`Tests/BatteryGlassTests/BatteryMonitorPublishPolicyTests.swift`）
+
 ### 新增
 - 新增可自定义主题色：设置页「外观」分节提供 6 个预设色块与自定义取色器，选择结果以 `#RRGGBB` 持久化到 UserDefaults（`themeAccentHex`）。主题色经环境值 `\.themeAccent` 注入面板、放大窗口与桌面小组件，替换原先固定的数据蓝：曲线与填充、强调数值、系统直供指示、循环进度条、玻璃光晕跟随主题；充电绿与低电量黄/红等语义色保持不变。默认值仍为 `#127AF5`，未设置时外观与旧版本一致；原先仅电池放电使用的 `dischargeBlue` 一并并入主题色。（`Support/ThemeAccent.swift`、`Stores/AppSettings.swift`、`Views/SettingsView.swift`、`Support/BatteryStyling.swift`、`Support/DesignTokens.swift`、`Views/DashboardView.swift`、`Views/LiveDashboardView.swift`、`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`Views/DesktopWidgetView.swift`、`Views/FluidGlassBackground.swift`、`Services/ChartWindowController.swift`、`App/BatteryGlassApp.swift`、`Tests/BatteryGlassTests/ThemeAccentTests.swift`）
 - 补导出写盘测试：`HistoryExporter.write` 覆盖 CSV 表头与行数、JSON 可解码，以及编码失败时目标文件保持原样；`LongTermHistoryTests` 新增「异步导出与同步导出结果逐条一致」。（`Tests/BatteryGlassTests/HistoryExporterTests.swift`、`Tests/BatteryGlassTests/LongTermHistoryTests.swift`）

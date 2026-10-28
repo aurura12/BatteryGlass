@@ -2,6 +2,13 @@ import SwiftUI
 
 struct LiveDashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
+    /// 面板离屏时传入最后一份数据；非 nil 时整页不再订阅 `BatteryMonitor`，
+    /// 避免离屏内容随每秒发布重算 4 张 KPI 卡片、功率趋势与指标网格。
+    var renderedSnapshot: BatterySnapshot?
+    var renderedPower: [PowerSample]?
+
+    private var snapshot: BatterySnapshot { renderedSnapshot ?? monitor.snapshot }
+    private var powerSamples: [PowerSample] { renderedPower ?? monitor.recentPower }
 
     var body: some View {
         VStack(spacing: DashboardLayout.contentSpacing) {
@@ -12,22 +19,22 @@ struct LiveDashboardView: View {
                 ],
                 spacing: DashboardLayout.contentSpacing
             ) {
-                BatteryPercentCard(snapshot: monitor.snapshot)
-                PowerKpiCard(snapshot: monitor.snapshot)
-                CycleKpiCard(snapshot: monitor.snapshot)
-                HealthKpiCard(snapshot: monitor.snapshot)
+                BatteryPercentCard(snapshot: snapshot)
+                PowerKpiCard(snapshot: snapshot)
+                CycleKpiCard(snapshot: snapshot)
+                HealthKpiCard(snapshot: snapshot)
             }
 
-            if monitor.snapshot.adapterConnected, monitor.snapshot.displayState != .discharging {
-                AdapterSplitCard(snapshot: monitor.snapshot)
+            if snapshot.adapterConnected, snapshot.displayState != .discharging {
+                AdapterSplitCard(snapshot: snapshot)
             }
 
             PowerTrendCard(
-                samples: monitor.recentPower,
-                snapshot: monitor.snapshot
+                samples: powerSamples,
+                snapshot: snapshot
             )
 
-            MetricsGrid(snapshot: monitor.snapshot)
+            MetricsGrid(snapshot: snapshot)
         }
     }
 }
