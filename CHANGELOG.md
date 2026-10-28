@@ -37,6 +37,7 @@
 - 睡眠端点必须是完整读数：唤醒瞬间电量计若停在旧值（容量或电压为 0），原实现直接用它做容量差，会把整块电池记成一次睡眠耗电（一次可虚增数十 Wh）。现在 `BatteryMonitor` 新增 `isUsableSleepEndpoint` 校验，唤醒后每 2 秒补采、最多 5 次；仍不可用则只关闭睡眠区间并放弃能耗结算（历史层标为「未测量睡眠」，不再被当作采样缺口）。睡眠起点读数不完整时同样只记区间不结算，且区间边界与测量基线分离，避免唤醒事件缺失时把之后的样本永久排除出能耗积分。`SleepEnergyCalculator` 对非正端点容量直接返回 nil。（`Services/BatteryMonitor.swift`、`Models/SleepEnergyCalculator.swift`）
 
 ### 修改
+- 更新 `CODEBUDDY.md`：同步本轮稳定性与性能修复（deinit 释放资源、`--verify` 新进程校验、小组件位置合并写入、`DesktopWidgetFramePolicy`、历史页隐藏时的快照渲染、日期菜单截断、动态状态色、时间轴二分查找）。
 - 更新 `CODEBUDDY.md`：同步本轮数据正确性修复（归档坏行跳过与失败缓存、迁移备份命名、旧口径标记清除、导出抛错、入睡前刷新基线）。
 - 更新 `CODEBUDDY.md`：同步本轮性能修复（悬停节流与分段缓存、`samplesAsync` 与放大窗口可见性门控）。
 - 更新 `CODEBUDDY.md`：同步本轮数据正确性修复（睡眠端点校验与补采、`openSleepStart` 跨进程恢复、历史读取失败提示与 `clearHistory` 返回值、校准文件留档与 `.saveFailed`）。
