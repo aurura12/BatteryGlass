@@ -63,7 +63,7 @@ final class BatteryLevelChartDataTests: XCTestCase {
         // 锁定整段连续输入必须落到一个 `displayedSegments`：
         // `TodayBatteryLevelChart` 的 `AreaMark` / `LineMark` 共享同一 `series`
         // 才能被 Swift Charts 合并为一条连续填充区域，否则密集样本会被画成
-        // 独立竖条（"梳齿"），见 `HistoryView.swift` TodayBatteryLevelChart
+        // 独立竖条（"梳齿"），见 `HistoryBatteryLevelChart.swift`
         // 注释。
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         let samples = stride(from: 0.0, to: 43_200, by: 5).map { offset in
