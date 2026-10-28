@@ -864,6 +864,10 @@ struct TodayPowerChart: View {
             ? Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)
             : Date.FormatStyle.dateTime.hour(.defaultDigits(amPM: .omitted))
         let marks = axisMarks(in: dateDomain, unit: tickUnit, chartDomain: chartDomain)
+        let marksByPosition = Dictionary(
+            marks.map { ($0.position, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let segments = displaySegments(isZoomed: activeWindow.isZoomed, in: dateDomain)
         let connections = chartData.timeline.connections.filter { chartDomain.contains($0.position) }
         let sliderRange = panRange(for: activeWindow)
@@ -968,8 +972,10 @@ struct TodayPowerChart: View {
                     }
                     .chartXAxis {
                         AxisMarks(values: marks.map(\.position)) { value in
+                            // 优先按位置精确命中（刻度值就是我们传入的 position），
+                            // 只有浮点不一致时才回退到线性最近匹配。
                             if let position = value.as(Double.self),
-                               let mark = marks.min(by: {
+                               let mark = marksByPosition[position] ?? marks.min(by: {
                                    abs($0.position - position) < abs($1.position - position)
                                }) {
                                 AxisGridLine().foregroundStyle(.clear)
@@ -1771,6 +1777,10 @@ struct PowerChartAxisMark: Identifiable {
 struct PowerChartTimeline {
     let breaks: [PowerChartBreak]
     let connections: [PowerChartConnection]
+    /// 每个断点之前的累计压缩时长（`removalPrefix[i]` = breaks[0..<i] 的时长之和）。
+    private let removalPrefix: [TimeInterval]
+    /// 断点在压缩坐标下的起点，随 `removalPrefix` 单调不减，供二分查找。
+    private let breakStartPositions: [Double]
 
     init(segments: [[HistorySample]]) {
         var breaks: [PowerChartBreak] = []
@@ -1799,33 +1809,76 @@ struct PowerChartTimeline {
         }
         self.breaks = breaks
         self.connections = connections
+
+        var prefix: [TimeInterval] = []
+        prefix.reserveCapacity(breaks.count + 1)
+        var startPositions: [Double] = []
+        startPositions.reserveCapacity(breaks.count)
+        var removed: TimeInterval = 0
+        for interval in breaks {
+            prefix.append(removed)
+            startPositions.append(interval.start.timeIntervalSinceReferenceDate - removed)
+            removed += interval.duration
+        }
+        prefix.append(removed)
+        self.removalPrefix = prefix
+        self.breakStartPositions = startPositions
     }
 
     /// Maps wall-clock time onto a chart axis where no-power intervals take no width.
     /// 断点（待机 / 无读数缺口）不占横向空间：落在断点内的时刻全部映射到断点起点，
     /// 曲线在断点处直接跳到下一段，断点位置由轴上的 `//` 标记提示。
     func position(for date: Date) -> Double {
-        var removedDuration: TimeInterval = 0
-        for interval in breaks {
-            if date < interval.start { break }
-            if date <= interval.end {
-                return interval.start.timeIntervalSinceReferenceDate - removedDuration
-            }
-            removedDuration += interval.duration
+        // 断点按起点升序：二分找到最后一个 start <= date 的断点，再判断是否落在断点内。
+        guard let index = lastBreakIndex(startingAtOrBefore: date) else {
+            return date.timeIntervalSinceReferenceDate
         }
-        return date.timeIntervalSinceReferenceDate - removedDuration
+        let interval = breaks[index]
+        if date <= interval.end {
+            return breakStartPositions[index]
+        }
+        return date.timeIntervalSinceReferenceDate - removalPrefix[index + 1]
     }
 
     /// Converts a chart coordinate back to its corresponding wall-clock time.
     /// 落在被跳过的断点上时返回断点结束时刻（曲线在该处恢复）。
     func date(for position: Double) -> Date {
-        var removedDuration: TimeInterval = 0
-        for interval in breaks {
-            let startPosition = interval.start.timeIntervalSinceReferenceDate - removedDuration
-            if position < startPosition { break }
-            removedDuration += interval.duration
+        guard let index = lastBreakIndex(atChartPosition: position) else {
+            return Date(timeIntervalSinceReferenceDate: position)
         }
-        return Date(timeIntervalSinceReferenceDate: position + removedDuration)
+        return Date(timeIntervalSinceReferenceDate: position + removalPrefix[index + 1])
+    }
+
+    private func lastBreakIndex(startingAtOrBefore date: Date) -> Int? {
+        var low = 0
+        var high = breaks.count - 1
+        var result: Int?
+        while low <= high {
+            let mid = (low + high) / 2
+            if breaks[mid].start <= date {
+                result = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return result
+    }
+
+    private func lastBreakIndex(atChartPosition position: Double) -> Int? {
+        var low = 0
+        var high = breakStartPositions.count - 1
+        var result: Int?
+        while low <= high {
+            let mid = (low + high) / 2
+            if breakStartPositions[mid] <= position {
+                result = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return result
     }
 
     /// 真实时间是否落在断点内部（用于跳过断点里的整点刻度）。

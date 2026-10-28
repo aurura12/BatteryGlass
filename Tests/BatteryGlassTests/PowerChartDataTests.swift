@@ -179,6 +179,44 @@ final class PowerChartDataTests: XCTestCase {
         XCTAssertFalse(timeline.isInsideBreak(first.addingTimeInterval(3_660)))
     }
 
+    func testTimelineCoordinatesStayInverseAcrossManyBreaks() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var segments: [[HistorySample]] = []
+        for index in 0..<50 {
+            let segmentStart = start.addingTimeInterval(Double(index) * 7_200)
+            segments.append([
+                historySample(at: segmentStart),
+                historySample(at: segmentStart.addingTimeInterval(55))
+            ])
+        }
+        let timeline = PowerChartTimeline(segments: segments)
+
+        for segment in segments {
+            let first = segment[0]
+            // 段首位于断点结束处，反解应当回到自身。
+            XCTAssertEqual(
+                timeline.date(for: timeline.position(for: first.timestamp)).timeIntervalSince1970,
+                first.timestamp.timeIntervalSince1970,
+                accuracy: 0.001
+            )
+        }
+        for (segment, next) in zip(segments, segments.dropFirst()) {
+            // 段尾恰好是断点起点、下一段段首是断点终点：压缩后两者同位，
+            // 反解会落到断点结束，这是压缩时间轴本身的歧义，不是映射错误。
+            XCTAssertEqual(
+                timeline.position(for: segment[1].timestamp),
+                timeline.position(for: next[0].timestamp),
+                accuracy: 0.001
+            )
+        }
+        // 断点内的时刻同样压缩到断点起点。
+        let insideBreak = start.addingTimeInterval(3_600)
+        XCTAssertEqual(
+            timeline.position(for: insideBreak),
+            timeline.position(for: start.addingTimeInterval(55))
+        )
+    }
+
     func testPowerSegmentCacheReusesResultUntilWindowChanges() {
         let start = Date(timeIntervalSince1970: 1_000)
         let samples = (0..<100).map {
