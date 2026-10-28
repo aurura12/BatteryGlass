@@ -501,6 +501,66 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertNil(json["temperatureCelsius"])
     }
 
+    func testOpenSleepIntervalSurvivesExitAndClosesOnNextLaunch() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: fileURL.deletingPathExtension().appendingPathExtension("sqlite"))
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let start = Date().addingTimeInterval(-8 * 60 * 60)
+        let firstRun = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        NotificationCenter.default.post(
+            name: .sleepIntervalStarted, object: nil, userInfo: ["start": start]
+        )
+        firstRun.flush()
+
+        let secondRun = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        let wake = Date()
+        secondRun.record(snapshot(at: wake, cycleCount: 10))
+
+        XCTAssertEqual(secondRun.sleepIntervals.count, 1)
+        let interval = try XCTUnwrap(secondRun.sleepIntervals.first)
+        XCTAssertEqual(interval.start.timeIntervalSince1970, start.timeIntervalSince1970, accuracy: 0.5)
+        XCTAssertEqual(interval.end.timeIntervalSince1970, wake.timeIntervalSince1970, accuracy: 1)
+        // 睡眠期间没有观测，必须标成「未测量的睡眠」，而不是采样缺口。
+        let todayKey = BatteryFormatters.dayKey(for: wake)
+        let summary = secondRun.allSummaries().first { $0.dayKey == todayKey }
+        XCTAssertEqual(summary?.energyQuality?.hasUnmeasuredSleepEnergy, true)
+        XCTAssertNotEqual(summary?.energyQuality?.hasSamplingGaps, true)
+    }
+
+    func testRecoveredSleepIntervalIsCappedAtOneDay() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: fileURL.deletingPathExtension().appendingPathExtension("sqlite"))
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let start = Date().addingTimeInterval(-72 * 60 * 60)
+        let firstRun = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        NotificationCenter.default.post(
+            name: .sleepIntervalStarted, object: nil, userInfo: ["start": start]
+        )
+        firstRun.flush()
+
+        let secondRun = BatteryHistoryStore(settings: settings, fileURL: fileURL)
+        secondRun.record(snapshot(at: Date(), cycleCount: 10))
+
+        let interval = try XCTUnwrap(secondRun.sleepIntervals.first)
+        XCTAssertEqual(interval.end.timeIntervalSince(interval.start), 24 * 60 * 60, accuracy: 1)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

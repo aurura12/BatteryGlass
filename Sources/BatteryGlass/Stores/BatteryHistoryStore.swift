@@ -36,6 +36,10 @@ final class BatteryHistoryStore {
     private var sleepIntervalStartedObserver: NSObjectProtocol?
     private var sleepIntervalEndedObserver: NSObjectProtocol?
     private var activeSleepStart: Date?
+    /// 上次运行在睡眠中退出时留下的区间起点，等本次运行的第一条样本把它关闭。
+    private var pendingSleepIntervalStart: Date?
+    /// 跨进程恢复的睡眠区间上限：更长的离线时间按采样缺口处理，避免把关机数天当成一觉。
+    private static let maximumRecoveredSleepInterval: TimeInterval = 24 * 60 * 60
     /// 按日累计的「未被积分覆盖的时长」，按成因分开记；跨天区间按比例拆分。
     /// 只有 `needsWarning` 成立才把当天标为采样断点。
     private var unaccountedByDay: [String: EnergyCalculator.DailyUnaccountedTime] = [:]
@@ -144,6 +148,7 @@ final class BatteryHistoryStore {
               acceptsHistory(startingAt: snapshot.timestamp) else { return }
 
         let now = currentDate()
+        closePendingSleepInterval(at: snapshot.timestamp)
         let significantChange = snapshot.cycleCount != lastCycleCount || snapshot.healthPercent != lastHealth
         guard now.timeIntervalSince(lastRecord) >= 5 || significantChange else { return }
 
@@ -219,6 +224,19 @@ final class BatteryHistoryStore {
         }
         reconcileUnmeasuredSleepEnergyQuality()
         persist()
+    }
+
+    /// 关闭上次运行遗留的睡眠区间。
+    ///
+    /// 应用在睡眠中退出（系统重启、更新）时只能留下起点：唤醒时刻与维持功耗都没有观测。
+    /// 下次启动的第一条样本即视为该区间的结束点，把它记成「未测量的睡眠」——既不把整段
+    /// 离线时间算进能耗，也不会被误判成采样缺口。
+    private func closePendingSleepInterval(at date: Date) {
+        guard let start = pendingSleepIntervalStart else { return }
+        pendingSleepIntervalStart = nil
+        let end = min(date, start.addingTimeInterval(Self.maximumRecoveredSleepInterval))
+        guard end > start else { return }
+        recordSleepInterval(start: start, end: end)
     }
 
     func summaries(lastDays: Int) -> [DailySummary] {
@@ -300,6 +318,7 @@ final class BatteryHistoryStore {
         sleepIntervals = []
         unaccountedByDay = [:]
         activeSleepStart = nil
+        pendingSleepIntervalStart = nil
         lastRecordedSample = nil
         lastSamplesPrunedDay = nil
         lastPersistenceScheduledAt = .distantPast
@@ -352,6 +371,9 @@ final class BatteryHistoryStore {
         var sleepSegments: [SleepSegment]?
         // v4 新增；可选以兼容 v2/v3 旧文件。
         var sleepIntervals: [SleepInterval]?
+        // v8 新增；退出时仍处于睡眠则记录区间起点，下次启动用首条样本关闭。
+        // 可选字段，旧文件缺失时解码为 nil，无需迁移分支。
+        var openSleepStart: Date?
         // v8 删除历史温度字段；旧文件里的 temperatureCelsius 会被 Codable 忽略。
     }
 
@@ -391,6 +413,7 @@ final class BatteryHistoryStore {
             sleepSegments = payload.sleepSegments ?? []
         }
         sleepIntervals = (payload.sleepIntervals ?? []).filter { $0.end > $0.start }
+        pendingSleepIntervalStart = payload.openSleepStart
         let sanitizedSummaries = DailyEnergySummaryPolicy.markSparseLegacySummariesIncomplete(
             dailySummaries,
             todayKey: BatteryFormatters.dayKey(for: currentDate()),
@@ -458,7 +481,8 @@ final class BatteryHistoryStore {
             samples: samples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,
-            sleepIntervals: sleepIntervals
+            sleepIntervals: sleepIntervals,
+            openSleepStart: activeSleepStart ?? pendingSleepIntervalStart
         )
     }
 
