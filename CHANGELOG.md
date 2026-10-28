@@ -11,6 +11,9 @@
 - 放大窗口不再在主线程同步查 SQLite，也只在可见时刷新：`ChartDetailView` 的 `body` 原先直接调 `samples(forDay:)`（内部 `persistenceQueue.sync`，遇到归档导入或 `history.json` 写盘最长可阻塞 `busy_timeout` 5 秒），且窗口关闭后仍每 5 秒重算整日曲线。现在样本经新增的 `BatteryHistoryStore.samplesAsync(forDay:)` 在持久化队列读取并复用同一套缓存；`ChartDetailModel.isVisible` 由窗口 delegate 同步（关闭、最小化、被遮挡），不可见时视图不读取样本计数也不发起查询，重新显示时补加载。切换日期先清空旧样本，避免旧曲线配新时间轴。（`Views/ChartDetailView.swift`、`Services/ChartWindowController.swift`、`Stores/BatteryHistoryStore.swift`）
 - 曲线悬停不再按指针频率重算整图：原先把光标位置写入 `@State`，鼠标每移动一像素就重跑睡眠过滤、断点切分与降采样（10 分钟窗口约 1.4k 样本、每次数万次比较）。现在只在吸附样本切换时更新悬停状态，并把「可见段 / 降采样结果」与「电量图填充 / 缺口连线 / Y 域」分别记忆化为 `PowerChartSegmentCache`、`BatteryLevelSegmentCache`——窗口与样本不变时直接复用，悬停只插入高亮点。切换日期时一并清除悬停状态，修复放大窗口按天回看时 tooltip 仍显示上一天数据的问题。（`Views/HistoryView.swift`）
 
+### 修复
+- 状态色按明暗外观取值：`DesignTokens.statusGreen/statusAmber/statusRed` 原先是不变的亮色，浅色模式下 10pt 前景（如 `#F59E0B` 的「插电放电」说明）与白色玻璃对比度约 2:1，达不到 4.5:1。现在用 `NSColor(name:\)` 动态颜色：浅色模式改用同色系加深版本（#15803D / #B45309 / #B91C1C），深色模式保持原亮色，指示点、徽标与渐变一并跟随。（`Support/DesignTokens.swift`）
+
 ### 重构
 - 合并重复常量，避免多处硬编码漂移：低电量阈值的合法范围与解除迟滞集中到 `AppSettings.lowBatteryThresholdRange` / `lowBatteryNotifyHysteresis`（设置页滑块、读取钳制、通知判定共用）；`dayKey` 只保留 `BatteryFormatters` 一份（`EnergyCalculator`、`SleepEnergyCalculator` 的私有副本删除），补一个两种重载输出一致的测试；`TimeRemainingSmoother` 直接引用 `TimeRemainingEstimator` 的 [60s, 48h] 结果域；`BatterySnapshot` 的 0.01 W 噪声阈值改用 `BatteryPowerThresholds.minimumDischargeW`。（`Stores/AppSettings.swift`、`Views/SettingsView.swift`、`Services/BatteryMonitor.swift`、`Support/Formatters.swift`、`Models/*`）
 - 拖动桌面小组件不再每个事件写一次 UserDefaults：`windowDidMove` 原先直接写 `desktopWidgetFrameString`（`didSet` 同步 `defaults.set`），拖动期间按刷新率落盘。现在把位置暂存并在 0.4 秒后合并写入一次，销毁时 invalidate 定时器。（`Services/DesktopWidgetController.swift`）

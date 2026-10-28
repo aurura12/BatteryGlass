@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 基于 ui-ux-pro-max 设计系统（Executive Dashboard）的语义化设计令牌。
@@ -14,15 +15,43 @@ enum DesignTokens {
     static let cornerRadiusCard: CGFloat = 14
     static let cornerRadiusPanel: CGFloat = 24
 
-    // 交通灯状态色（Executive Dashboard 语义：绿=正常/充电，黄=注意，红=告警）
-    static let statusGreen = Color(red: 0.13, green: 0.77, blue: 0.36) // #22C55E
-    static let statusAmber = Color(red: 0.96, green: 0.62, blue: 0.04) // #F59E0B
-    static let statusRed = Color(red: 0.94, green: 0.27, blue: 0.27)   // #EF4444
+    // 交通灯状态色（Executive Dashboard 语义：绿=正常/充电，黄=注意，红=告警）。
+    // 浅色玻璃上直接使用亮色（尤其 #F59E0B）作为 10pt 前景对比度不足 3:1，
+    // 因此浅色模式改用同色系加深版本（≥4.5:1），深色模式沿用原亮色。
+    static let statusGreen = dynamic(
+        light: (0.082, 0.502, 0.239), // #15803D
+        dark: (0.13, 0.77, 0.36)      // #22C55E
+    )
+    static let statusAmber = dynamic(
+        light: (0.706, 0.325, 0.035), // #B45309
+        dark: (0.96, 0.62, 0.04)      // #F59E0B
+    )
+    static let statusRed = dynamic(
+        light: (0.725, 0.110, 0.110), // #B91C1C
+        dark: (0.94, 0.27, 0.27)      // #EF4444
+    )
 
     // 数据色（仅用于数据可视化与中性强调）
     static let dataBlue = Color(red: 0.07, green: 0.48, blue: 0.96)     // #127AF5
     static let dischargeBlue = Color(red: 0.20, green: 0.53, blue: 0.95)
     static let mint = Color(red: 0.15, green: 0.73, blue: 0.60)
+
+    /// 随系统外观切换的语义色；用 sRGB 分量直接构造，避免资源颜色表的额外开销。
+    private static func dynamic(
+        light: (red: Double, green: Double, blue: Double),
+        dark: (red: Double, green: Double, blue: Double)
+    ) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let value = isDark ? dark : light
+            return NSColor(
+                srgbRed: value.red,
+                green: value.green,
+                blue: value.blue,
+                alpha: 1
+            )
+        })
+    }
 
     static func cardBackground(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color.white.opacity(0.055) : Color.white.opacity(0.62)
