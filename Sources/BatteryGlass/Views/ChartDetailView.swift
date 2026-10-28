@@ -109,7 +109,10 @@ struct ChartDetailView: View {
                 .labelsHidden()
                 .fixedSize()
 
-                dayNavigator(days)
+                HistoryDayNavigator(selection: days) { day in
+                    model.selectedDay = day
+                    onSelectionChange(model.kind, day)
+                }
 
                 Spacer(minLength: DesignTokens.spacingS)
 
@@ -143,78 +146,6 @@ struct ChartDetailView: View {
         samples = loaded
     }
 
-    /// 日期导航：`◀  8/25  ▶`，点中间日期弹出菜单直接跳到某天。
-    @ViewBuilder
-    private func dayNavigator(_ days: HistoryDaySelection) -> some View {
-        HStack(spacing: 2) {
-            dayStepButton(
-                systemName: "chevron.left",
-                help: "前一天",
-                isEnabled: days.canGoOlder
-            ) {
-                guard let day = days.olderDay else { return }
-                model.selectedDay = day
-                onSelectionChange(model.kind, day)
-            }
-
-            Menu {
-                ForEach(days.recentMenuDays().reversed(), id: \.self) { day in
-                    Button(days.label(for: day)) {
-                        model.selectedDay = day
-                        onSelectionChange(model.kind, day)
-                    }
-                }
-                if days.days.count > 120 {
-                    Divider()
-                    Text("更早的日期可用左侧箭头逐天回看")
-                }
-            } label: {
-                Text(days.label)
-                    .font(.system(size: 12, weight: .medium))
-                    .monospacedDigit()
-                    .frame(minWidth: 56)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("选择日期")
-
-            dayStepButton(
-                systemName: "chevron.right",
-                help: "后一天",
-                isEnabled: days.canGoNewer
-            ) {
-                guard let day = days.newerDay else { return }
-                model.selectedDay = day
-                onSelectionChange(model.kind, day)
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 1)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusSmall)
-                .fill(.quaternary)
-        )
-    }
-
-    @ViewBuilder
-    private func dayStepButton(
-        systemName: String,
-        help: String,
-        isEnabled: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 18, height: 18)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? .secondary : .tertiary)
-        .disabled(!isEnabled)
-        .help(help)
-        .accessibilityLabel(help)
-    }
 
     @ViewBuilder
     private func chart(kind: ExpandedChart, day: Date, samples: [HistorySample]) -> some View {
