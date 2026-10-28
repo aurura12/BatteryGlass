@@ -6,6 +6,7 @@
 
 ### 新增
 - 新增可自定义主题色：设置页「外观」分节提供 6 个预设色块与自定义取色器，选择结果以 `#RRGGBB` 持久化到 UserDefaults（`themeAccentHex`）。主题色经环境值 `\.themeAccent` 注入面板、放大窗口与桌面小组件，替换原先固定的数据蓝：曲线与填充、强调数值、系统直供指示、循环进度条、玻璃光晕跟随主题；充电绿与低电量黄/红等语义色保持不变。默认值仍为 `#127AF5`，未设置时外观与旧版本一致；原先仅电池放电使用的 `dischargeBlue` 一并并入主题色。（`Support/ThemeAccent.swift`、`Stores/AppSettings.swift`、`Views/SettingsView.swift`、`Support/BatteryStyling.swift`、`Support/DesignTokens.swift`、`Views/DashboardView.swift`、`Views/LiveDashboardView.swift`、`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`Views/DesktopWidgetView.swift`、`Views/FluidGlassBackground.swift`、`Services/ChartWindowController.swift`、`App/BatteryGlassApp.swift`、`Tests/BatteryGlassTests/ThemeAccentTests.swift`）
+- 补电源诊断日志轮换测试：把日志目录、文件名、大小阈值与节流间隔改为可在 `init` 注入（默认单例仍写 `~/Library/Application Support/BatteryGlass/power-diagnostics.jsonl`，行为不变），新增 `PowerDiagnosticsLoggerTests` 用临时目录验证逐条追加、超限时先轮换再写、以及连续轮换只保留一份备份。此前这段逻辑零覆盖——测试若走默认路径会污染真实日志。（`Services/PowerDiagnosticsLogger.swift`、`Tests/BatteryGlassTests/PowerDiagnosticsLoggerTests.swift`）
 - 新增跨午夜断点的回归测试：昨晚退出、今早启动时，22:50→00:00 与 00:00→09:00 两段分别记入昨天和今天的质量标记。核查确认现有实现（`recordUnaccountedTime` 按 `daySegments` 拆天）已正确处理该场景，无需改动业务代码。
 
 ### 优化
