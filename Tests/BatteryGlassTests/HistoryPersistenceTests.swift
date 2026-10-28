@@ -701,6 +701,83 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(reloaded.samples.last?.consumptionPowerW, 24)
     }
 
+    func testDiagnosticsRecoveryIsDeferredOffTheLoadPathAndPersistsResult() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: archiveURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(10 * 3_600)
+        let missing = HistorySample(
+            timestamp: now,
+            power: 20,
+            consumptionPowerW: nil,
+            percent: 50,
+            cycleCount: 1,
+            healthPercent: 98
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let payload: [String: Any] = [
+            "version": 9,
+            "samples": [try JSONSerialization.jsonObject(with: try encoder.encode(missing))],
+            "dailySummaries": []
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: fileURL)
+
+        let diagnostic = PowerDiagnosticsSample(
+            timestamp: now.addingTimeInterval(1),
+            state: .pluggedIn,
+            adapterConnected: true,
+            isCharging: false,
+            batteryVoltageV: 12,
+            batteryCurrentA: 0,
+            batteryPowerW: 0,
+            batteryDischargePowerW: nil,
+            batteryDischargingWhilePlugged: false,
+            telemetryBatteryPowerW: nil,
+            systemPowerInW: 42,
+            systemLoadW: 42,
+            systemVoltageInV: 20,
+            systemCurrentInA: 2.1,
+            adapterWatts: 100,
+            adapterVoltageV: 20,
+            adapterCurrentA: 2.1,
+            snapshotSystemPowerW: 42,
+            chargingPowerW: nil,
+            directSupplyPowerW: 42,
+            adapterOutputPowerW: 42,
+            consumptionPowerW: 42
+        )
+        let store = BatteryHistoryStore(
+            settings: settings,
+            fileURL: fileURL,
+            now: { now },
+            diagnosticsLoader: { [diagnostic] }
+        )
+
+        // 初始化只完成文件加载，诊断解析留在后台任务里，不阻塞首帧。
+        XCTAssertNil(store.samples.first?.consumptionPowerW)
+        await store.waitForDiagnosticsRecovery()
+        XCTAssertEqual(store.samples.first?.consumptionPowerW, 42)
+
+        // 回填结果要写回归档，重启后不再依赖诊断日志。
+        let reloaded = BatteryHistoryStore(
+            settings: settings,
+            fileURL: fileURL,
+            now: { now },
+            diagnosticsLoader: { [] }
+        )
+        XCTAssertEqual(reloaded.samples.first?.consumptionPowerW, 42)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

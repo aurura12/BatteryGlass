@@ -17,6 +17,10 @@ final class BatteryHistoryStore {
     private let currentDate: () -> Date
     private let finishPendingSleepEnergy: () -> Void
     private let cancelPendingSleepEnergy: () -> Void
+    /// 诊断日志读取器。默认在后台读取真实日志；测试注入空数组或固定样本。
+    private let diagnosticsLoader: @Sendable () -> [PowerDiagnosticsSample]
+    /// 启动后的诊断回填任务。日志可达 50 MB，逐行解码必须离开主线程。
+    @ObservationIgnored private var diagnosticsRecoveryTask: Task<Void, Never>?
     private var historyClearedAt: Date?
     private var needsLegacyBackup = false
     private var canPersist = true
@@ -68,12 +72,16 @@ final class BatteryHistoryStore {
         fileURL: URL? = nil,
         now: @escaping () -> Date = { Date() },
         finishPendingSleepEnergy: @escaping () -> Void = {},
-        cancelPendingSleepEnergy: @escaping () -> Void = {}
+        cancelPendingSleepEnergy: @escaping () -> Void = {},
+        diagnosticsLoader: @escaping @Sendable () -> [PowerDiagnosticsSample] = {
+            PowerDiagnosticsHistoryLoader.load()
+        }
     ) {
         self.settings = settings
         self.currentDate = now
         self.finishPendingSleepEnergy = finishPendingSleepEnergy
         self.cancelPendingSleepEnergy = cancelPendingSleepEnergy
+        self.diagnosticsLoader = diagnosticsLoader
         let resolvedURL: URL
         if let fileURL {
             resolvedURL = fileURL
@@ -399,6 +407,9 @@ final class BatteryHistoryStore {
     /// 否则界面显示"已清空"，而磁盘上的归档仍在，重启后旧曲线会复活。
     @discardableResult
     func clearHistory() -> Bool {
+        // 后台回填可能还在解析旧日志：取消后再删除，避免旧读数写回已清空的样本。
+        diagnosticsRecoveryTask?.cancel()
+        diagnosticsRecoveryTask = nil
         let failures: [String] = persistenceQueue.sync {
             var failures: [String] = []
             do {
@@ -575,32 +586,19 @@ final class BatteryHistoryStore {
         let sleepEnergyRestored = restoreMissingSleepEnergyFromSegments()
         let unmeasuredSleepBackfilled = reconcileUnmeasuredSleepEnergyQuality()
 
-        let recovery = HistorySampleRecovery.backfillConsumptionPower(
-            in: samples,
-            from: PowerDiagnosticsHistoryLoader.load()
-        )
-        if recovery.didChange {
-            samples = recovery.samples
-            let recalculatedDayKeys = updateEnergySummaries(
-                from: samples,
-                allowedDayKeys: [BatteryFormatters.dayKey(for: currentDate())]
-            )
-            // 只有重算确实覆盖了今天，才需要把睡眠份额补回去。若今天没有可积分的
-            // 相邻样本，reconcile 会保留已持久化的日值；再次累加睡眠份额会造成重计。
-            let todayKey = BatteryFormatters.dayKey(for: currentDate())
-            if recalculatedDayKeys.contains(todayKey) {
-                restoreSleepEnergy(forToday: currentDate())
-            }
-        }
-        // Check gaps after diagnostics recovery so a sample that was successfully restored
-        // does not leave a stale "incomplete" warning on today's summary.
+        // 采样断点先按当前样本判一次；诊断回填完成后会再判一次（见 applyDiagnosticsRecovery），
+        // 因此回填恢复的样本不会留下过期的橙色告警。
         let samplingGapsBackfilled = applyTodaySamplingGapQuality(in: samples)
 
         lastRecordedSample = samples.max { $0.timestamp < $1.timestamp }
         lastSamplesPrunedDay = nil
         pruneHistory()
 
-        if recovery.didChange || summariesChanged || qualityBackfilled
+        // 诊断日志（最多 50 MB / 10 万行）只在今天确实缺少功率读数时才解析，
+        // 且放到后台任务执行，避免启动时阻塞主线程数百毫秒。
+        scheduleDiagnosticsRecoveryIfNeeded()
+
+        if summariesChanged || qualityBackfilled
             || sleepEnergyRestored || unmeasuredSleepBackfilled
             || samplingGapsBackfilled || temperatureHistoryNeedsRemoval {
             flush()
@@ -613,6 +611,73 @@ final class BatteryHistoryStore {
         canPersist = false
         persistenceIssue = reason
         NSLog("BatteryGlass: 历史记录已停用 - %@", reason)
+    }
+
+    // MARK: - 诊断回填（启动后异步）
+
+    /// 只有今天确实存在缺失功率读数的样本时才值得解析诊断日志。
+    private func needsDiagnosticsRecovery() -> Bool {
+        let today = Calendar.current.startOfDay(for: currentDate())
+        return samples.contains { $0.timestamp >= today && $0.consumptionPowerW == nil }
+    }
+
+    private func scheduleDiagnosticsRecoveryIfNeeded() {
+        guard canPersist, diagnosticsRecoveryTask == nil, needsDiagnosticsRecovery() else { return }
+        let loader = diagnosticsLoader
+        diagnosticsRecoveryTask = Task { [weak self] in
+            // 文件读取与逐行 JSON 解码都在后台执行；主线程只接收结果并做纯计算。
+            let diagnostics = await Task.detached(priority: .utility) { loader() }.value
+            guard !Task.isCancelled, let self else { return }
+            self.applyDiagnosticsRecovery(diagnostics)
+        }
+    }
+
+    /// 等待后台诊断回填结束（测试与受控退出使用）。
+    func waitForDiagnosticsRecovery() async {
+        await diagnosticsRecoveryTask?.value
+    }
+
+    /// 把诊断日志里同一时刻的功率读数补回样本，并重算今天的汇总与采样质量。
+    private func applyDiagnosticsRecovery(_ diagnostics: [PowerDiagnosticsSample]) {
+        defer { diagnosticsRecoveryTask = nil }
+        guard canPersist, !diagnostics.isEmpty else { return }
+
+        let original = samples
+        let result = HistorySampleRecovery.backfillConsumptionPower(in: original, from: diagnostics)
+        guard result.didChange else { return }
+
+        // 记录实际变化的样本：它们上一轮写盘时还是 nil，`archivedUpTo` 不会把她们算进 pending。
+        let changed = zip(original, result.samples).compactMap { pair -> HistorySample? in
+            pair.0.consumptionPowerW != pair.1.consumptionPowerW ? pair.1 : nil
+        }
+        samples = result.samples
+
+        let todayKey = BatteryFormatters.dayKey(for: currentDate())
+        let recalculatedDayKeys = updateEnergySummaries(
+            from: samples,
+            allowedDayKeys: [todayKey]
+        )
+        // 只有重算确实覆盖了今天，才需要把睡眠份额补回去，否则会重复累加。
+        if recalculatedDayKeys.contains(todayKey) {
+            restoreSleepEnergy(forToday: currentDate())
+        }
+        _ = applyTodaySamplingGapQuality(in: samples)
+        lastRecordedSample = samples.max { $0.timestamp < $1.timestamp }
+
+        // 覆盖归档里的旧值（按时间戳 upsert），再写 JSON 汇总。
+        let today = Calendar.current.startOfDay(for: currentDate())
+        let changedToday = changed.filter { $0.timestamp >= today }
+        if !changedToday.isEmpty {
+            let archive = self.archive
+            persistenceQueue.async {
+                do {
+                    try archive.storeLiveSamples(changedToday)
+                } catch {
+                    NSLog("BatteryGlass: 诊断回填样本保存失败 - %@", error.localizedDescription)
+                }
+            }
+        }
+        flush()
     }
 
     private func persist() {
