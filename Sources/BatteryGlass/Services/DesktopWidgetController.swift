@@ -26,7 +26,9 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
                 queue: .main
             ) { [weak self] notification in
                 let enabled = notification.userInfo?["enabled"] as? Bool ?? false
-                Task { @MainActor in
+                // 观察者注册在 .main 队列，回调本就在主线程；用 assumeIsolated 同步执行，
+                // 避免 Task 跳转让 setVisible 与同一轮里的其他调用失去顺序保证。
+                MainActor.assumeIsolated {
                     self?.setVisible(enabled)
                 }
             }
@@ -37,7 +39,7 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in
+                MainActor.assumeIsolated {
                     self?.resetPosition()
                 }
             }
@@ -48,7 +50,7 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in
+                MainActor.assumeIsolated {
                     self?.applyStyle()
                 }
             }
@@ -60,7 +62,7 @@ final class DesktopWidgetController: NSObject, NSWindowDelegate {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in
+                MainActor.assumeIsolated {
                     self?.handleScreenParametersChange()
                 }
             }

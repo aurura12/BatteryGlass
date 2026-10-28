@@ -23,6 +23,7 @@
 
 ### 修复
 - 状态色按明暗外观取值：`DesignTokens.statusGreen/statusAmber/statusRed` 原先是不变的亮色，浅色模式下 10pt 前景（如 `#F59E0B` 的「插电放电」说明）与白色玻璃对比度约 2:1，达不到 4.5:1。现在用 `NSColor(name:\)` 动态颜色：浅色模式改用同色系加深版本（#15803D / #B45309 / #B91C1C），深色模式保持原亮色，指示点、徽标与渐变一并跟随。（`Support/DesignTokens.swift`）
+- 桌面小组件通知回调改回同步执行：四个观察者以 `queue: .main` 注册，回调本就在主线程，原先再包一层 `Task { @MainActor }` 只是多一次调度跳转，且与同一轮里的直接调用没有顺序保证（例如改样式后立即显示，可能先按旧尺寸闪现一帧）。改用 `MainActor.assumeIsolated`，与同文件 `frameSaveTimer` 的写法一致。（`Services/DesktopWidgetController.swift`）
 
 ### 重构
 - 合并重复常量，避免多处硬编码漂移：低电量阈值的合法范围与解除迟滞集中到 `AppSettings.lowBatteryThresholdRange` / `lowBatteryNotifyHysteresis`（设置页滑块、读取钳制、通知判定共用）；`dayKey` 只保留 `BatteryFormatters` 一份（`EnergyCalculator`、`SleepEnergyCalculator` 的私有副本删除），补一个两种重载输出一致的测试；`TimeRemainingSmoother` 直接引用 `TimeRemainingEstimator` 的 [60s, 48h] 结果域；`BatterySnapshot` 的 0.01 W 噪声阈值改用 `BatteryPowerThresholds.minimumDischargeW`。（`Stores/AppSettings.swift`、`Views/SettingsView.swift`、`Services/BatteryMonitor.swift`、`Support/Formatters.swift`、`Models/*`）
