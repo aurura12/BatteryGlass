@@ -209,6 +209,7 @@ struct HistoryView: View {
         var isVisible: Bool
         var showsToday: Bool
         var archivedDayCount: Int
+        var samplesVersion: Int
     }
 
     private var reloadKey: ReloadKey {
@@ -216,7 +217,9 @@ struct HistoryView: View {
             day: activeDay,
             isVisible: isVisible,
             showsToday: isShowingToday,
-            archivedDayCount: isVisible ? history.archivedDays.count : 0
+            archivedDayCount: isVisible ? history.archivedDays.count : 0,
+            // 回填可改变已有日期的样本，却不改变归档日期数。
+            samplesVersion: isVisible && !isShowingToday ? history.samplesVersion : 0
         )
     }
 }

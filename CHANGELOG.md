@@ -5,6 +5,8 @@
 ## [2026-10-29]
 
 ### 修复
+- 查看往日曲线时，诊断回填即使没有改变归档日期数量，也会重新加载当前日期，避免继续显示回填前的样本。（`Views/HistoryView.swift`）
+
 - 旧版历史回填期间退出或触发保存时保留待回填的往日样本，避免 JSON 提前缩减后下次启动无法恢复；回填结束并归档后再恢复 v9 的精简格式。（`Stores/BatteryHistoryStore.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
 
 - 修复已有的诊断回填重复记录：启动时一次性识别同一 ID、同一秒且其他字段一致的整秒回填行与原始小数秒行，保留原始时间戳和已恢复的功率；有冲突的记录保持不变。迁移使用 SQLite 事务，重复启动不会再次处理。（`Stores/HistorySampleArchive.swift`、`Stores/BatteryHistoryStore.swift`）
