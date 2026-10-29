@@ -5,6 +5,8 @@
 ## [2026-10-29]
 
 ### 修复
+- 清空历史时，放大曲线窗口也将实际加载日期和窗口标题同步到导航器回退后的日期，确保后续新样本能够显示。（`Views/ChartDetailView.swift`、`Tests/BatteryGlassTests/HistoryDaySelectionTests.swift`）
+
 - 查看往日曲线时，诊断回填即使没有改变归档日期数量，也会重新加载当前日期，避免继续显示回填前的样本。（`Views/HistoryView.swift`）
 
 - 旧版历史回填期间退出或触发保存时保留待回填的往日样本，避免 JSON 提前缩减后下次启动无法恢复；回填结束并归档后再恢复 v9 的精简格式。（`Stores/BatteryHistoryStore.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）

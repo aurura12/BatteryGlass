@@ -98,6 +98,19 @@ final class HistoryDaySelectionTests: XCTestCase {
         XCTAssertEqual(selection.selected, date("2026-08-27 00:00:00"))
     }
 
+    @MainActor
+    func testDetailWindowUpdatesItsActualSelectionWhenHistoryIsCleared() {
+        let now = date("2026-08-27 12:00:00")
+        let yesterday = date("2026-08-26 00:00:00")
+        let model = ChartDetailModel()
+        model.selectedDay = yesterday
+
+        XCTAssertFalse(model.reconcileSelectedDay(days: [yesterday], now: now, calendar: utcCalendar()))
+        XCTAssertTrue(model.reconcileSelectedDay(days: [], now: now, calendar: utcCalendar()))
+        XCTAssertEqual(model.selectedDay, date("2026-08-27 00:00:00"))
+        XCTAssertFalse(model.reconcileSelectedDay(days: [], now: now, calendar: utcCalendar()))
+    }
+
     func testLabelsUseTodayYesterdayAndDate() {
         let selection = HistoryDaySelection(
             days: [

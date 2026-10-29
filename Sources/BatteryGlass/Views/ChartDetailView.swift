@@ -38,6 +38,15 @@ final class ChartDetailModel {
     var selectedDay: Date = Calendar.current.startOfDay(for: Date())
     /// 窗口是否真的在屏幕上（可见且未最小化）。关闭或最小化后视图停止重新加载曲线数据。
     var isVisible = false
+
+    /// 选中日被清除后，让窗口标题、实际加载日期和导航器回退到同一天。
+    @discardableResult
+    func reconcileSelectedDay(days: [Date], now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        let resolved = HistoryDaySelection(days: days, selected: selectedDay, now: now, calendar: calendar).selected
+        guard resolved != selectedDay else { return false }
+        selectedDay = resolved
+        return true
+    }
 }
 
 /// 放大窗口内的曲线视图。
@@ -147,6 +156,9 @@ struct ChartDetailView: View {
     private func reload() async {
         guard model.isVisible else { return }
         availableDays = history.availableDays()
+        if model.reconcileSelectedDay(days: availableDays) {
+            onSelectionChange(model.kind, model.selectedDay)
+        }
         let day = model.selectedDay
         if loadedDay != day {
             samples = []
