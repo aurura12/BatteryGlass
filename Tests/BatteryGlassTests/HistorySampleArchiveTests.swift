@@ -125,6 +125,26 @@ final class HistorySampleArchiveTests: XCTestCase {
         XCTAssertEqual(try archive.lastLiveSample(before: day.addingTimeInterval(60)), precise)
     }
 
+    func testDuplicateRepairKeepsConflictingOrUnrelatedRows() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = HistorySampleArchive(fileURL: directory.appendingPathComponent("history.sqlite"))
+        let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(3_600)
+        var original = sample(at: day.addingTimeInterval(0.375))
+        original.consumptionPowerW = 20
+        var conflicting = original
+        conflicting.timestamp = day
+        conflicting.consumptionPowerW = 42
+        let unrelated = sample(at: day.addingTimeInterval(5.5))
+        try archive.storeLiveSamples([original, conflicting, unrelated])
+
+        try archive.removeTemperatureHistory()
+        try archive.repairDuplicateLiveSamples()
+        try archive.repairDuplicateLiveSamples()
+
+        XCTAssertEqual(try archive.liveSamples(forDay: day), [conflicting, original, unrelated])
+    }
+
     func testArchivingLiveSamplesDowngradesToMinuteRowsAndDeletesLive() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -910,6 +910,51 @@ final class HistoryPersistenceTests: XCTestCase {
         )
     }
 
+    func testStartupRepairsPreviouslyDuplicatedRecoveryRows() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(10 * 3_600 + 0.375)
+        let original = HistorySample(
+            timestamp: now, power: 20, consumptionPowerW: nil,
+            percent: 50, cycleCount: 1, healthPercent: 98
+        )
+        var duplicate = original
+        duplicate.timestamp = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970))
+        duplicate.consumptionPowerW = 42
+        let fileURL = directory.appendingPathComponent("history.json")
+        let archive = HistorySampleArchive(fileURL: directory.appendingPathComponent("history.sqlite"))
+        try JSONSerialization.data(withJSONObject: ["version": 9, "samples": [], "dailySummaries": []])
+            .write(to: fileURL)
+        try archive.storeLiveSamples([original, duplicate])
+
+        let settings = AppSettings(defaults: defaults)
+        let store = BatteryHistoryStore(
+            settings: settings, fileURL: fileURL, now: { now }, diagnosticsLoader: { [] }
+        )
+        await store.waitForDiagnosticsRecovery()
+
+        let rows = try archive.liveSamples(forDay: now)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.id, original.id)
+        XCTAssertEqual(rows.first?.timestamp, now)
+        XCTAssertEqual(rows.first?.consumptionPowerW, 42)
+        XCTAssertEqual(store.samples.count, 1)
+
+        let restarted = BatteryHistoryStore(
+            settings: settings, fileURL: fileURL, now: { now }, diagnosticsLoader: { [] }
+        )
+        XCTAssertEqual(restarted.samples.count, 1)
+        XCTAssertEqual(restarted.samples.first?.consumptionPowerW, 42)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

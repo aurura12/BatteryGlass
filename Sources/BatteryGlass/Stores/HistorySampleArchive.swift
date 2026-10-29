@@ -178,6 +178,48 @@ struct HistorySampleArchive: Sendable {
         }
     }
 
+    /// Repair rows written by the old diagnostics recovery path. That path wrote a second
+    /// row at the whole second while leaving the original fractional-second row unchanged.
+    /// This runs once after the temperature migration and only merges matching, unambiguous
+    /// pairs; unrelated or conflicting rows are left untouched.
+    func repairDuplicateLiveSamples() throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        try withWritableDatabase { database in
+            guard try userVersion(in: database) < 2 else { return }
+
+            if try hasTable(.live, in: database) {
+                let rows = try decodeSamples(from: nil, to: nil, table: .live, in: database)
+                let groups = Dictionary(grouping: rows, by: \.id)
+                let delete = try prepare("DELETE FROM live_samples WHERE timestamp = ?", in: database)
+                defer { sqlite3_finalize(delete) }
+
+                for pair in groups.values where pair.count == 2 {
+                    let ordered = pair.sorted { $0.timestamp < $1.timestamp }
+                    let rounded = ordered[0]
+                    var original = ordered[1]
+                    let roundedTime = rounded.timestamp.timeIntervalSince1970
+                    let originalTime = original.timestamp.timeIntervalSince1970
+                    guard roundedTime == floor(originalTime), roundedTime < originalTime,
+                          let recoveredPower = rounded.consumptionPowerW,
+                          recoveredPower.isFinite, recoveredPower >= 0,
+                          original.consumptionPowerW == nil || original.consumptionPowerW == recoveredPower,
+                          rounded.power == original.power,
+                          rounded.percent == original.percent,
+                          rounded.cycleCount == original.cycleCount,
+                          rounded.healthPercent == original.healthPercent else { continue }
+
+                    original.consumptionPowerW = recoveredPower
+                    try insertLiveRows([original], in: database)
+                    sqlite3_reset(delete)
+                    sqlite3_clear_bindings(delete)
+                    sqlite3_bind_double(delete, 1, roundedTime)
+                    guard sqlite3_step(delete) == SQLITE_DONE else { throw failure(in: database) }
+                }
+            }
+            try execute("PRAGMA user_version = 2", in: database)
+        }
+    }
+
     private func readSamples(
         from start: Date?,
         to end: Date?,

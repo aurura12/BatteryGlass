@@ -578,8 +578,9 @@ final class BatteryHistoryStore {
         }
         do {
             try archive.removeTemperatureHistory()
+            try archive.repairDuplicateLiveSamples()
         } catch {
-            NSLog("BatteryGlass: 清理旧温度曲线失败 - %@", error.localizedDescription)
+            NSLog("BatteryGlass: 曲线归档迁移失败 - %@", error.localizedDescription)
         }
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         guard let data = BoundedFileReader.read(
