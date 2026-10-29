@@ -11,6 +11,8 @@
 
 - 诊断回填后图表与缓存不再停留在旧数据：回填只替换样本的 `consumptionPowerW`，数量与末条 id 都不变，而 `TodaySamplesCache`、`PowerChartDataCache`、`BatteryLevelChartDataCache`、`PowerChartSegmentCache`、`BatteryLevelSegmentCache` 以及 `BatteryHistoryStore.samples(forDay:)` 的记忆化都以「数量 + 末条 id」为键，因此会一直返回回填前的结果（记录关闭时没有新样本，旧曲线永久保留）。现在 `BatteryHistoryStore` 新增 `samplesVersion`（在加载、回填、跨天归档、清空时自增；仅追加样本仍靠数量与 id 判定，不额外失效），上述缓存键与放大窗口的 `ReloadKey` 一并带上它；`PowerChartData` / `BatteryLevelChartData` 记录 `sourceVersion` 供段缓存使用。补 `testCachesRebuildWhenSampleContentVersionChanges` 与 `testDiagnosticsRecoveryInvalidatesSampleCaches`。（`Stores/BatteryHistoryStore.swift`、`Views/HistoryChartCaches.swift`、`Views/HistoryChartModels.swift`、`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`Tests/BatteryGlassTests/PowerChartDataTests.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
 
+- 清空历史后曲线与日期导航不再错位：`HistoryView` 的 `activeDay` 直接读 `selectedDay`，而导航器用的 `HistoryDaySelection` 在选中日被清理后会回退到今天——清空历史后导航器显示「今日」、两侧箭头都不可用，两张图却仍标着旧日期并展示旧曲线。现在 `activeDay` 取自导航器解析后的 `daySelection.selected`，并新增 `isShowingToday` 统一决定「走今天的实时样本还是归档曲线」（`renderedSamples`、冻结快照、`reloadArchivedDayIfNeeded`、`ReloadKey` 都改用它），两者不会再出现各说各话。（`Views/HistoryView.swift`）
+
 ## [2026-10-28]
 
 ### 修改

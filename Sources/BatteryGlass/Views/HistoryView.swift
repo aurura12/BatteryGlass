@@ -28,21 +28,27 @@ struct HistoryView: View {
     @State private var frozenSummaries: [DailySummary] = []
     @State private var frozenDays: [Date] = []
 
-    private var activeDay: Date {
-        followsToday ? Calendar.current.startOfDay(for: Date()) : selectedDay
-    }
-
     private var days: [Date] {
         isVisible ? history.availableDays() : frozenDays
     }
 
+    /// 导航器解析后的选择：选中的日期被清空或不在可选范围内时回退到最近的可用日期。
+    /// 曲线必须与导航器共用这个值——此前 `activeDay` 仍读 `selectedDay`，清空历史后
+    /// 导航器显示「今日」而两张图还停在旧日期（此时两侧箭头也都不可用）。
     private var daySelection: HistoryDaySelection {
-        HistoryDaySelection(days: days, selected: activeDay)
+        HistoryDaySelection(days: days, selected: followsToday ? nil : selectedDay)
+    }
+
+    private var activeDay: Date { daySelection.selected }
+
+    /// 曲线是否展示今天的实时样本：既包括「跟随今天」，也包括选中日被清理后回退到今天。
+    private var isShowingToday: Bool {
+        Calendar.current.isDate(activeDay, inSameDayAs: Date())
     }
 
     private var renderedSamples: [HistorySample] {
         // 往日曲线来自归档（静态），隐藏时也无需冻结。
-        if !followsToday { return archivedSamples }
+        if !isShowingToday { return archivedSamples }
         return isVisible
             ? todayCache.samples(from: history.samples, day: activeDay, version: history.samplesVersion)
             : frozenSamples
@@ -133,7 +139,7 @@ struct HistoryView: View {
         .scrollIndicators(.hidden)
         .task(id: cacheKey) {
             guard isVisible else { return }
-            if followsToday {
+            if isShowingToday {
                 frozenSamples = todayCache.samples(
                     from: history.samples, day: activeDay, version: history.samplesVersion
                 )
@@ -171,13 +177,13 @@ struct HistoryView: View {
 
     /// 往日曲线异步加载：切换日期时先清空，避免旧一天的曲线配新一天的时间轴。
     private func reloadArchivedDayIfNeeded() async {
-        guard isVisible, !followsToday else { return }
+        guard isVisible, !isShowingToday else { return }
         let day = activeDay
         if loadedArchiveDay != day {
             archivedSamples = []
         }
         let loaded = await history.samplesAsync(forDay: day)
-        guard !Task.isCancelled, activeDay == day, !followsToday else { return }
+        guard !Task.isCancelled, activeDay == day, !isShowingToday else { return }
         archivedSamples = loaded
         loadedArchiveDay = day
     }
@@ -201,7 +207,7 @@ struct HistoryView: View {
     private struct ReloadKey: Equatable {
         var day: Date
         var isVisible: Bool
-        var followsToday: Bool
+        var showsToday: Bool
         var archivedDayCount: Int
     }
 
@@ -209,7 +215,7 @@ struct HistoryView: View {
         ReloadKey(
             day: activeDay,
             isVisible: isVisible,
-            followsToday: followsToday,
+            showsToday: isShowingToday,
             archivedDayCount: isVisible ? history.archivedDays.count : 0
         )
     }
