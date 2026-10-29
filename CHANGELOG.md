@@ -13,6 +13,8 @@
 
 - 清空历史后曲线与日期导航不再错位：`HistoryView` 的 `activeDay` 直接读 `selectedDay`，而导航器用的 `HistoryDaySelection` 在选中日被清理后会回退到今天——清空历史后导航器显示「今日」、两侧箭头都不可用，两张图却仍标着旧日期并展示旧曲线。现在 `activeDay` 取自导航器解析后的 `daySelection.selected`，并新增 `isShowingToday` 统一决定「走今天的实时样本还是归档曲线」（`renderedSamples`、冻结快照、`reloadArchivedDayIfNeeded`、`ReloadKey` 都改用它），两者不会再出现各说各话。（`Views/HistoryView.swift`）
 
+- 关闭历史记录后「今日累计耗电」不再看着像在正常更新：卡片原先只按已有汇总决定告警，用户当天关掉记录后数值停在关闭那一刻，图标仍是普通信息图标、文案仍是「查看统计说明」，看不出后续耗电没有计入。现在 `TodayEnergyDisplay` 接收 `recordingEnabled`（实时页与离屏冻结快照都传 `settings.recordHistory`）：记录关闭时数值旁显示感叹号、质量标签变为「记录已关闭」，说明弹层给出「历史记录已关闭，之后的使用未计入今日耗电」，关闭前已有的采样断点等原因一并保留；关闭后当天没有任何数据时仍显示「暂无有效数据」，但说明里会指出记录已关闭。补 `testRecordingDisabledMarksTheValueAsStopped`。（`Views/LiveDashboardView.swift`、`Views/DashboardView.swift`、`Tests/BatteryGlassTests/TodayEnergyDisplayTests.swift`）
+
 ## [2026-10-28]
 
 ### 修改

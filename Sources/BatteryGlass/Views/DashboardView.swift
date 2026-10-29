@@ -93,7 +93,10 @@ struct DashboardView: View {
                         frozenDashboard = LiveDashboardRenderedData(
                             snapshot: monitor.snapshot,
                             recentPower: monitor.recentPower,
-                            todayEnergy: TodayEnergyDisplay(summary: history.todaySummary)
+                            todayEnergy: TodayEnergyDisplay(
+                                summary: history.todaySummary,
+                                recordingEnabled: settings.recordHistory
+                            )
                         )
                     }
                     panelVisible = visible

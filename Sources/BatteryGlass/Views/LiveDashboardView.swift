@@ -8,27 +8,48 @@ struct TodayEnergyDisplay: Equatable {
     var warningText: String?
     var qualityLabel: String
 
-    init(summary: DailySummary?) {
-        energyKWh = summary.flatMap { $0.hasValidEnergy ? $0.energyKWh : nil }
-        needsAttention = summary?.needsEnergyAttention ?? false
-        warningText = summary?.energyQuality?.warningText
+    /// 记录关闭后今天的汇总不再增长，卡片上的数值只是关闭那一刻的快照。
+    private static let recordingDisabledWarning = "历史记录已关闭，之后的使用未计入今日耗电"
 
+    init(summary: DailySummary?, recordingEnabled: Bool) {
+        energyKWh = summary.flatMap { $0.hasValidEnergy ? $0.energyKWh : nil }
         let quality = summary?.energyQuality
-        if energyKWh == nil {
-            qualityLabel = "暂无有效数据"
-        } else if quality?.hasSamplingGaps == true
+        let summaryNeedsAttention = summary?.needsEnergyAttention ?? false
+        let summaryWarning = quality?.warningText
+
+        guard recordingEnabled else {
+            // 数值停在关闭时刻、之后不再增长，必须让它看起来「不再更新」，
+            // 否则用户只看到一串普通数字，以为耗电真的没变。
+            needsAttention = energyKWh != nil || summaryNeedsAttention
+            warningText = ([Self.recordingDisabledWarning, summaryWarning] as [String?])
+                .compactMap { $0 }
+                .joined(separator: "；")
+            qualityLabel = energyKWh == nil ? "暂无有效数据" : "记录已关闭"
+            return
+        }
+
+        needsAttention = summaryNeedsAttention
+        warningText = summaryWarning
+        qualityLabel = Self.qualityLabel(for: quality, hasValue: energyKWh != nil)
+    }
+
+    private static func qualityLabel(for quality: DailyEnergyQuality?, hasValue: Bool) -> String {
+        guard hasValue else { return "暂无有效数据" }
+        if quality?.hasSamplingGaps == true
             || quality?.hasUnmeasuredSleepEnergy == true
             || quality?.hasLowerBoundSleepEnergy == true {
-            qualityLabel = "记录不完整"
-        } else if quality?.hasEstimatedSleepEnergy == true {
-            qualityLabel = "含估算"
-        } else if quality?.hasUncalibratedCounterEnergy == true {
-            qualityLabel = "未校准"
-        } else if quality?.hasUnknownHistoricalCoverage == true {
-            qualityLabel = "旧版记录"
-        } else {
-            qualityLabel = "查看统计说明"
+            return "记录不完整"
         }
+        if quality?.hasEstimatedSleepEnergy == true {
+            return "含估算"
+        }
+        if quality?.hasUncalibratedCounterEnergy == true {
+            return "未校准"
+        }
+        if quality?.hasUnknownHistoricalCoverage == true {
+            return "旧版记录"
+        }
+        return "查看统计说明"
     }
 }
 
@@ -42,6 +63,7 @@ struct LiveDashboardRenderedData {
 struct LiveDashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(BatteryHistoryStore.self) private var history
+    @Environment(AppSettings.self) private var settings
     /// 面板离屏时传入最后一份数据；非 nil 时整页不再订阅 `BatteryMonitor` / `BatteryHistoryStore`，
     /// 避免离屏内容随每秒发布与每 5 秒汇总重算 4 张 KPI 卡片、功率趋势、指标网格。
     var rendered: LiveDashboardRenderedData?
@@ -49,7 +71,11 @@ struct LiveDashboardView: View {
     private var snapshot: BatterySnapshot { rendered?.snapshot ?? monitor.snapshot }
     private var powerSamples: [PowerSample] { rendered?.recentPower ?? monitor.recentPower }
     private var todayEnergy: TodayEnergyDisplay {
-        rendered?.todayEnergy ?? TodayEnergyDisplay(summary: history.todaySummary)
+        rendered?.todayEnergy
+            ?? TodayEnergyDisplay(
+                summary: history.todaySummary,
+                recordingEnabled: settings.recordHistory
+            )
     }
 
     var body: some View {
