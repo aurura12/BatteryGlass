@@ -1,16 +1,10 @@
 import SwiftUI
 
-/// 自定义动画分段控件：选中高亮胶囊弹性滑动，标题文字有选中态过渡。
-struct AnimatedSegmentedControl<T: Hashable>: View {
+/// 面板分段控件：选中状态立即切换。
+struct PanelSegmentedControl<T: Hashable>: View {
     let items: [T]
     @Binding var selection: T
     let label: (T) -> String
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// 减弱动态时用无动画切换，避免胶囊滑动与缩放。
-    private var selectionAnimation: Animation? {
-        reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
-    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -39,12 +33,13 @@ struct AnimatedSegmentedControl<T: Hashable>: View {
                 }
                 .frame(width: segmentWidth)
                 .offset(x: CGFloat(selectedIndex) * segmentWidth)
-                .animation(selectionAnimation, value: selection)
 
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                         Button {
-                            withAnimation(selectionAnimation) {
+                            var transaction = Transaction(animation: nil)
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
                                 selection = item
                             }
                         } label: {

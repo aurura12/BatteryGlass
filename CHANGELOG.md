@@ -4,6 +4,9 @@
 
 ## [2026-10-29]
 
+### 修改
+- 「实时 / 历史」切换时页面和选中胶囊立即切换，关闭滑动、缩放、模糊与淡入淡出效果。（`Views/DashboardView.swift`、`Views/PanelSegmentedControl.swift`）
+
 ### 修复
 - 清空历史时，放大曲线窗口也将实际加载日期和窗口标题同步到导航器回退后的日期，确保后续新样本能够显示。（`Views/ChartDetailView.swift`、`Tests/BatteryGlassTests/HistoryDaySelectionTests.swift`）
 

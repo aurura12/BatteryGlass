@@ -12,7 +12,6 @@ struct DashboardView: View {
     @Environment(BatteryMonitor.self) private var monitor
     @Environment(AppSettings.self) private var settings
     @Environment(BatteryHistoryStore.self) private var history
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("BatteryGlass.panelTab") private var tabRaw = PanelTab.live.rawValue
     @State private var showingQuitConfirmation = false
@@ -41,7 +40,7 @@ struct DashboardView: View {
             VStack(spacing: DashboardLayout.sectionSpacing) {
                 DashboardHeader(renderedSnapshot: frozenDashboard?.snapshot)
 
-                AnimatedSegmentedControl(
+                PanelSegmentedControl(
                     items: PanelTab.allCases,
                     selection: Binding(
                         get: { tab },
@@ -67,10 +66,10 @@ struct DashboardView: View {
                                 .padding(.vertical, DashboardLayout.contentInset)
                             }
                         }
-                        .transition(pageTransition)
+                        .transition(.identity)
                     } else {
                         HistoryView(isVisible: panelVisible)
-                            .transition(pageTransition)
+                            .transition(.identity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -113,27 +112,12 @@ struct DashboardView: View {
         .dynamicTypeSize(PanelLayoutPolicy.supportedDynamicTypeSizes)
         // 主题色在此注入：设置页改动 `themeAccentHex` 会让本视图重算，环境值随之更新。
         .environment(\.themeAccent, settings.themeAccent.color)
-        .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.86), value: tab)
         .confirmationDialog("确定要退出 BatteryGlass 吗？", isPresented: $showingQuitConfirmation, titleVisibility: .visible) {
             Button("退出", role: .destructive) {
                 NSApplication.shared.terminate(nil)
             }
             Button("取消", role: .cancel) {}
         }
-    }
-
-    /// 减弱动态时只做淡入淡出，去掉滑动/缩放/模糊位移。
-    private var pageTransition: AnyTransition {
-        reduceMotion ? .opacity : .pageSwitch(insertionEdge: insertionEdge, removalEdge: removalEdge)
-    }
-
-    /// 历史页从右侧滑入，实时页从左侧滑入，形成方向感切换。
-    private var insertionEdge: Edge {
-        tab == .live ? .leading : .trailing
-    }
-
-    private var removalEdge: Edge {
-        tab == .live ? .trailing : .leading
     }
 
     private var footer: some View {
