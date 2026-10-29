@@ -808,6 +808,55 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(reloaded.samples.first?.consumptionPowerW, 42)
     }
 
+    func testLegacyHistoricalSamplesAreRecoveredBeforeArchiving() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-(UUID().uuidString).json")
+        let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
+        let suiteName = "BatteryGlassTests.(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: archiveURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3_600)
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now)!
+        let missing = HistorySample(
+            timestamp: yesterday,
+            power: 20,
+            consumptionPowerW: nil,
+            percent: 50,
+            cycleCount: 1,
+            healthPercent: 98
+        )
+        // v8 的 history.json 仍带往日全部样本，升级后会被 pruneHistory() 归档并移出热层。
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let payload: [String: Any] = [
+            "version": 8,
+            "samples": [try JSONSerialization.jsonObject(with: try encoder.encode(missing))],
+            "dailySummaries": []
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: fileURL)
+
+        let recovered = diagnosticSample(at: yesterday.addingTimeInterval(1))
+        let store = BatteryHistoryStore(
+            settings: settings,
+            fileURL: fileURL,
+            now: { now },
+            diagnosticsLoader: { [recovered] }
+        )
+        await store.waitForDiagnosticsRecovery()
+
+        // 往日样本先回填、后归档：归档之后就不再参与回填了。
+        XCTAssertEqual(store.samples(forDay: yesterday).first?.consumptionPowerW, 42)
+        // 归档后热层只留跨午夜的边界样本，往日整天样本不再驻留内存。
+        let today = Calendar.current.startOfDay(for: now)
+        XCTAssertEqual(store.samples.filter { $0.timestamp < today }.count, 1)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

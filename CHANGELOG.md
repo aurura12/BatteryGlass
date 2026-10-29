@@ -7,6 +7,8 @@
 ### 修复
 - 诊断回填不再写入重复样本：`HistorySampleArchive` 的主键是完整时间戳（含小数秒），但 payload 用 ISO 8601 编码、读取时也用 `.iso8601` 解码，小数秒被截断。重启后内存样本的时间戳与 `live_samples` 主键不一致，回填按时间戳 upsert 就变成新增一行——库里出现两条同 id 的记录，重启后被一并加载（JSON 无边界样本时 `mergeLiveSamples` 也不会按 id 合并）。现在读取时用行内的 `timestamp` 列覆盖解码结果（`decodeSample(_:timestamp:)`），内存时间戳与主键逐位一致，回填走覆盖路径。补 `testLiveSamplesPreserveSubsecondTimestamps` 与 `testDiagnosticsRecoveryOverwritesArchivedRowInsteadOfAppending`（断言回填后归档仍只有一行、重启后数值保留）。（`Stores/HistorySampleArchive.swift`、`Tests/BatteryGlassTests/HistorySampleArchiveTests.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
 
+- 旧版历史的往日样本不再错过诊断回填：`load()` 原先先 `pruneHistory()` 归档、再调度回填，而 `needsDiagnosticsRecovery()` 只看今天——v8 及更早 `history.json` 里的往日样本被移出热层之后，即使诊断日志仍有对应读数也无法再补功率（`e6ed85a` 之前是对全部样本回填的）。现在回填覆盖内存中的全部样本，并在回填结束（含无需回填、解析失败）后由 completion 再调 `pruneHistory()`；回填期间 `pruneHistory()` 直接返回，避免 `record()` 抢先把待补样本归档。往日回填值写入分钟表、当天写入 `live_samples`。补 `testLegacyHistoricalSamplesAreRecoveredBeforeArchiving`（v8 文件里的昨日样本先回填再归档）。（`Stores/BatteryHistoryStore.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
+
 ## [2026-10-28]
 
 ### 修改

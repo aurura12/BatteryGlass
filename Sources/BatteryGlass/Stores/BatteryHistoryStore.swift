@@ -21,6 +21,8 @@ final class BatteryHistoryStore {
     private let diagnosticsLoader: @Sendable () -> [PowerDiagnosticsSample]
     /// 启动后的诊断回填任务。日志可达 50 MB，逐行解码必须离开主线程。
     @ObservationIgnored private var diagnosticsRecoveryTask: Task<Void, Never>?
+    /// 回填结束后的收尾动作（归档等）：回填期间不能把待补样本移出热层。
+    @ObservationIgnored private var diagnosticsRecoveryCompletion: (() -> Void)?
     private var historyClearedAt: Date?
     private var needsLegacyBackup = false
     private var canPersist = true
@@ -416,6 +418,7 @@ final class BatteryHistoryStore {
         // 后台回填可能还在解析旧日志：取消后再删除，避免旧读数写回已清空的样本。
         diagnosticsRecoveryTask?.cancel()
         diagnosticsRecoveryTask = nil
+        diagnosticsRecoveryCompletion = nil
         let failures: [String] = persistenceQueue.sync {
             var failures: [String] = []
             do {
@@ -598,11 +601,12 @@ final class BatteryHistoryStore {
 
         lastRecordedSample = samples.max { $0.timestamp < $1.timestamp }
         lastSamplesPrunedDay = nil
-        pruneHistory()
-
-        // 诊断日志（最多 50 MB / 10 万行）只在今天确实缺少功率读数时才解析，
-        // 且放到后台任务执行，避免启动时阻塞主线程数百毫秒。
-        scheduleDiagnosticsRecoveryIfNeeded()
+        // 诊断日志（最多 50 MB / 10 万行）只在确实缺少功率读数时才解析，且放到
+        // 后台任务执行，避免启动时阻塞主线程数百毫秒。旧版 `history.json` 的往日
+        // 样本归档后就离开热层、不再参与回填，因此归档要等回填结束后再做。
+        scheduleDiagnosticsRecoveryIfNeeded { [weak self] in
+            self?.pruneHistory()
+        }
 
         if summariesChanged || qualityBackfilled
             || sleepEnergyRestored || unmeasuredSleepBackfilled
@@ -621,14 +625,20 @@ final class BatteryHistoryStore {
 
     // MARK: - 诊断回填（启动后异步）
 
-    /// 只有今天确实存在缺失功率读数的样本时才值得解析诊断日志。
+    /// 只有内存里仍存在缺失功率读数的样本时才值得解析诊断日志。往日样本也算：
+    /// 旧版 `history.json` 升级后它们还在热层，归档归档前要先补一遍。
     private func needsDiagnosticsRecovery() -> Bool {
-        let today = Calendar.current.startOfDay(for: currentDate())
-        return samples.contains { $0.timestamp >= today && $0.consumptionPowerW == nil }
+        samples.contains { $0.consumptionPowerW == nil }
     }
 
-    private func scheduleDiagnosticsRecoveryIfNeeded() {
-        guard canPersist, diagnosticsRecoveryTask == nil, needsDiagnosticsRecovery() else { return }
+    /// 调度启动回填；`completion` 在任务结束（含无需回填）后于主线程执行一次，
+    /// 供调用方把归档动作推迟到回填之后。
+    private func scheduleDiagnosticsRecoveryIfNeeded(completion: (() -> Void)? = nil) {
+        guard canPersist, diagnosticsRecoveryTask == nil, needsDiagnosticsRecovery() else {
+            completion?()
+            return
+        }
+        diagnosticsRecoveryCompletion = completion
         let loader = diagnosticsLoader
         diagnosticsRecoveryTask = Task { [weak self] in
             // 文件读取与逐行 JSON 解码都在后台执行；主线程只接收结果并做纯计算。
@@ -645,7 +655,12 @@ final class BatteryHistoryStore {
 
     /// 把诊断日志里同一时刻的功率读数补回样本，并重算今天的汇总与采样质量。
     private func applyDiagnosticsRecovery(_ diagnostics: [PowerDiagnosticsSample]) {
-        defer { diagnosticsRecoveryTask = nil }
+        defer {
+            diagnosticsRecoveryTask = nil
+            let completion = diagnosticsRecoveryCompletion
+            diagnosticsRecoveryCompletion = nil
+            completion?()
+        }
         guard canPersist, !diagnostics.isEmpty else { return }
 
         let original = samples
@@ -673,11 +688,14 @@ final class BatteryHistoryStore {
         // 覆盖归档里的旧值（按时间戳 upsert），再写 JSON 汇总。
         let today = Calendar.current.startOfDay(for: currentDate())
         let changedToday = changed.filter { $0.timestamp >= today }
-        if !changedToday.isEmpty {
+        let changedEarlier = changed.filter { $0.timestamp < today }
+        if !changedToday.isEmpty || !changedEarlier.isEmpty {
             let archive = self.archive
             persistenceQueue.async {
                 do {
                     try archive.storeLiveSamples(changedToday)
+                    // 往日样本写进分钟表：旧版迁移时它们尚未归档，这里先幂等写一份。
+                    try archive.store(changedEarlier)
                 } catch {
                     NSLog("BatteryGlass: 诊断回填样本保存失败 - %@", error.localizedDescription)
                 }
@@ -880,6 +898,9 @@ final class BatteryHistoryStore {
     private func pruneHistory() {
         dailySummaries = DailyEnergySummaryPolicy.retainedSummaries(dailySummaries)
 
+        // 回填还在跑时不要归档：往日样本一旦移出热层就不再参与回填，
+        // 任务结束后的收尾动作会再调一次这里完成归档。
+        guard diagnosticsRecoveryTask == nil else { return }
         guard canPersist else { return }
         let today = Calendar.current.startOfDay(for: currentDate())
         guard lastSamplesPrunedDay != today else { return }
