@@ -781,11 +781,16 @@ final class BatteryHistoryStore {
 
     private func makePayload() -> HistoryPayload {
         let today = Calendar.current.startOfDay(for: currentDate())
+        // 回填尚未完成时，往日的完整热层样本可能只存在于旧版 JSON 中。
+        // 即使触发 flush 或退出，也要保留它们供下次启动继续回填；完成后由
+        // pruneHistory 压缩成跨午夜边界样本，恢复 v9 的稳态格式。
+        let persistedSamples = diagnosticsRecoveryTask == nil
+            ? Self.preMidnightSample(samples, today: today)
+            : samples.filter { $0.timestamp < today }
         return HistoryPayload(
             version: 9,
-            // 当天全精度样本在 `live_samples`；这里只保留跨午夜前的最后一条，
-            // 供重启后与昨夜样本做能量积分。
-            samples: Self.preMidnightSample(samples, today: today),
+            // 当天全精度样本仍写入 `live_samples`。
+            samples: persistedSamples,
             dailySummaries: dailySummaries,
             sleepSegments: sleepSegments,
             sleepIntervals: sleepIntervals,

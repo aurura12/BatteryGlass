@@ -857,6 +857,61 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(store.samples.filter { $0.timestamp < today }.count, 1)
     }
 
+    func testFlushDuringLegacyRecoveryPreservesSamplesForNextLaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3_600)
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now)!
+        let missing = HistorySample(
+            timestamp: yesterday, power: 20, consumptionPowerW: nil,
+            percent: 50, cycleCount: 1, healthPercent: 98
+        )
+        let boundary = HistorySample(
+            timestamp: yesterday.addingTimeInterval(120), power: 20, consumptionPowerW: 20,
+            percent: 50, cycleCount: 1, healthPercent: 98
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let fileURL = directory.appendingPathComponent("history.json")
+        let payload: [String: Any] = [
+            "version": 8,
+            "samples": try [missing, boundary].map { try JSONSerialization.jsonObject(with: encoder.encode($0)) },
+            "dailySummaries": []
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: fileURL)
+
+        // Simulate termination before the asynchronous diagnostics task has had a chance to run.
+        var first: BatteryHistoryStore? = BatteryHistoryStore(
+            settings: settings, fileURL: fileURL, now: { now }, diagnosticsLoader: { [] }
+        )
+        first?.flush()
+        first = nil
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let saved = try decoder.decode(PersistedHistory.self, from: Data(contentsOf: fileURL))
+        XCTAssertEqual(Set(saved.samples.map(\.id)), Set([missing.id, boundary.id]))
+
+        let diagnostic = diagnosticSample(at: yesterday)
+        let restarted = BatteryHistoryStore(
+            settings: settings, fileURL: fileURL, now: { now }, diagnosticsLoader: { [diagnostic] }
+        )
+        await restarted.waitForDiagnosticsRecovery()
+        let recovered = restarted.samples(forDay: yesterday).first { $0.id == missing.id }
+        XCTAssertEqual(recovered?.consumptionPowerW, 42)
+        let compacted = try decoder.decode(PersistedHistory.self, from: Data(contentsOf: fileURL))
+        XCTAssertEqual(compacted.samples.map(\.id), [boundary.id])
+    }
+
     func testDiagnosticsRecoveryInvalidatesSampleCaches() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BatteryGlass-(UUID().uuidString).json")

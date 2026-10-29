@@ -5,6 +5,8 @@
 ## [2026-10-29]
 
 ### 修复
+- 旧版历史回填期间退出或触发保存时保留待回填的往日样本，避免 JSON 提前缩减后下次启动无法恢复；回填结束并归档后再恢复 v9 的精简格式。（`Stores/BatteryHistoryStore.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
+
 - 修复已有的诊断回填重复记录：启动时一次性识别同一 ID、同一秒且其他字段一致的整秒回填行与原始小数秒行，保留原始时间戳和已恢复的功率；有冲突的记录保持不变。迁移使用 SQLite 事务，重复启动不会再次处理。（`Stores/HistorySampleArchive.swift`、`Stores/BatteryHistoryStore.swift`）
 
 - 面板历史页与放大窗口同时查看不同日期时不再互相清缓存：`BatteryHistoryStore` 的归档缓存是单槽的（`cachedArchiveDay` + `cachedArchiveSamples`），一边看今日、另一边看往日时每次刷新都会重新打开 SQLite 查一遍并覆盖对方的缓存，`samplesAsync` 的异步读取收益被抵消大半。现在改成按日缓存最近 3 天（`cachedArchiveDays` + 使用顺序，超限淘汰最久未用的一天），合并结果单独按「日期 + 热层数量 / 末条 id / 内容版本 / 当前自然日」缓存，写入某天归档时只失效该日的合并结果；`pruneHistory` 与 `clearHistory` 统一走 `invalidateArchiveCache()`。补 `testInterleavedDaysKeepTheirOwnArchivedSamples`（两天交替同步 / 异步读取都取到各自的样本）。（`Stores/BatteryHistoryStore.swift`、`Tests/BatteryGlassTests/LongTermHistoryTests.swift`）
