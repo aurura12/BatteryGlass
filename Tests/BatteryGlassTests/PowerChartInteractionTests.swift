@@ -36,6 +36,9 @@ final class PowerChartInteractionTests: XCTestCase {
             defer: false
         )
         window.contentView = hostingView
+        // 固定浅色外观：状态色与图表配色是随明暗外观切换的动态颜色，
+        // 深色模式下同一份视图会渲染出不同的像素，判定结果不可复现。
+        window.appearance = NSAppearance(named: .aqua)
         window.orderFront(nil)
         defer { window.orderOut(nil) }
         hostingView.layoutSubtreeIfNeeded()
@@ -45,11 +48,13 @@ final class PowerChartInteractionTests: XCTestCase {
             return
         }
         hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
-        let barCenters = blueBarCenters(in: bitmap)
         guard let barBottom = blueBarBottom(in: bitmap) else {
             XCTFail("未找到柱状图数据柱")
             return
         }
+        // 只统计「蓝柱一直延伸到基线」的列：图表上方的指标数值同样用主题色渲染，
+        // 按颜色统一判定会把它当成额外的柱子。
+        let barCenters = blueBarCenters(in: bitmap, baseline: barBottom)
         XCTAssertEqual(barCenters.count, 14)
         guard let firstBar = barCenters.first, let lastBar = barCenters.last,
               barCenters.count > 13 else {
@@ -65,6 +70,12 @@ final class PowerChartInteractionTests: XCTestCase {
         let labeledBarCenters = [0, 3, 7, 10, 13].map { barCenters[$0] }
         let pixelScale = CGFloat(bitmap.pixelsWide) / hostingView.bounds.width
         XCTAssertEqual(labelCenters.count, 5)
+        // 后面的断言按索引取值：像素判定偶发失败时先返回，否则会把整个测试进程打断，
+        // 后续用例（以及其它测试类）都跑不到。
+        guard labelCenters.count == 5, labelCenters.count == labeledBarCenters.count else {
+            XCTFail("日期标签数量异常：\(labelCenters.count)")
+            return
+        }
         for (labelCenter, barCenter) in zip(labelCenters, labeledBarCenters) {
             XCTAssertEqual(labelCenter, barCenter, accuracy: Int(ceil(1.5 * pixelScale)))
         }
@@ -214,12 +225,15 @@ final class PowerChartInteractionTests: XCTestCase {
         )
     }
 
-    private func blueBarCenters(in bitmap: NSBitmapImageRep) -> [Int] {
+    /// 数据柱的列中心。只看基线以上、且蓝色一直延伸到基线的列：
+    /// 图表上方的指标数值用的是同一主题色，坐标轴标签的字形边缘又会被次像素抗锯齿染出蓝色，
+    /// 两者都会混进按颜色统计的结果里，必须按「是否落到基线」区分。
+    private func blueBarCenters(in bitmap: NSBitmapImageRep, baseline: Int) -> [Int] {
         groupedColumns(
             (0..<bitmap.pixelsWide).filter { x in
-                let rows = blueRows(at: x, in: bitmap)
+                let rows = blueRows(at: x, in: bitmap).filter { $0 <= baseline }
                 guard let first = rows.first, let last = rows.last else { return false }
-                return rows.count >= 24 && last - first >= 30
+                return rows.count >= 24 && last - first >= 30 && last >= baseline - 6
             }
         )
     }
