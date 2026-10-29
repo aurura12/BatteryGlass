@@ -109,6 +109,22 @@ final class HistorySampleArchiveTests: XCTestCase {
         XCTAssertEqual(try archive.liveSamples(forDay: day, calendar: calendar).count, 2)
     }
 
+    func testLiveSamplesPreserveSubsecondTimestamps() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = HistorySampleArchive(fileURL: directory.appendingPathComponent("history.sqlite"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.date(from: DateComponents(year: 2026, month: 8, day: 27, hour: 10))!
+        let precise = sample(at: day.addingTimeInterval(0.375))
+
+        try archive.storeLiveSamples([precise])
+        // ISO 8601 payload 不带小数秒，读取必须以行主键为准：否则按时间戳回写会
+        // 因微秒差新增一行，而不是覆盖原记录。
+        XCTAssertEqual(try archive.liveSamples(forDay: day, calendar: calendar), [precise])
+        XCTAssertEqual(try archive.lastLiveSample(before: day.addingTimeInterval(60)), precise)
+    }
+
     func testArchivingLiveSamplesDowngradesToMinuteRowsAndDeletesLive() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

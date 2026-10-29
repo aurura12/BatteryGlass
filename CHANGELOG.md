@@ -2,6 +2,11 @@
 
 记录本项目每次修改的内容。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，按时间倒序排列。
 
+## [2026-10-29]
+
+### 修复
+- 诊断回填不再写入重复样本：`HistorySampleArchive` 的主键是完整时间戳（含小数秒），但 payload 用 ISO 8601 编码、读取时也用 `.iso8601` 解码，小数秒被截断。重启后内存样本的时间戳与 `live_samples` 主键不一致，回填按时间戳 upsert 就变成新增一行——库里出现两条同 id 的记录，重启后被一并加载（JSON 无边界样本时 `mergeLiveSamples` 也不会按 id 合并）。现在读取时用行内的 `timestamp` 列覆盖解码结果（`decodeSample(_:timestamp:)`），内存时间戳与主键逐位一致，回填走覆盖路径。补 `testLiveSamplesPreserveSubsecondTimestamps` 与 `testDiagnosticsRecoveryOverwritesArchivedRowInsteadOfAppending`（断言回填后归档仍只有一行、重启后数值保留）。（`Stores/HistorySampleArchive.swift`、`Tests/BatteryGlassTests/HistorySampleArchiveTests.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
+
 ## [2026-10-28]
 
 ### 修改

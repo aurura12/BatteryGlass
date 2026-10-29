@@ -38,21 +38,19 @@ struct HistorySampleArchive: Sendable {
         defer { sqlite3_close(database) }
         guard try hasTable(.live, in: database) else { return nil }
         let statement = try prepare(
-            "SELECT payload FROM live_samples WHERE timestamp < ? ORDER BY timestamp DESC LIMIT 1",
+            "SELECT timestamp, payload FROM live_samples WHERE timestamp < ? ORDER BY timestamp DESC LIMIT 1",
             in: database
         )
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, date.timeIntervalSince1970)
         let result = sqlite3_step(statement)
         if result == SQLITE_DONE { return nil }
-        guard result == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else {
+        guard result == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 1) else {
             throw failure(in: database)
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(
-            HistorySample.self,
-            from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
+        return try? decodeSample(
+            Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 1))),
+            timestamp: sqlite3_column_double(statement, 0)
         )
     }
 
@@ -202,7 +200,7 @@ struct HistorySampleArchive: Sendable {
         if start != nil { clauses.append("timestamp >= ?") }
         if end != nil { clauses.append("timestamp < ?") }
         let filter = clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND ")
-        let query = "SELECT payload FROM \(table.rawValue)\(filter) ORDER BY timestamp"
+        let query = "SELECT timestamp, payload FROM \(table.rawValue)\(filter) ORDER BY timestamp"
         let statement = try prepare(query, in: database)
         defer { sqlite3_finalize(statement) }
         var index: Int32 = 1
@@ -213,8 +211,6 @@ struct HistorySampleArchive: Sendable {
         if let end {
             sqlite3_bind_double(statement, index, end.timeIntervalSince1970)
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
         var samples: [HistorySample] = []
         var skipped = 0
         while true {
@@ -227,16 +223,27 @@ struct HistorySampleArchive: Sendable {
                 }
                 return samples
             }
-            guard result == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else {
+            guard result == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 1) else {
                 throw failure(in: database)
             }
-            let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
-            if let sample = try? decoder.decode(HistorySample.self, from: data) {
+            let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 1)))
+            if let sample = try? decodeSample(data, timestamp: sqlite3_column_double(statement, 0)) {
                 samples.append(sample)
             } else {
                 skipped += 1
             }
         }
+    }
+
+    /// payload 里的时间戳精度有限（ISO 8601 不带小数秒），行主键才是原始值。
+    /// 解码后用行内时间戳覆盖，保证内存样本与主键一致：否则诊断回填按时间戳
+    /// upsert 时会因小数秒差新增一行，重启后加载出同一 id 的两条记录。
+    private func decodeSample(_ data: Data, timestamp: Double) throws -> HistorySample {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var sample = try decoder.decode(HistorySample.self, from: data)
+        sample.timestamp = Date(timeIntervalSince1970: timestamp)
+        return sample
     }
 
     private enum Table: String {

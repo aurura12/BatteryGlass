@@ -732,30 +732,7 @@ final class HistoryPersistenceTests: XCTestCase {
         ]
         try JSONSerialization.data(withJSONObject: payload).write(to: fileURL)
 
-        let diagnostic = PowerDiagnosticsSample(
-            timestamp: now.addingTimeInterval(1),
-            state: .pluggedIn,
-            adapterConnected: true,
-            isCharging: false,
-            batteryVoltageV: 12,
-            batteryCurrentA: 0,
-            batteryPowerW: 0,
-            batteryDischargePowerW: nil,
-            batteryDischargingWhilePlugged: false,
-            telemetryBatteryPowerW: nil,
-            systemPowerInW: 42,
-            systemLoadW: 42,
-            systemVoltageInV: 20,
-            systemCurrentInA: 2.1,
-            adapterWatts: 100,
-            adapterVoltageV: 20,
-            adapterCurrentA: 2.1,
-            snapshotSystemPowerW: 42,
-            chargingPowerW: nil,
-            directSupplyPowerW: 42,
-            adapterOutputPowerW: 42,
-            consumptionPowerW: 42
-        )
+        let diagnostic = diagnosticSample(at: now.addingTimeInterval(1))
         let store = BatteryHistoryStore(
             settings: settings,
             fileURL: fileURL,
@@ -778,8 +755,88 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(reloaded.samples.first?.consumptionPowerW, 42)
     }
 
+    func testDiagnosticsRecoveryOverwritesArchivedRowInsteadOfAppending() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-\(UUID().uuidString).json")
+        let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
+        let suiteName = "BatteryGlassTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: archiveURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(10 * 3_600 + 0.375)
+        let sample = HistorySample(
+            timestamp: now,
+            power: 20,
+            consumptionPowerW: nil,
+            percent: 50,
+            cycleCount: 1,
+            healthPercent: 98
+        )
+        let payload: [String: Any] = ["version": 9, "samples": [], "dailySummaries": []]
+        try JSONSerialization.data(withJSONObject: payload).write(to: fileURL)
+        let archive = HistorySampleArchive(fileURL: archiveURL)
+        try archive.storeLiveSamples([sample])
+
+        let recovered = diagnosticSample(at: now.addingTimeInterval(1))
+        let store = BatteryHistoryStore(
+            settings: settings,
+            fileURL: fileURL,
+            now: { now },
+            diagnosticsLoader: { [recovered] }
+        )
+        await store.waitForDiagnosticsRecovery()
+        XCTAssertEqual(store.samples.first?.consumptionPowerW, 42)
+
+        // 回填必须覆盖归档里的同一行：按整秒时间戳写入会留下两条同 id 的记录。
+        let rows = try archive.liveSamples(forDay: now)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.timestamp, now)
+        XCTAssertEqual(rows.first?.consumptionPowerW, 42)
+
+        let reloaded = BatteryHistoryStore(
+            settings: settings,
+            fileURL: fileURL,
+            now: { now },
+            diagnosticsLoader: { [] }
+        )
+        XCTAssertEqual(reloaded.samples.count, 1)
+        XCTAssertEqual(reloaded.samples.first?.consumptionPowerW, 42)
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
+    }
+
+    private func diagnosticSample(at timestamp: Date) -> PowerDiagnosticsSample {
+        PowerDiagnosticsSample(
+            timestamp: timestamp,
+            state: .pluggedIn,
+            adapterConnected: true,
+            isCharging: false,
+            batteryVoltageV: 12,
+            batteryCurrentA: 0,
+            batteryPowerW: 0,
+            batteryDischargePowerW: nil,
+            batteryDischargingWhilePlugged: false,
+            telemetryBatteryPowerW: nil,
+            systemPowerInW: 42,
+            systemLoadW: 42,
+            systemVoltageInV: 20,
+            systemCurrentInA: 2.1,
+            adapterWatts: 100,
+            adapterVoltageV: 20,
+            adapterCurrentA: 2.1,
+            snapshotSystemPowerW: 42,
+            chargingPowerW: nil,
+            directSupplyPowerW: 42,
+            adapterOutputPowerW: 42,
+            consumptionPowerW: 42
+        )
     }
 
     private func snapshot(at timestamp: Date, cycleCount: Int) -> BatterySnapshot {
