@@ -56,6 +56,60 @@ final class PowerChartSegmentationTests: XCTestCase {
         XCTAssertTrue(PowerChartSegmentation.splitByGaps([]).isEmpty)
     }
 
+    func testPowerTimelineHandlesOverlappingSleepAndBoundarySamples() {
+        let start = date("2026-08-27 10:00:00")
+        let offsets = [-10, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+        let samples = offsets.reversed().map {
+            sample(at: start.addingTimeInterval(Double($0)), power: 10)
+        }
+        let intervals = [
+            SleepInterval(start: start.addingTimeInterval(30), end: start.addingTimeInterval(35)),
+            SleepInterval(start: start.addingTimeInterval(15), end: start.addingTimeInterval(30)),
+            SleepInterval(start: start.addingTimeInterval(42), end: start.addingTimeInterval(44)),
+            SleepInterval(start: start.addingTimeInterval(10), end: start.addingTimeInterval(20)),
+            SleepInterval(start: start.addingTimeInterval(50), end: start.addingTimeInterval(40)),
+            SleepInterval(start: start.addingTimeInterval(5), end: start.addingTimeInterval(5))
+        ]
+
+        let segments = PowerChartSegmentation.splitForPowerTimeline(samples, sleepIntervals: intervals)
+
+        XCTAssertEqual(segments.map { $0.map { $0.timestamp.timeIntervalSince(start) } }, [
+            [-10, 0, 5], [35, 40], [45, 50]
+        ])
+    }
+
+    func testSleepIntervalFilteringKeepsEndBoundaryAndIgnoresInvalidIntervals() {
+        let start = date("2026-08-27 10:00:00")
+        let offsets = [5, 10, 19, 20, 29, 30, 35, 40, 45]
+        let samples = offsets.map { sample(at: start.addingTimeInterval(Double($0)), power: 10) }
+        let intervals = [
+            SleepInterval(start: start.addingTimeInterval(20), end: start.addingTimeInterval(30)),
+            SleepInterval(start: start.addingTimeInterval(10), end: start.addingTimeInterval(20)),
+            SleepInterval(start: start.addingTimeInterval(5), end: start.addingTimeInterval(5)),
+            SleepInterval(start: start.addingTimeInterval(40), end: start.addingTimeInterval(35))
+        ]
+
+        let filtered = PowerChartSegmentation.excludingSleepIntervals(samples, sleepIntervals: intervals)
+
+        XCTAssertEqual(filtered.map { $0.timestamp.timeIntervalSince(start) }, [5, 30, 35, 40, 45])
+    }
+
+    func testGapSplittingUsesHalfOpenSleepIntervalBoundaries() {
+        let start = date("2026-08-27 10:00:00")
+        let samples = (0...5).map { sample(at: start.addingTimeInterval(Double($0) * 10), power: 10) }
+        let intervals = [
+            SleepInterval(start: start.addingTimeInterval(35), end: start.addingTimeInterval(40)),
+            SleepInterval(start: start.addingTimeInterval(10), end: start.addingTimeInterval(20)),
+            SleepInterval(start: start.addingTimeInterval(20), end: start.addingTimeInterval(20))
+        ]
+
+        let segments = PowerChartSegmentation.splitByGaps(samples, breakingAt: intervals)
+
+        XCTAssertEqual(segments.map { $0.map { $0.timestamp.timeIntervalSince(start) } }, [
+            [0, 10], [20, 30], [40, 50]
+        ])
+    }
+
     func testExcludingSleepSegmentsFiltersInternalSamples() {
         let start = date("2026-08-27 22:00:00")
         let samples = (0..<5).map { sample(at: start.addingTimeInterval(Double($0) * 10), power: 10) }

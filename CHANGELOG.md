@@ -8,6 +8,8 @@
 - 「实时 / 历史」切换时页面和选中胶囊立即切换，关闭滑动、缩放、模糊与淡入淡出效果。（`Views/DashboardView.swift`、`Views/PanelSegmentedControl.swift`）
 
 ### 修复
+- 优化「实时 / 历史」切换：历史功率曲线原先逐样本遍历全部历史睡眠区间，记录积累后进入历史页会明显停顿。现在先合并睡眠区间并二分查询，保留休眠边界和曲线断点的原有语义。（`Views/HistoryChartModels.swift`、`Tests/BatteryGlassTests/PowerChartSegmentationTests.swift`）
+
 - 清空历史时，放大曲线窗口也将实际加载日期和窗口标题同步到导航器回退后的日期，确保后续新样本能够显示。（`Views/ChartDetailView.swift`、`Tests/BatteryGlassTests/HistoryDaySelectionTests.swift`）
 
 - 查看往日曲线时，诊断回填即使没有改变归档日期数量，也会重新加载当前日期，避免继续显示回填前的样本。（`Views/HistoryView.swift`）

@@ -372,6 +372,52 @@ enum BatteryLevelAxis {
     }
 }
 
+/// 合并重叠的睡眠区间，使逐样本查询不必扫描全部历史记录。
+private struct SleepIntervalIndex {
+    private let ranges: [Range<Date>]
+
+    init(_ intervals: [SleepInterval]) {
+        let sorted = intervals.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
+        var merged: [Range<Date>] = []
+        for interval in sorted {
+            if let last = merged.last, interval.start <= last.upperBound {
+                if interval.end > last.upperBound {
+                    merged[merged.count - 1] = last.lowerBound..<interval.end
+                }
+            } else {
+                merged.append(interval.start..<interval.end)
+            }
+        }
+        ranges = merged
+    }
+
+    /// 合并后区间的终点递增；找到第一个结束于给定时刻之后的区间。
+    private func firstEnding(after date: Date) -> Int {
+        var lower = 0
+        var upper = ranges.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if ranges[middle].upperBound <= date {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower
+    }
+
+    func contains(_ date: Date) -> Bool {
+        let index = firstEnding(after: date)
+        return index < ranges.count && ranges[index].lowerBound <= date
+    }
+
+    func overlaps(_ start: Date, _ end: Date) -> Bool {
+        guard end > start else { return false }
+        let index = firstEnding(after: start)
+        return index < ranges.count && ranges[index].lowerBound < end
+    }
+}
+
 /// 把样本按时间缺口切分为连续段，供功率曲线缺口处断开渲染。
 enum PowerChartSegmentation {
     /// Split the source timeline at missing/zero readings, sleeps, and long observation gaps.
@@ -381,15 +427,12 @@ enum PowerChartSegmentation {
         maximumGap: TimeInterval = 300
     ) -> [[HistorySample]] {
         let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        let sleepIndex = SleepIntervalIndex(sleepIntervals)
         var segments: [[HistorySample]] = []
         var current: [HistorySample] = []
 
         for sample in sorted {
-            let isSleeping = sleepIntervals.contains { interval in
-                interval.end > interval.start
-                    && interval.start <= sample.timestamp
-                    && sample.timestamp < interval.end
-            }
+            let isSleeping = sleepIndex.contains(sample.timestamp)
             guard !isSleeping,
                   let power = sample.consumptionPowerW,
                   power.isFinite,
@@ -403,9 +446,7 @@ enum PowerChartSegmentation {
 
             if let previous = current.last {
                 let gap = sample.timestamp.timeIntervalSince(previous.timestamp)
-                let crossesSleep = sleepIntervals.contains {
-                    $0.overlaps(previous.timestamp, sample.timestamp)
-                }
+                let crossesSleep = sleepIndex.overlaps(previous.timestamp, sample.timestamp)
                 if gap > maximumGap || crossesSleep {
                     segments.append(current)
                     current = []
@@ -451,13 +492,12 @@ enum PowerChartSegmentation {
     ) -> [[HistorySample]] {
         let sorted = samples.sorted { $0.timestamp < $1.timestamp }
         guard let first = sorted.first else { return [] }
+        let sleepIndex = SleepIntervalIndex(sleepIntervals)
 
         var segments: [[HistorySample]] = [[first]]
         for sample in sorted.dropFirst() {
             guard let last = segments[segments.count - 1].last else { continue }
-            let crossesSleepInterval = sleepIntervals.contains {
-                $0.overlaps(last.timestamp, sample.timestamp)
-            }
+            let crossesSleepInterval = sleepIndex.overlaps(last.timestamp, sample.timestamp)
             if sample.timestamp.timeIntervalSince(last.timestamp) > maximumGap || crossesSleepInterval {
                 segments.append([sample])
             } else {
@@ -473,13 +513,8 @@ enum PowerChartSegmentation {
         sleepIntervals: [SleepInterval]
     ) -> [HistorySample] {
         guard !sleepIntervals.isEmpty else { return samples }
-        return samples.filter { sample in
-            !sleepIntervals.contains { interval in
-                interval.end > interval.start
-                    && interval.start <= sample.timestamp
-                    && sample.timestamp < interval.end
-            }
-        }
+        let sleepIndex = SleepIntervalIndex(sleepIntervals)
+        return samples.filter { !sleepIndex.contains($0.timestamp) }
     }
 
     /// 过滤掉落在任一待机区间时间范围内的样本。
