@@ -857,6 +857,59 @@ final class HistoryPersistenceTests: XCTestCase {
         XCTAssertEqual(store.samples.filter { $0.timestamp < today }.count, 1)
     }
 
+    func testDiagnosticsRecoveryInvalidatesSampleCaches() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BatteryGlass-(UUID().uuidString).json")
+        let archiveURL = fileURL.deletingPathExtension().appendingPathExtension("sqlite")
+        let suiteName = "BatteryGlassTests.(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: archiveURL)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults)
+        let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(10 * 3_600)
+        let missing = HistorySample(
+            timestamp: now,
+            power: 20,
+            consumptionPowerW: nil,
+            percent: 50,
+            cycleCount: 1,
+            healthPercent: 98
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let payload: [String: Any] = [
+            "version": 9,
+            "samples": [try JSONSerialization.jsonObject(with: try encoder.encode(missing))],
+            "dailySummaries": []
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: fileURL)
+
+        let recovered = diagnosticSample(at: now.addingTimeInterval(1))
+        let store = BatteryHistoryStore(
+            settings: settings,
+            fileURL: fileURL,
+            now: { now },
+            diagnosticsLoader: { [recovered] }
+        )
+        // 回填前先读一次，让存储层与视图缓存都建立条目；回填只改读数、不改数量与 id，
+        // 没有内容版本号时这两处会一直返回回填前的 nil。
+        let dayCache = TodaySamplesCache()
+        XCTAssertNil(store.samples(forDay: now).first?.consumptionPowerW)
+        XCTAssertNil(dayCache.samples(from: store.samples, day: now, version: store.samplesVersion)[0].consumptionPowerW)
+
+        await store.waitForDiagnosticsRecovery()
+
+        XCTAssertEqual(store.samples(forDay: now).first?.consumptionPowerW, 42)
+        XCTAssertEqual(
+            dayCache.samples(from: store.samples, day: now, version: store.samplesVersion)[0].consumptionPowerW,
+            42
+        )
+    }
+
     private struct PersistedHistory: Decodable {
         let samples: [HistorySample]
     }

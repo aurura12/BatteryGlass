@@ -1,20 +1,23 @@
 import Foundation
 
-/// 指定日期的样本记忆化：仅在样本数量、最后一条 id 或日期变化时重新过滤。
+/// 指定日期的样本记忆化：仅在样本数量、最后一条 id、内容版本或日期变化时重新过滤。
+/// 诊断回填只替换读数、不改数量与 id，因此必须靠 `version` 判断失效。
 final class TodaySamplesCache {
     private var cached: [HistorySample] = []
     private var lastCount = -1
     private var lastID: UUID?
+    private var lastVersion = -1
     private var dayKey = ""
 
-    func samples(from all: [HistorySample], day: Date) -> [HistorySample] {
+    func samples(from all: [HistorySample], day: Date, version: Int) -> [HistorySample] {
         let key = BatteryFormatters.dayKey(for: day)
-        if lastCount == all.count, lastID == all.last?.id, dayKey == key {
+        if lastCount == all.count, lastID == all.last?.id, lastVersion == version, dayKey == key {
             return cached
         }
         cached = HistoryRetention.samples(forDay: day, from: all)
         lastCount = all.count
         lastID = all.last?.id
+        lastVersion = version
         dayKey = key
         return cached
     }
@@ -25,22 +28,30 @@ final class PowerChartDataCache {
     private var cached: PowerChartData?
     private var lastCount = -1
     private var lastID: UUID?
+    private var lastVersion = -1
 
-    func data(for samples: [HistorySample], sleepIntervals: [SleepInterval]) -> PowerChartData {
+    func data(
+        for samples: [HistorySample],
+        sleepIntervals: [SleepInterval],
+        version: Int
+    ) -> PowerChartData {
         if let cached,
            lastCount == samples.count,
            lastID == samples.last?.id,
+           lastVersion == version,
            cachedSleepIntervals == sleepIntervals {
             return cached
         }
         let data = PowerChartData(
             samples: samples,
             sleepIntervals: sleepIntervals,
-            maximumDisplayedSamples: HistoryChartRendering.maximumDisplayedSamples
+            maximumDisplayedSamples: HistoryChartRendering.maximumDisplayedSamples,
+            sourceVersion: version
         )
         cached = data
         lastCount = samples.count
         lastID = samples.last?.id
+        lastVersion = version
         cachedSleepIntervals = sleepIntervals
         return data
     }
@@ -53,18 +64,24 @@ final class BatteryLevelChartDataCache {
     private var cached: BatteryLevelChartData?
     private var lastCount = -1
     private var lastID: UUID?
+    private var lastVersion = -1
 
-    func data(for samples: [HistorySample]) -> BatteryLevelChartData {
-        if let cached, lastCount == samples.count, lastID == samples.last?.id {
+    func data(for samples: [HistorySample], version: Int) -> BatteryLevelChartData {
+        if let cached,
+           lastCount == samples.count,
+           lastID == samples.last?.id,
+           lastVersion == version {
             return cached
         }
         let data = BatteryLevelChartData(
             samples: samples,
-            maximumDisplayedSamples: HistoryChartRendering.maximumDisplayedSamples
+            maximumDisplayedSamples: HistoryChartRendering.maximumDisplayedSamples,
+            sourceVersion: version
         )
         cached = data
         lastCount = samples.count
         lastID = samples.last?.id
+        lastVersion = version
         return data
     }
 }
@@ -78,6 +95,7 @@ final class PowerChartSegmentCache {
         var domainUpper: Date
         var sampleCount: Int
         var lastSampleID: UUID?
+        var sourceVersion: Int
         var segmentCount: Int
         var sleepIntervals: [SleepInterval]
     }
@@ -98,6 +116,7 @@ final class PowerChartSegmentCache {
             domainUpper: dateDomain.upperBound,
             sampleCount: chartData.plotSamples.count,
             lastSampleID: chartData.plotSamples.last?.id,
+            sourceVersion: chartData.sourceVersion,
             segmentCount: chartData.fullSegments.count,
             sleepIntervals: sleepIntervals
         )
@@ -142,6 +161,7 @@ final class BatteryLevelSegmentCache {
         var domainUpper: Date
         var sampleCount: Int
         var lastSampleID: UUID?
+        var sourceVersion: Int
     }
 
     private var key: Key?
@@ -157,7 +177,8 @@ final class BatteryLevelSegmentCache {
             domainLower: domain.lowerBound,
             domainUpper: domain.upperBound,
             sampleCount: chartData.samples.count,
-            lastSampleID: chartData.samples.last?.id
+            lastSampleID: chartData.samples.last?.id,
+            sourceVersion: chartData.sourceVersion
         )
         if newKey == key { return result }
 

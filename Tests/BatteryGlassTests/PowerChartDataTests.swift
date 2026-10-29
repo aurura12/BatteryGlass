@@ -282,6 +282,50 @@ final class PowerChartDataTests: XCTestCase {
         ]
     }
 
+    func testCachesRebuildWhenSampleContentVersionChanges() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var samples = (0..<20).map {
+            historySample(at: start.addingTimeInterval(Double($0) * 60))
+        }
+        let dayCache = TodaySamplesCache()
+        let dataCache = PowerChartDataCache()
+        let levelCache = BatteryLevelChartDataCache()
+        let segmentCache = PowerChartSegmentCache()
+        let levelSegmentCache = BatteryLevelSegmentCache()
+        let fullDay = start...start.addingTimeInterval(10_000)
+
+        XCTAssertEqual(dayCache.samples(from: samples, day: start, version: 0).count, 20)
+
+        // 诊断回填只替换读数，样本数量与末条 id 都不变：只能靠版本号判定失效。
+        samples[3].consumptionPowerW = 99
+        XCTAssertEqual(
+            dayCache.samples(from: samples, day: start, version: 0)[3].consumptionPowerW,
+            20,
+            "版本号不变时应继续复用缓存"
+        )
+        XCTAssertEqual(dayCache.samples(from: samples, day: start, version: 1)[3].consumptionPowerW, 99)
+
+        XCTAssertEqual(dataCache.data(for: samples, sleepIntervals: [], version: 0).sourceVersion, 0)
+        XCTAssertEqual(dataCache.data(for: samples, sleepIntervals: [], version: 1).sourceVersion, 1)
+        XCTAssertEqual(levelCache.data(for: samples, version: 1).sourceVersion, 1)
+
+        let levelData = BatteryLevelChartData(samples: samples, maximumDisplayedSamples: 800, sourceVersion: 1)
+        let end = start.addingTimeInterval(10_000).timeIntervalSinceReferenceDate
+        let bounds: ClosedRange<Double> = start.timeIntervalSinceReferenceDate...end
+        let window = ChartZoomWindow.fullRange(bounds: bounds, minimumSpan: 60)
+        let levelResult = levelSegmentCache.data(chartData: levelData, window: window, domain: fullDay)
+        XCTAssertEqual(levelResult.segments.flatMap { $0 }.count, 20)
+
+        // 段缓存同样按源版本失效：旧版本的缓存不能继续喂给新数据。
+        let oldData = PowerChartData(samples: samples, maximumDisplayedSamples: 800, sourceVersion: 0)
+        let newData = PowerChartData(samples: samples, maximumDisplayedSamples: 800, sourceVersion: 1)
+        _ = segmentCache.segments(chartData: oldData, sleepIntervals: [], isZoomed: false, dateDomain: fullDay)
+        let refreshed = segmentCache.segments(
+            chartData: newData, sleepIntervals: [], isZoomed: false, dateDomain: fullDay
+        )
+        XCTAssertEqual(refreshed.rendered.flatMap { $0 }[3].consumptionPowerW, 99)
+    }
+
     private func historySample(at timestamp: Date) -> HistorySample {
         HistorySample(
             timestamp: timestamp,

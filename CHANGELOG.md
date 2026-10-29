@@ -9,6 +9,8 @@
 
 - 旧版历史的往日样本不再错过诊断回填：`load()` 原先先 `pruneHistory()` 归档、再调度回填，而 `needsDiagnosticsRecovery()` 只看今天——v8 及更早 `history.json` 里的往日样本被移出热层之后，即使诊断日志仍有对应读数也无法再补功率（`e6ed85a` 之前是对全部样本回填的）。现在回填覆盖内存中的全部样本，并在回填结束（含无需回填、解析失败）后由 completion 再调 `pruneHistory()`；回填期间 `pruneHistory()` 直接返回，避免 `record()` 抢先把待补样本归档。往日回填值写入分钟表、当天写入 `live_samples`。补 `testLegacyHistoricalSamplesAreRecoveredBeforeArchiving`（v8 文件里的昨日样本先回填再归档）。（`Stores/BatteryHistoryStore.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
 
+- 诊断回填后图表与缓存不再停留在旧数据：回填只替换样本的 `consumptionPowerW`，数量与末条 id 都不变，而 `TodaySamplesCache`、`PowerChartDataCache`、`BatteryLevelChartDataCache`、`PowerChartSegmentCache`、`BatteryLevelSegmentCache` 以及 `BatteryHistoryStore.samples(forDay:)` 的记忆化都以「数量 + 末条 id」为键，因此会一直返回回填前的结果（记录关闭时没有新样本，旧曲线永久保留）。现在 `BatteryHistoryStore` 新增 `samplesVersion`（在加载、回填、跨天归档、清空时自增；仅追加样本仍靠数量与 id 判定，不额外失效），上述缓存键与放大窗口的 `ReloadKey` 一并带上它；`PowerChartData` / `BatteryLevelChartData` 记录 `sourceVersion` 供段缓存使用。补 `testCachesRebuildWhenSampleContentVersionChanges` 与 `testDiagnosticsRecoveryInvalidatesSampleCaches`。（`Stores/BatteryHistoryStore.swift`、`Views/HistoryChartCaches.swift`、`Views/HistoryChartModels.swift`、`Views/HistoryView.swift`、`Views/ChartDetailView.swift`、`Tests/BatteryGlassTests/PowerChartDataTests.swift`、`Tests/BatteryGlassTests/HistoryPersistenceTests.swift`）
+
 ## [2026-10-28]
 
 ### 修改

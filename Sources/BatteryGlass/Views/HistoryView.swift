@@ -44,7 +44,7 @@ struct HistoryView: View {
         // 往日曲线来自归档（静态），隐藏时也无需冻结。
         if !followsToday { return archivedSamples }
         return isVisible
-            ? todayCache.samples(from: history.samples, day: activeDay)
+            ? todayCache.samples(from: history.samples, day: activeDay, version: history.samplesVersion)
             : frozenSamples
     }
 
@@ -57,11 +57,15 @@ struct HistoryView: View {
     }
 
     private var chartData: PowerChartData {
-        chartCache.data(for: renderedSamples, sleepIntervals: sleepIntervals)
+        chartCache.data(
+            for: renderedSamples,
+            sleepIntervals: sleepIntervals,
+            version: history.samplesVersion
+        )
     }
 
     private var levelChartData: BatteryLevelChartData {
-        levelChartCache.data(for: renderedSamples)
+        levelChartCache.data(for: renderedSamples, version: history.samplesVersion)
     }
 
     /// 记录不可用时的顶部提示：持久化故障比「用户主动关闭」更严重，优先显示。
@@ -130,7 +134,9 @@ struct HistoryView: View {
         .task(id: cacheKey) {
             guard isVisible else { return }
             if followsToday {
-                frozenSamples = todayCache.samples(from: history.samples, day: activeDay)
+                frozenSamples = todayCache.samples(
+                    from: history.samples, day: activeDay, version: history.samplesVersion
+                )
             }
             frozenSleepIntervals = history.sleepIntervals
             frozenSummaries = energyRange.summaries(from: history)

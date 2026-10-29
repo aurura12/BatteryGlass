@@ -86,20 +86,26 @@ struct PowerChartData {
 
     let energySamples: [HistorySample]
     let chartSamples: [HistorySample]
+    /// 源样本的内容版本：数量与末条 id 不变、只有读数被替换时（诊断回填）
+    /// 让分段缓存失效，否则曲线会一直停在回填前的数据。
+    let sourceVersion: Int
 
-    init(samples: [HistorySample], maximumDisplayedSamples: Int) {
+    init(samples: [HistorySample], maximumDisplayedSamples: Int, sourceVersion: Int = 0) {
         self.init(
             samples: samples,
             sleepIntervals: [],
-            maximumDisplayedSamples: maximumDisplayedSamples
+            maximumDisplayedSamples: maximumDisplayedSamples,
+            sourceVersion: sourceVersion
         )
     }
 
     init(
         samples: [HistorySample],
         sleepIntervals: [SleepInterval],
-        maximumDisplayedSamples: Int
+        maximumDisplayedSamples: Int,
+        sourceVersion: Int = 0
     ) {
+        self.sourceVersion = sourceVersion
         let energySamples = samples.filter { $0.consumptionPowerW != nil }
         self.energySamples = energySamples
 
@@ -279,8 +285,11 @@ struct BatteryLevelChartData {
     let displayedSegments: [[HistorySample]]
     /// 由全量样本预计算的 Y 轴域（抽样可能丢极值，故不能用抽样集计算）。
     let percentDomain: ClosedRange<Double>
+    /// 源样本的内容版本，供分段缓存判断是否要重建。
+    let sourceVersion: Int
 
-    init(samples: [HistorySample], maximumDisplayedSamples: Int) {
+    init(samples: [HistorySample], maximumDisplayedSamples: Int, sourceVersion: Int = 0) {
+        self.sourceVersion = sourceVersion
         let valid = samples.filter { $0.percent.isFinite }
         self.samples = valid
         self.percentDomain = BatteryLevelAxis.yDomain(for: valid.map(\.percent))

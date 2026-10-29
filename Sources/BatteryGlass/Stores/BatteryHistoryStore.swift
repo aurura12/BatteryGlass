@@ -6,6 +6,9 @@ import Observation
 @Observable
 final class BatteryHistoryStore {
     private(set) var samples: [HistorySample] = []
+    /// 样本内容版本：数量与末条 id 都没变、只有读数被替换时（诊断回填）用它
+    /// 让视图与记忆化缓存失效。仅追加样本不需要自增（数量与 id 已经变了）。
+    private(set) var samplesVersion = 0
     private(set) var dailySummaries: [DailySummary] = []
     private(set) var sleepSegments: [SleepSegment] = []
     private(set) var sleepIntervals: [SleepInterval] = []
@@ -33,6 +36,7 @@ final class BatteryHistoryStore {
     @ObservationIgnored private var cachedMergedSamples: [HistorySample] = []
     @ObservationIgnored private var cachedLiveCount = -1
     @ObservationIgnored private var cachedLiveLastID: UUID?
+    @ObservationIgnored private var cachedSamplesVersion = -1
     @ObservationIgnored private var cachedAsOfDay: Date?
     @ObservationIgnored private var cachedAvailableDays: [Date] = []
     @ObservationIgnored private var cachedAvailableDaysCount = -1
@@ -309,12 +313,14 @@ final class BatteryHistoryStore {
             }
         }
         let today = Calendar.current.startOfDay(for: currentDate())
-        if cachedLiveCount != samples.count || cachedLiveLastID != samples.last?.id || cachedAsOfDay != today {
+        if cachedLiveCount != samples.count || cachedLiveLastID != samples.last?.id
+            || cachedSamplesVersion != samplesVersion || cachedAsOfDay != today {
             cachedMergedSamples = mergedSamples(
                 cachedArchiveSamples, HistoryRetention.samples(forDay: start, from: samples)
             )
             cachedLiveCount = samples.count
             cachedLiveLastID = samples.last?.id
+            cachedSamplesVersion = samplesVersion
             cachedAsOfDay = today
         }
         return cachedMergedSamples
@@ -446,6 +452,7 @@ final class BatteryHistoryStore {
         historyClearedAt = currentDate()
         cancelPendingSleepEnergy()
         samples = []
+        samplesVersion += 1
         dailySummaries = []
         sleepSegments = []
         sleepIntervals = []
@@ -573,6 +580,7 @@ final class BatteryHistoryStore {
             loaded.sort { $0.timestamp < $1.timestamp }
         }
         samples = loaded
+        samplesVersion += 1
         if payload.version >= 2 {
             // 统一按日期升序，保证统计范围和明细展示的顺序一致。
             dailySummaries = payload.dailySummaries.sorted { $0.dayKey < $1.dayKey }
@@ -672,6 +680,8 @@ final class BatteryHistoryStore {
             pair.0.consumptionPowerW != pair.1.consumptionPowerW ? pair.1 : nil
         }
         samples = result.samples
+        // 数量与末条 id 都没变，只能靠版本号让图表与缓存重算。
+        samplesVersion += 1
 
         let todayKey = BatteryFormatters.dayKey(for: currentDate())
         let recalculatedDayKeys = updateEnergySummaries(
@@ -935,6 +945,7 @@ final class BatteryHistoryStore {
         markArchived(pending)
         archivedDays = Array(Set(archivedDays + HistoryRetention.availableDays(from: older))).sorted()
         samples = Self.liveSamples(samples, today: today)
+        samplesVersion += 1
         cachedArchiveDay = nil
         cachedArchiveSamples = []
         lastSamplesPrunedDay = today

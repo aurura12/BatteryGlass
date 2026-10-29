@@ -66,6 +66,8 @@ struct ChartDetailView: View {
         var isVisible: Bool
         var liveCount: Int
         var liveLastID: UUID?
+        /// 诊断回填只改读数、不改数量与 id，缺少版本号时窗口会一直显示回填前的曲线。
+        var samplesVersion: Int
         var archivedDayCount: Int
     }
 
@@ -76,6 +78,7 @@ struct ChartDetailView: View {
             isVisible: visible,
             liveCount: visible ? history.samples.count : 0,
             liveLastID: visible ? history.samples.last?.id : nil,
+            samplesVersion: visible ? history.samplesVersion : 0,
             archivedDayCount: visible ? history.archivedDays.count : 0
         )
     }
@@ -160,7 +163,11 @@ struct ChartDetailView: View {
         switch kind {
         case .power:
             TodayPowerChart(
-                chartData: chartCache.data(for: samples, sleepIntervals: history.sleepIntervals),
+                chartData: chartCache.data(
+                    for: samples,
+                    sleepIntervals: history.sleepIntervals,
+                    version: history.samplesVersion
+                ),
                 sleepIntervals: history.sleepIntervals,
                 day: day,
                 emptyMessage: emptyCurveMessage ?? "暂无有效功率曲线",
@@ -168,7 +175,7 @@ struct ChartDetailView: View {
             )
         case .level:
             TodayBatteryLevelChart(
-                chartData: levelChartCache.data(for: samples),
+                chartData: levelChartCache.data(for: samples, version: history.samplesVersion),
                 day: day,
                 emptyMessage: emptyCurveMessage,
                 plotHeight: nil
