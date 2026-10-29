@@ -120,6 +120,39 @@ final class LongTermHistoryTests: XCTestCase {
         XCTAssertEqual(reloaded.samples(forDay: midnight.addingTimeInterval(-5)).count, 1)
     }
 
+    func testInterleavedDaysKeepTheirOwnArchivedSamples() async throws {
+        let context = try Context()
+        defer { context.cleanup() }
+        let today = Calendar.current.startOfDay(for: context.now)
+        let firstDay = today.addingTimeInterval(-3 * 86_400)
+        let secondDay = today.addingTimeInterval(-2 * 86_400)
+        try context.archive.store([
+            sample(at: firstDay),
+            sample(at: firstDay.addingTimeInterval(60)),
+            sample(at: firstDay.addingTimeInterval(120))
+        ])
+        try context.archive.store([
+            sample(at: secondDay),
+            sample(at: secondDay.addingTimeInterval(60))
+        ])
+        let store = context.makeStore()
+
+        // 面板历史页与放大窗口可能同时查看不同日期：两个日期交替读取时必须各自命中，
+        // 且不能把另一天的样本当成这一天的结果返回。
+        XCTAssertEqual(store.samples(forDay: firstDay).count, 3)
+        XCTAssertEqual(store.samples(forDay: secondDay).count, 2)
+        XCTAssertEqual(store.samples(forDay: firstDay).count, 3)
+        XCTAssertEqual(store.samples(forDay: secondDay).first?.timestamp, secondDay)
+
+        // 异步路径写回同一套缓存，交替调用结果保持一致。
+        let firstAsync = await store.samplesAsync(forDay: firstDay)
+        let secondAsync = await store.samplesAsync(forDay: secondDay)
+        XCTAssertEqual(firstAsync.count, 3)
+        XCTAssertEqual(secondAsync.count, 2)
+        let firstAsyncAgain = await store.samplesAsync(forDay: firstDay)
+        XCTAssertEqual(firstAsyncAgain, firstAsync)
+    }
+
     func testAsyncExportMatchesSyncExport() async throws {
         let context = try Context()
         defer { context.cleanup() }

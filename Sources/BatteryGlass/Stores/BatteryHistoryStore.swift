@@ -31,8 +31,13 @@ final class BatteryHistoryStore {
     private var canPersist = true
     /// 历史文件无法读取时的用户可见原因；非 nil 表示本次运行不会写入新记录。
     private(set) var persistenceIssue: String?
-    @ObservationIgnored private var cachedArchiveDay: Date?
-    @ObservationIgnored private var cachedArchiveSamples: [HistorySample] = []
+    /// 按日缓存的归档样本：面板历史页与放大窗口可能同时查看不同日期，
+    /// 单槽缓存会让两者每次刷新都互相清除、反复打开 SQLite。
+    @ObservationIgnored private var cachedArchiveDays: [Date: [HistorySample]] = [:]
+    /// 上方字典的最近使用顺序（首项最久未用），超过上限时淘汰。
+    @ObservationIgnored private var cachedArchiveDayOrder: [Date] = []
+    /// 合并结果的缓存键：日期、热层样本数量 / 末条 id / 内容版本与当前自然日。
+    @ObservationIgnored private var cachedMergedDay: Date?
     @ObservationIgnored private var cachedMergedSamples: [HistorySample] = []
     @ObservationIgnored private var cachedLiveCount = -1
     @ObservationIgnored private var cachedLiveLastID: UUID?
@@ -295,29 +300,67 @@ final class BatteryHistoryStore {
         return cachedAvailableDays
     }
 
-    /// Keep one archived day in memory. The live buffer remains observable for today's chart.
+    /// 归档样本的按日缓存上限：面板与放大窗口最多各看一天，留一天余量。
+    private static let maximumCachedArchiveDays = 3
+
+    /// 读出某天的归档样本（已缓存则直接用；读取失败也缓存空结果，避免反复同步 IO）。
+    private func archivedSamples(for start: Date) -> [HistorySample] {
+        if let cached = cachedArchiveDays[start] {
+            touchArchiveDay(start)
+            return cached
+        }
+        do {
+            let loaded = try persistenceQueue.sync { try archive.samples(forDay: start) }
+            storeArchiveSamples(loaded, for: start)
+            return loaded
+        } catch {
+            // 记住这次失败：否则每次进入该日都会重新打开 SQLite、全表扫描再失败。
+            NSLog("BatteryGlass: 曲线读取失败 - %@", error.localizedDescription)
+            storeArchiveSamples([], for: start)
+            return []
+        }
+    }
+
+    private func storeArchiveSamples(_ loaded: [HistorySample], for start: Date) {
+        cachedArchiveDays[start] = loaded
+        touchArchiveDay(start)
+        // 这一天的归档内容换了：按旧内容算出的合并结果作废（不影响其它日期）。
+        if cachedMergedDay == start {
+            cachedMergedDay = nil
+            cachedMergedSamples = []
+            cachedLiveCount = -1
+        }
+        while cachedArchiveDayOrder.count > Self.maximumCachedArchiveDays {
+            cachedArchiveDays.removeValue(forKey: cachedArchiveDayOrder.removeFirst())
+        }
+    }
+
+    private func touchArchiveDay(_ start: Date) {
+        cachedArchiveDayOrder.removeAll { $0 == start }
+        cachedArchiveDayOrder.append(start)
+    }
+
+    private func invalidateArchiveCache() {
+        cachedArchiveDays.removeAll()
+        cachedArchiveDayOrder.removeAll()
+        cachedMergedDay = nil
+        cachedMergedSamples = []
+        cachedLiveCount = -1
+        cachedLiveLastID = nil
+    }
+
+    /// 某天的归档 + 热层样本合并结果。热层只保留今天，往日样本完全来自归档。
     func samples(forDay day: Date) -> [HistorySample] {
         let start = Calendar.current.startOfDay(for: day)
-        if cachedArchiveDay != start {
-            do {
-                cachedArchiveSamples = try persistenceQueue.sync { try archive.samples(forDay: start) }
-                cachedArchiveDay = start
-                cachedLiveCount = -1
-            } catch {
-                NSLog("BatteryGlass: 曲线读取失败 - %@", error.localizedDescription)
-                cachedArchiveSamples = []
-                // 记住这次失败：否则每次进入该日都会重新打开 SQLite、全表扫描再失败，
-                // 把偶发错误固化成反复的同步 IO。重启或切换日期后可再试。
-                cachedArchiveDay = start
-                cachedLiveCount = -1
-            }
-        }
+        let archived = archivedSamples(for: start)
         let today = Calendar.current.startOfDay(for: currentDate())
-        if cachedLiveCount != samples.count || cachedLiveLastID != samples.last?.id
+        if cachedMergedDay != start || cachedLiveCount != samples.count
+            || cachedLiveLastID != samples.last?.id
             || cachedSamplesVersion != samplesVersion || cachedAsOfDay != today {
             cachedMergedSamples = mergedSamples(
-                cachedArchiveSamples, HistoryRetention.samples(forDay: start, from: samples)
+                archived, HistoryRetention.samples(forDay: start, from: samples)
             )
+            cachedMergedDay = start
             cachedLiveCount = samples.count
             cachedLiveLastID = samples.last?.id
             cachedSamplesVersion = samplesVersion
@@ -331,7 +374,7 @@ final class BatteryHistoryStore {
     /// 结果写回与同步路径相同的缓存，持续刷新时不会重复解码。
     func samplesAsync(forDay day: Date) async -> [HistorySample] {
         let start = Calendar.current.startOfDay(for: day)
-        if cachedArchiveDay != start {
+        if cachedArchiveDays[start] == nil {
             let archive = self.archive
             let loaded: [HistorySample]? = await withCheckedContinuation { continuation in
                 persistenceQueue.async {
@@ -346,9 +389,7 @@ final class BatteryHistoryStore {
             guard let loaded else {
                 // 读取失败时只展示热层样本，不回落到主线程同步查询；
                 // 同时记住本次失败，避免每次刷新都重试同一次查询。
-                cachedArchiveDay = start
-                cachedArchiveSamples = []
-                cachedLiveCount = -1
+                storeArchiveSamples([], for: start)
                 return HistoryRetention.retainedSamples(
                     HistoryRetention.samples(forDay: start, from: samples),
                     now: currentDate(),
@@ -356,9 +397,9 @@ final class BatteryHistoryStore {
                     olderResolution: Self.olderSampleResolution
                 )
             }
-            cachedArchiveSamples = loaded
-            cachedArchiveDay = start
-            cachedLiveCount = -1
+            storeArchiveSamples(loaded, for: start)
+        } else {
+            touchArchiveDay(start)
         }
         return samples(forDay: start)
     }
@@ -468,10 +509,7 @@ final class BatteryHistoryStore {
         lastCycleCount = -1
         lastHealth = nil
         archivedDays = []
-        cachedArchiveDay = nil
-        cachedArchiveSamples = []
-        cachedMergedSamples = []
-        cachedLiveCount = -1
+        invalidateArchiveCache()
         cachedAvailableDaysCount = -1
         needsLegacyBackup = false
         canPersist = true
@@ -946,8 +984,7 @@ final class BatteryHistoryStore {
         archivedDays = Array(Set(archivedDays + HistoryRetention.availableDays(from: older))).sorted()
         samples = Self.liveSamples(samples, today: today)
         samplesVersion += 1
-        cachedArchiveDay = nil
-        cachedArchiveSamples = []
+        invalidateArchiveCache()
         lastSamplesPrunedDay = today
     }
 
