@@ -35,9 +35,9 @@ final class BatteryMonitor {
     private let telemetryCalibrationStore: PowerTelemetryCalibrationStore
     /// 以下资源只在主线程创建/修改，但 `deinit` 是 nonisolated：用 `nonisolated(unsafe)`
     /// 允许销毁时撤销它们（否则实例释放后定时器仍会空转、观察者永久驻留）。
-    private nonisolated(unsafe) var timer: Timer?
+    @ObservationIgnored private nonisolated(unsafe) var timer: Timer?
     /// NSWorkspace 睡眠/唤醒观察者，销毁时成对移除。
-    private nonisolated(unsafe) var workspaceObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private nonisolated(unsafe) var workspaceObservers: [NSObjectProtocol] = []
     private var lowBatteryNotified = false
     private var lastAdapterConnected: Bool?
     private var pluggedDischargeConfirmation = BatteryDischargeConfirmation()
@@ -80,7 +80,7 @@ final class BatteryMonitor {
     /// 仍必须在唤醒后关闭区间，否则历史层会把之后的样本全部当成睡眠排除掉。
     private var sleepIntervalStart: Date?
     /// 唤醒端点读数不可用时的补采任务与已尝试次数。
-    private nonisolated(unsafe) var wakeValidationTask: Task<Void, Never>?
+    @ObservationIgnored private nonisolated(unsafe) var wakeValidationTask: Task<Void, Never>?
     private var wakeValidationAttempts = 0
     /// 唤醒后电量计可能仍停在旧值，最多重试 5 次、每次间隔 2 秒。
     private let wakeValidationInterval: TimeInterval = 2
@@ -90,7 +90,7 @@ final class BatteryMonitor {
     /// 唤醒后延迟采样得到的适配器总输入样本（W）。
     private var maintenanceAdapterInputSamples: [Double] = []
     private var maintenanceSampleTick = 0
-    private nonisolated(unsafe) var maintenanceTimer: Timer?
+    @ObservationIgnored private nonisolated(unsafe) var maintenanceTimer: Timer?
     private let maintenanceSampleInterval: TimeInterval = 5
     private let maintenanceSampleCount = 6
     private var latestTelemetryCounters = PowerTelemetryCounters(accumulatedWallEnergyEstimate: nil)
@@ -586,22 +586,27 @@ final class BatteryMonitor {
     }
 
     /// 唤醒端点不可用时的补采：电量计通常在一两秒内恢复，重试仍失败就放弃能耗。
+    ///
+    /// self 只在每一轮里短暂持有：wakeValidationTask 由本实例保存，任务闭包若整段
+    /// 强引用 self 就构成引用环，补采期间 deinit 永远不会执行、其中的 cancel 也就失效。
     private func startWakeValidation() {
         guard wakeValidationTask == nil else { return }
         wakeValidationAttempts = 0
+        let interval = wakeValidationInterval
+        let maximumAttempts = wakeValidationMaxAttempts
         wakeValidationTask = Task { [weak self] in
-            guard let self else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(self.wakeValidationInterval))
+                try? await Task.sleep(for: .seconds(interval))
                 if Task.isCancelled { return }
-                guard self.sleepIntervalStart != nil || self.sleepBaseline != nil else { return }
+                guard let self,
+                      self.sleepIntervalStart != nil || self.sleepBaseline != nil else { return }
                 self.wakeValidationAttempts += 1
                 self.refresh()
                 if Self.isUsableSleepEndpoint(self.latest) {
                     self.completeWakeMeasurement()
                     return
                 }
-                if self.wakeValidationAttempts >= self.wakeValidationMaxAttempts {
+                if self.wakeValidationAttempts >= maximumAttempts {
                     self.abandonUnmeasurableWake()
                     return
                 }
